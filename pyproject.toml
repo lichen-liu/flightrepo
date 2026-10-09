@@ -17,10 +17,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
 
+[project.scripts]
+flyji = "admin.client:main"
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["flight_engine"]
+packages = ["src/core", "src/ingestion", "src/server", "src/admin"]
 

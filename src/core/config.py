@@ -3,11 +3,13 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_DATA_DIR = PROJECT_ROOT / "var"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FLIGHT_", env_file=".env", extra="ignore")
 
-    database_path: Path = Path("var/flights.db")
+    database_path: Path = LOCAL_DATA_DIR / "flights.db"
     provider: str = "aerodatabox"
     provider_api_key: str = ""
     provider_base_url: str = "https://aerodatabox.p.rapidapi.com"
