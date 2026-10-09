@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
-from flight_engine.models import FlightRecord
+from flight_engine.core.models import FlightRecord
 
 
 class FlightProvider(ABC):

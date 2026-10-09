@@ -1,27 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
-from flight_engine.models import IngestResult, Itinerary
-from flight_engine.providers.base import FlightProvider
-from flight_engine.storage import FlightStore
-
-
-class IngestionService:
-    def __init__(self, store: FlightStore, provider: FlightProvider, max_days: int):
-        self.store, self.provider, self.max_days = store, provider, max_days
-
-    async def ingest(self, airports: list[str], start: date, end: date) -> IngestResult:
-        if (end - start).days + 1 > self.max_days:
-            raise ValueError(f"date range exceeds configured maximum of {self.max_days} days")
-        unique = {}
-        for airport in airports:
-            for record in await self.provider.flights_for_airport(airport, start, end):
-                unique[(record.provider, record.provider_id)] = record
-        count = self.store.upsert(unique.values())
-        return IngestResult(provider=self.provider.name, fetched=len(unique), upserted=count,
-                            airports=airports, start=start, end=end)
+from flight_engine.core.models import Itinerary
+from flight_engine.core.contracts import FlightQuery
 
 
-def build_itineraries(store: FlightStore, origin: str, destination: str, start: datetime,
+
+def build_itineraries(store: FlightQuery, origin: str, destination: str, start: datetime,
                       end: datetime, max_legs: int = 2, min_connection_minutes: int = 45,
                       max_connection_minutes: int = 360, limit: int = 20) -> list[Itinerary]:
     flights = store.search(start, end + timedelta(hours=max_connection_minutes), limit=5000)

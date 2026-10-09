@@ -3,8 +3,8 @@ import hashlib
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from flight_engine.models import FlightRecord, FlightStatus
-from flight_engine.providers.base import FlightProvider
+from flight_engine.core.models import FlightRecord, FlightStatus
+from flight_engine.ingestion.providers.base import FlightProvider
 
 
 class CsvProvider(FlightProvider):
