@@ -4,10 +4,10 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
-from flight_engine.core.config import get_settings
-from flight_engine.core.models import FlightRecord, Itinerary, RouteSummary
-from flight_engine.core.itineraries import build_itineraries
-from flight_engine.server.reader import FlightReader
+from core.config import get_settings
+from core.models import FlightRecord, Itinerary, RouteSummary
+from core.itineraries import build_itineraries
+from server.reader import FlightReader
 
 app = FastAPI(title="Flyji", version="0.1.0",
               description="Commercial flight facts and route exploration; no fares or inventory.")

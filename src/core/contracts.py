@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Protocol
 
-from flight_engine.core.models import FlightRecord
+from core.models import FlightRecord
 
 
 class FlightQuery(Protocol):

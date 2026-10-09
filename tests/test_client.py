@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from flight_engine.admin import client
-from flight_engine.core.config import Settings
-from flight_engine.core.models import FlightRecord
-from flight_engine.server.reader import FlightReader
-from flight_engine.ingestion.updater import FlightUpdater
+from admin import client
+from core.config import Settings
+from core.models import FlightRecord
+from server.reader import FlightReader
+from ingestion.updater import FlightUpdater
 
 
 def test_local_management_roundtrip_and_reset(tmp_path, monkeypatch):

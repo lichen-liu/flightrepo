@@ -3,8 +3,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from flight_engine.core.models import FlightRecord, RouteSummary
-from flight_engine.core.storage import SQLiteConnection, utc_text
+from core.models import FlightRecord, RouteSummary
+from core.storage import SQLiteConnection, utc_text
 
 
 class FlightReader(SQLiteConnection):

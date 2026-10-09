@@ -2,8 +2,8 @@
 import json
 from collections.abc import Iterable
 
-from flight_engine.core.models import FlightRecord
-from flight_engine.core.storage import SQLiteConnection, SCHEMA, utc_text
+from core.models import FlightRecord
+from core.storage import SQLiteConnection, SCHEMA, utc_text
 
 
 class FlightUpdater(SQLiteConnection):

@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flight_engine.core.models import FlightRecord, FlightStatus
-from flight_engine.core.itineraries import build_itineraries
-from flight_engine.server.reader import FlightReader
-from flight_engine.ingestion.updater import FlightUpdater
+from core.models import FlightRecord, FlightStatus
+from core.itineraries import build_itineraries
+from server.reader import FlightReader
+from ingestion.updater import FlightUpdater
 
 
 def flight(identifier: str, number: str, origin: str, destination: str, departure: str, arrival: str):

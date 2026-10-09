@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from flight_engine.core.models import Itinerary
-from flight_engine.core.contracts import FlightQuery
+from core.models import Itinerary
+from core.contracts import FlightQuery
 
 
 

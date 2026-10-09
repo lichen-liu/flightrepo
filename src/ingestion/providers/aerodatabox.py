@@ -4,8 +4,8 @@ from typing import Any
 
 import httpx
 
-from flight_engine.core.models import FlightRecord, FlightStatus
-from flight_engine.ingestion.providers.base import FlightProvider
+from core.models import FlightRecord, FlightStatus
+from ingestion.providers.base import FlightProvider
 
 
 class AeroDataBoxProvider(FlightProvider):

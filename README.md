@@ -12,12 +12,12 @@ providers / CSV -> updater + ingestion -> SQLite <- reader <- serving API
                             +-- internal admin CLI --+
 ```
 
-The fetching layer (`flight_engine/ingestion/providers`) depends on upstream provider formats. The serving layer (`flight_engine/server/api.py`) depends only on `FlightReader`, which opens read-only SQLite connections. `flight_engine/ingestion/updater.py` owns initialization, upserts, deletion, and reset; `flight_engine/ingestion/service.py` orchestrates fetching; it is not imported by the serving API. Shared connection/schema helpers live in `flight_engine/core/storage.py`. This lets a hosted deployment replace AeroDataBox with OAG, Cirium, or another licensed feed without changing public API contracts.
+The fetching layer (`src/ingestion/providers`) depends on upstream provider formats. The serving layer (`src/server/api.py`) depends only on `FlightReader`, which opens read-only SQLite connections. `src/ingestion/updater.py` owns initialization, upserts, deletion, and reset; `src/ingestion/service.py` orchestrates fetching; it is not imported by the serving API. Shared connection/schema helpers live in `src/core/storage.py`. This lets a hosted deployment replace AeroDataBox with OAG, Cirium, or another licensed feed without changing public API contracts.
 
 ## Package boundaries
 
 ```text
-flight_engine/
+src/
   core/                 # shared library; no server/admin/ingestion imports
     models.py
     config.py
@@ -47,8 +47,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-python -m flight_engine.admin stats  # initialize the local database
-uvicorn flight_engine.server.api:app --reload
+python -m admin stats  # initialize the local database
+uvicorn server.api:app --reload
 ```
 
 Set `FLIGHT_PROVIDER_API_KEY` to an AeroDataBox RapidAPI key. Swagger UI is at `http://localhost:8000/docs`.
@@ -58,12 +58,12 @@ Set `FLIGHT_PROVIDER_API_KEY` to an AeroDataBox RapidAPI key. Swagger UI is at `
 The internal admin terminal client integrates both modules: `FlightReader` for queries/stats/export and `FlightUpdater` for initialization/import/ingestion/delete/reset. The itinerary engine uses only the reader. A future web app can use those same core modules through the API.
 
 ```bash
-# Start an interactive client (also works without reinstalling the package)
-.venv/bin/python -m flight_engine.admin
+# Start the interactive client after installing the project
+.venv/bin/python -m admin
 # After pip install -e '.[dev]', the equivalent command is: flyji
 ```
 
-Commands work both at the `flyji>` prompt and as arguments to `python -m flight_engine.admin`:
+Commands work both at the `flyji>` prompt and as arguments to `python -m admin`:
 
 ```text
 stats
@@ -91,7 +91,7 @@ Reset deletes flight records in a transaction, preserving the schema, database f
 
 SQLite WAL mode lets separate Python processes share the database on the same machine: client reads use consistent snapshots while ingestion commits updates. Connections wait up to 10 seconds for locks; only one writer operates at a time. Provider requests finish before the ingestion service opens its write transaction. JSON/CSV remain import/export formats; do not edit the SQLite file directly.
 
-To run a separate fetcher now, execute `.venv/bin/python -m flight_engine.admin ingest --airports YYZ --start 2026-10-10 --end 2026-10-11` in another terminal. It uses the same database as the client and API. This is a manual one-shot fetcher; an automatic refresh loop is not implemented yet.
+To run a separate fetcher now, execute `.venv/bin/python -m admin ingest --airports YYZ --start 2026-10-10 --end 2026-10-11` in another terminal. It uses the same database as the client and API. This is a manual one-shot fetcher; an automatic refresh loop is not implemented yet.
 
 Ingestion is internal and runs through the terminal client. The serving API exposes no ingestion or mutation endpoints. Initialize the database through the internal client before starting the API; the reader never creates a missing database.
 

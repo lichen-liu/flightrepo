@@ -2,8 +2,8 @@ import json
 import subprocess
 import sys
 
-from flight_engine.server.reader import FlightReader
-from flight_engine.ingestion.updater import FlightUpdater
+from server.reader import FlightReader
+from ingestion.updater import FlightUpdater
 from test_engine import flight
 
 
@@ -19,9 +19,9 @@ def test_wal_reader_snapshot_during_separate_process_write(tmp_path):
         second = record.model_copy(update={'provider_id': '2'})
         code = '''import sys
 from pathlib import Path
-from flight_engine.core.models import FlightRecord
-from flight_engine.server.reader import FlightReader
-from flight_engine.ingestion.updater import FlightUpdater
+from core.models import FlightRecord
+from server.reader import FlightReader
+from ingestion.updater import FlightUpdater
 updater = FlightUpdater(Path(sys.argv[1]))
 updater.initialize()
 updater.upsert([FlightRecord.model_validate_json(sys.argv[2])])
@@ -65,7 +65,7 @@ def test_reader_cannot_write_or_create_database(tmp_path):
 
 def test_serving_api_only_exposes_reads(tmp_path):
     from fastapi.testclient import TestClient
-    from flight_engine.server.api import app, get_store
+    from server.api import app, get_store
     updater = FlightUpdater(tmp_path / 'flights.db')
     updater.initialize()
     app.dependency_overrides[get_store] = lambda: FlightReader(updater.path)

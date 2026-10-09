@@ -1,9 +1,9 @@
 """Provider fetching and normalization orchestration."""
 from datetime import date
 
-from flight_engine.core.models import IngestResult
-from flight_engine.ingestion.providers.base import FlightProvider
-from flight_engine.ingestion.updater import FlightUpdater
+from core.models import IngestResult
+from ingestion.providers.base import FlightProvider
+from ingestion.updater import FlightUpdater
 
 
 class IngestionService:

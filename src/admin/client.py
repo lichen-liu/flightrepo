@@ -7,14 +7,14 @@ import shlex
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from flight_engine.core.config import LOCAL_DATA_DIR, get_settings
-from flight_engine.core.models import FlightRecord, IngestRequest
-from flight_engine.ingestion.providers.aerodatabox import AeroDataBoxProvider
-from flight_engine.ingestion.providers.csv_feed import CsvProvider
-from flight_engine.core.itineraries import build_itineraries
-from flight_engine.ingestion.updater import FlightUpdater
-from flight_engine.ingestion.service import IngestionService
-from flight_engine.server.reader import FlightReader
+from core.config import LOCAL_DATA_DIR, get_settings
+from core.models import FlightRecord, IngestRequest
+from ingestion.providers.aerodatabox import AeroDataBoxProvider
+from ingestion.providers.csv_feed import CsvProvider
+from core.itineraries import build_itineraries
+from ingestion.updater import FlightUpdater
+from ingestion.service import IngestionService
+from server.reader import FlightReader
 
 
 def timestamp(value):
