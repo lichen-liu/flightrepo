@@ -1,0 +1,12 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {chromium}=require('playwright');
+(async()=>{
+ const output=process.env.FLYJI_PERF_OUTPUT;if(!output)throw new Error('Set FLYJI_PERF_OUTPUT');
+ const pairs=[{name:'baseline',preview:'/tmp/flyji-refresh-baseline-preview.html',source:'docs/design/qa/revisions/refresh-r04a.html'},{name:'revised',preview:'/tmp/flyji-refresh-preview.html',source:'docs/design/flyji-refresh.html'}];
+ const browser=await chromium.launch({channel:'chrome',headless:true}),results=[];
+ for(const pair of pairs){const page=await browser.newPage({viewport:{width:1100,height:1000}});await page.goto('file://'+pair.preview);const frame=page.frames().find(f=>f!==page.mainFrame());await frame.waitForSelector('.fr-select');await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(250);
+  const result=await frame.evaluate(async()=>{const input=document.querySelector('.fr-app[data-direction=air] [name=cursor]'),samples=[];for(let i=0;i<18;i++){const start=performance.now();input.value=21+i*.25;input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.fr-app').getBoundingClientRect();const end=performance.now();if(i>=3)samples.push(end-start);await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));}const sorted=[...samples].sort((a,b)=>a-b);return {samples_ms:samples,median_ms:sorted[Math.floor(sorted.length/2)],p95_ms:sorted[Math.ceil(sorted.length*.95)-1],scope:'Synchronous native input dispatch, DOM update and forced layout; all three prototype directions update. Excludes paint, host overhead and network. 3 warmups, 15 samples. Airlight visible; reduced motion; synthetic Atlantic fixture.'};});
+  results.push({version:pair.name,source_sha256:crypto.createHash('sha256').update(fs.readFileSync(pair.source)).digest('hex'),...result});await page.close();
+ }
+ fs.writeFileSync(output,JSON.stringify({date:'2026-10-11',browser:await browser.version(),viewport:{width:1100,height:1000},check_script_sha256:crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex'),results,limitation:'One local headless run; not a device benchmark, frame-rate guarantee, statistical study or production budget.'},null,2)+'\n');console.log(JSON.stringify(results.map(({version,median_ms,p95_ms})=>({version,median_ms,p95_ms}))));await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -1,0 +1,30 @@
+{
+  "command": ".venv/bin/python -m pytest -q",
+  "exit_code": 0,
+  "observed_result": "103 passed, 1 warning in 0.85s",
+  "source_sha256": {
+    "src/core/routing/__init__.py": "9c1cd17edfa2a0d7d3f73b0f22a37c3e78da189b0c4a0da4727add49ba3c6a7e",
+    "src/core/routing/debug.py": "31acc47dc357e2e240edd34816c576ceb71c40a73522d20c00b074b4f8269b15",
+    "src/core/routing/index.py": "7b3685812495c1fb8a3e61976eb8adfe900c2727098c18d0df9145d91bc69866",
+    "src/core/routing/models.py": "b34e33b47a688c8cf4fdbd7bead1cc1c927bc44cdfa8ffae066e09aa96868859",
+    "src/core/routing/policy.py": "7769a98068c4182f323db95a38101a8923c1ff96c0494fbdd1144623b0a755a0",
+    "src/core/routing/results.py": "6e2cb08f5c29269e44b2c0dab06321e7138f3c1916c493865d26147a7aff11f8",
+    "src/core/routing/search.py": "05fe829bf44579597723446241783e8d1377a9b67f9a0bfee5bb7535d67d38f2",
+    "src/core/routing/session.py": "7120c06673179532a36494a90e04a70df4e6903e30756a5c924798c9a7a2851f",
+    "src/core/routing/snapshot.py": "29796bd145a13ebbdd9e3dbe424551510c788fc0b505419d3e0b27804c7209fe",
+    "src/core/planning.py": "76290b94219b59338263201b8b23acd52456c53f5c934002be79bd86703a53e0",
+    "src/core/connections.py": "cdd9bc01b6c75e2a720e50d3926409441af49f6ef3f735608d5957640bfe6bdc",
+    "src/server/reader.py": "8ef24a1b9096f5c1138092e11de61ccaaca2d3cd982347a9e049d5d8c84c0175",
+    "src/core/storage.py": "5b22625a4a0e1474748c4367dea32b6550a706b3c8e08e44957172628d91d24e",
+    "scripts/benchmark_routing.py": "385ad6050b27fabb5adb61f4a46f5d9e0954c664341b207bac597c1f394a7280",
+    "src/core/itineraries.py": "5bf89e65c19f6d371804cf7fa669c04a3d7854a74dcbb0e841e85c33c28ed3fa",
+    "src/core/contracts.py": "faa8115f4fc04de6a434c0a5bb440b5c5bfd00ef9054c7a502cc5a32e129cde3",
+    "src/server/api.py": "71660c1f52607618bd447af455d6558c867bb00421273d714e8f5886d821d48b",
+    "src/admin/client.py": "42a93156d43065175cf92be3cce077777e8ca7725b47001c4a4f7f51762f71e1",
+    "tests/test_routing.py": "5fc53d71634f3d9c52c0998107e7c56027f0c9df15917cd112fb6276ff40099b",
+    "tests/test_planning.py": "1455c771a63f6cdb6dd4c38c1f105b39e028100d05b166084d17d12061f73554",
+    "scripts/seed_connection_demo.py": "353f871024d5303daa4c188c0d7ed8d6ccc93c1dc566b3c65a555b51a6f13154",
+    "src/core/models.py": "f25728fcb0f6145ac0d0ea0c064acc763d37d0a82f5ca6fea2c4368543b79030"
+  },
+  "unchanged_model_source": "src/core/models.py was unmodified from HEAD in the baseline; archived from that Git blob."
+}

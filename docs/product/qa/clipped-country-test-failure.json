@@ -1,0 +1,6 @@
+{
+  "message": "locator.waitFor: Timeout 8000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.map-land').first() to be visible\u001b[22m\n\u001b[2m    20 × locator resolved to hidden <path class=\"map-land\"></path>\u001b[22m\n",
+  "stack": "locator.waitFor: Timeout 8000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.map-land').first() to be visible\u001b[22m\n\u001b[2m    20 × locator resolved to hidden <path class=\"map-land\"></path>\u001b[22m\n\n    at /Users/lichen/p/flightrepo/scripts/qa_web.cjs:19:42",
+  "checks": [],
+  "errors": []
+}

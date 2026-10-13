@@ -1,0 +1,182 @@
+{
+  "reviewer": "/root/qa_auditor",
+  "role": "Independent release QA auditor",
+  "timestamp_utc": "2026-10-13T21:20:56.204823+00:00",
+  "manifest_sha256": "ebe1f3c721a0f4bfa051cb327df37e70ee61df37a548bb3902860d0604c94fde",
+  "scope": "staged_repository_hygiene_addendum",
+  "outcome": "accepted_with_retained_archive_vendor_eof_findings",
+  "human_signoff": false,
+  "release_acceptance_unchanged": true,
+  "universal_whitespace_cleanliness_claim": false,
+  "method": [
+    "Ran full git diff --cached --check and classified every finding.",
+    "Ran staged whitespace check with exactly the five requested archive/vendor path exclusions.",
+    "Compared all 96 staged manifested blobs against ebe1 SHA-256 entries, rather than only checking working-tree files.",
+    "Inspected the complete staged filename list for local data, environment, virtual environment and cache paths at any depth."
+  ],
+  "results": {
+    "staged_file_count": 675,
+    "full_staged_check_exit_code": 2,
+    "full_staged_findings_count": 23,
+    "only_finding_type": "new blank line at EOF",
+    "all_findings_within_exclusions": true,
+    "filtered_staged_check_exit_code": 0,
+    "filtered_output": "",
+    "staged_manifested_blobs": 96,
+    "staged_manifest_mismatches": [],
+    "forbidden_local_paths": []
+  },
+  "excluded_prefixes": [
+    "docs/engine/qa/revisions",
+    "docs/product/qa/revisions",
+    "docs/releases/local-preview/qa/before-typed-airports/source",
+    "docs/releases/local-preview/qa/rejected-partial-copy/source",
+    "src/server/web/vendor"
+  ],
+  "retained_findings": [
+    {
+      "path": "docs/engine/qa/revisions/baseline/src/core/itineraries.py",
+      "line": 26,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/pyproject.toml",
+      "line": 28,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/src/core/config.py",
+      "line": 24,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/src/core/itineraries.py",
+      "line": 26,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/src/ingestion/providers/base.py",
+      "line": 13,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/src/ingestion/providers/csv_feed.py",
+      "line": 37,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/engine/qa/revisions/final/tests/test_engine.py",
+      "line": 44,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/pyproject.toml",
+      "line": 28,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/src/core/config.py",
+      "line": 24,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/src/core/itineraries.py",
+      "line": 26,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/src/ingestion/providers/base.py",
+      "line": 13,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/src/ingestion/providers/csv_feed.py",
+      "line": 54,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/src/server/web/vendor/d3-7.9.0.min.js",
+      "line": 3,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/product/qa/revisions/final/tests/test_engine.py",
+      "line": 44,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/before-typed-airports/source/.env.example",
+      "line": 6,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/before-typed-airports/source/.gitignore",
+      "line": 7,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/before-typed-airports/source/pyproject.toml",
+      "line": 37,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/before-typed-airports/source/src/server/web/vendor/d3-7.9.0.min.js",
+      "line": 3,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/rejected-partial-copy/source/.env.example",
+      "line": 6,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/rejected-partial-copy/source/.gitignore",
+      "line": 7,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/rejected-partial-copy/source/pyproject.toml",
+      "line": 37,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "docs/releases/local-preview/qa/rejected-partial-copy/source/src/server/web/vendor/d3-7.9.0.min.js",
+      "line": 3,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    },
+    {
+      "path": "src/server/web/vendor/d3-7.9.0.min.js",
+      "line": 3,
+      "finding": "new blank line at EOF",
+      "disposition": "retain reviewed archive or vendored bytes"
+    }
+  ],
+  "disposition": "No blocker for the exact local preview/demo/PR review acceptance. Preserve these historical and vendor bytes; all current authored source/documentation outside the stated exclusions passes the staged check. Ordinary unstaged git diff --check did not cover formerly untracked additions, so the aggregate signoff must retain this qualification.",
+  "limitations": [
+    "This is a staged-whitespace and file-identity addendum, not a rerun of runtime, customer, public or remote-CI gates.",
+    "The 23 retained EOF warnings mean the entire staged tree is not universally whitespace-clean.",
+    "Later source or staged-content edits require affected verification; new reviewer/aggregate records are outside the frozen manifest and need their own recorded identities."
+  ]
+}

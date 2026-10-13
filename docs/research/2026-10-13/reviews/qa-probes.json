@@ -1,0 +1,260 @@
+{
+  "reviewer": "/root/qa_auditor",
+  "timestamp_utc": "2026-10-13T17:24:35.551009+00:00",
+  "manifest_sha256": "e50937ddb0c3ae13e66ae8b92c8f35078670028440a4e5210e468e13db45eb86",
+  "method": "Independent stdlib isolated temporary checkout copies; corrupted registers are rehashed in their manifests so semantic failures are not merely stale hashes. Receipt probes use explicitly synthetic isolated checker fixtures, never real review files.",
+  "harness_correction": "Initial run preserved as qa-probes-harness-failure.json. Resolved macOS temporary root (/var symlink to /private/var) before setting verifier REPO; no product or verifier code changed.",
+  "baseline_passed": true,
+  "negative_probes": 26,
+  "all_expected_behavior_observed": true,
+  "checks": [
+    {
+      "case": "baseline_current_records",
+      "expected_error_contains": null,
+      "ok": true,
+      "errors": [],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "customer_gate_disabled_and_promoted",
+      "expected_error_contains": "Human gate was disabled: G05",
+      "ok": false,
+      "errors": [
+        "Human gate was disabled: G05",
+        "Unsupported human gate: G05"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "customer_gate_passed",
+      "expected_error_contains": "Unsupported human gate: G05",
+      "ok": false,
+      "errors": [
+        "Unsupported human gate: G05"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "owner_gate_disabled",
+      "expected_error_contains": "Human gate was disabled: G06",
+      "ok": false,
+      "errors": [
+        "Human gate was disabled: G06"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "owner_gate_passed",
+      "expected_error_contains": "Unsupported human gate: G06",
+      "ok": false,
+      "errors": [
+        "Unsupported human gate: G06"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "empty_task_method",
+      "expected_error_contains": "Incomplete task truth/method: T01",
+      "ok": false,
+      "errors": [
+        "Incomplete task truth/method: T01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "empty_unprompted_customer_task",
+      "expected_error_contains": "Incomplete task truth/method: T21",
+      "ok": false,
+      "errors": [
+        "Incomplete task truth/method: T21"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "omitted_need_U21",
+      "expected_error_contains": "Incomplete/invalid R09 needs ID set",
+      "ok": false,
+      "errors": [
+        "Incomplete/invalid R09 needs ID set",
+        "Markdown/register IDs differ: needs.md"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "omitted_owner_clarification",
+      "expected_error_contains": "Incomplete/invalid R09 owner_inputs ID set",
+      "ok": false,
+      "errors": [
+        "Incomplete/invalid R09 owner_inputs ID set"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "duplicate_need_ID",
+      "expected_error_contains": "Duplicate needs IDs",
+      "ok": false,
+      "errors": [
+        "Duplicate needs IDs",
+        "Incomplete/invalid R09 needs ID set",
+        "Broken proposal needs: Q01",
+        "Markdown/register IDs differ: needs.md"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "broken_task_reference",
+      "expected_error_contains": "Unknown task: U01",
+      "ok": false,
+      "errors": [
+        "Unknown task: U01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "unknown_public_source_reference",
+      "expected_error_contains": "Unknown evidence: U01",
+      "ok": false,
+      "errors": [
+        "Unknown evidence: U01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "unsupported_customer_validation",
+      "expected_error_contains": "Unsupported validated need: U01",
+      "ok": false,
+      "errors": [
+        "Unsupported validated need: U01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "unsupported_source_validation_relation",
+      "expected_error_contains": "Missing hypothesis/support boundary: U01",
+      "ok": false,
+      "errors": [
+        "Missing hypothesis/support boundary: U01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "invented_completed_customer_task",
+      "expected_error_contains": "Unsupported performed session: T01",
+      "ok": false,
+      "errors": [
+        "Unsupported performed session: T01"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "invented_customer_session",
+      "expected_error_contains": "This desk round has no customer sessions",
+      "ok": false,
+      "errors": [
+        "This desk round has no customer sessions"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "invented_final_design_approval",
+      "expected_error_contains": "Unsupported final-design approval",
+      "ok": false,
+      "errors": [
+        "Unsupported final-design approval"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "omitted_register_from_manifest",
+      "expected_error_contains": "Required artifacts omitted from manifest",
+      "ok": false,
+      "errors": [
+        "Required artifacts omitted from manifest",
+        "Checked register differs from manifested register"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "omitted_verifier_from_manifest",
+      "expected_error_contains": "Required artifacts omitted from manifest",
+      "ok": false,
+      "errors": [
+        "Required artifacts omitted from manifest"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "omitted_first_slice_from_manifest",
+      "expected_error_contains": "Required artifacts omitted from manifest",
+      "ok": false,
+      "errors": [
+        "Required artifacts omitted from manifest"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "stale_artifact_hash",
+      "expected_error_contains": "Stale/missing artifacts: docs/research/2026-10-13/needs.md",
+      "ok": false,
+      "errors": [
+        "Stale/missing artifacts: docs/research/2026-10-13/needs.md"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "stale_receipt_manifest",
+      "expected_error_contains": "Stale manifest review: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Stale manifest review: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "forbidden_receipt_human_signoff",
+      "expected_error_contains": "Unsupported human signature: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Unsupported human signature: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "wrong_receipt_scope",
+      "expected_error_contains": "Wrong review scope: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Wrong review scope: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "timezone_naive_receipt",
+      "expected_error_contains": "Review timestamp lacks timezone: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Review timestamp lacks timezone: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "empty_receipt_method",
+      "expected_error_contains": "Missing review method/disposition: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Missing review method/disposition: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    },
+    {
+      "case": "unaccepted_receipt",
+      "expected_error_contains": "Unaccepted review: qa_auditor",
+      "ok": false,
+      "errors": [
+        "Unaccepted review: qa_auditor"
+      ],
+      "expected_behavior_observed": true
+    }
+  ],
+  "limitation": "Integrity checks verify these corruptions. They do not authenticate reviewer identity, validate customer truth or determine whole-process accessibility."
+}

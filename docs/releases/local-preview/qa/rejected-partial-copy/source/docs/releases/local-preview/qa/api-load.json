@@ -1,0 +1,46 @@
+{
+  "method": "One warm-up, then concurrent loopback HTTP reads of a twelve-flight demo. Includes transport and JSON parsing. No writer was active. This is not production capacity or provider validation.",
+  "python": "3.14.7",
+  "requests": 64,
+  "workers": 8,
+  "wall_seconds": 0.16654337500222027,
+  "median_ms": 20.60139551758766,
+  "p95_ms": 25.09770798496902,
+  "max_ms": 28.636749950237572,
+  "identical_response_fingerprints": 1,
+  "failed_requests": 0,
+  "query": {
+    "origin": "YYZ",
+    "destination": "CDG",
+    "departure_date": "2026-10-17",
+    "arrival_by_local": "2026-10-21T23:59",
+    "allow_airport_change": true,
+    "ranking": "earliest_arrival",
+    "trace": false
+  },
+  "diagnostics": {
+    "engine_version": "routing-4",
+    "snapshot_id": "e4a1f8ae39948f577d3d50737cc17b91438786111f41de69dfabdb57a0435259",
+    "request_id": "8295acf7978ca161503ad8a59726dc1caebc2d45351ad499f62d1d3a6395f38f",
+    "ranking": "earliest_arrival",
+    "scope": "loaded_snapshot",
+    "exhaustive": true,
+    "termination_reasons": [],
+    "result_limit_reached": false,
+    "stats": {
+      "rows_loaded": 12,
+      "origins_queried": 5,
+      "candidates_checked": 9,
+      "candidates_skipped_by_time": 7,
+      "states_expanded": 4,
+      "memo_hits": 0,
+      "routes_found": 6,
+      "rejections": {},
+      "trace_events_omitted": 0
+    },
+    "events": []
+  },
+  "source_sha256": {
+    "scripts/qa_api_load.py": "6f7bd072e2e6efd4442f4ece3d956780d4921af917ea2466f7f818e010af722f"
+  }
+}

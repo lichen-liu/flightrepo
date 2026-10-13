@@ -1,0 +1,7 @@
+{
+  "stage": "loopback load probe warm-up",
+  "error": "sandbox socket access denied (EPERM)",
+  "product_requests_sent": 0,
+  "resolution": "rerun with authorized loopback socket access",
+  "result": "64 requests passed; see api-load.json"
+}

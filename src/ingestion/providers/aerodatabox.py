@@ -13,12 +13,21 @@ class AeroDataBoxProvider(FlightProvider):
 
     name = "aerodatabox"
     _status = {
-        "scheduled": FlightStatus.SCHEDULED, "active": FlightStatus.ACTIVE,
-        "departed": FlightStatus.ACTIVE, "arrived": FlightStatus.LANDED,
-        "landed": FlightStatus.LANDED, "cancelled": FlightStatus.CANCELLED,
+        "scheduled": FlightStatus.SCHEDULED,
+        "active": FlightStatus.ACTIVE,
+        "departed": FlightStatus.ACTIVE,
+        "arrived": FlightStatus.LANDED,
+        "landed": FlightStatus.LANDED,
+        "cancelled": FlightStatus.CANCELLED,
     }
 
-    def __init__(self, api_key: str, base_url: str, host: str, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        host: str,
+        client: httpx.AsyncClient | None = None,
+    ):
         if not api_key:
             raise ValueError("FLIGHT_PROVIDER_API_KEY is required for aerodatabox ingestion")
         self.client = client or httpx.AsyncClient(timeout=30)
@@ -26,11 +35,13 @@ class AeroDataBoxProvider(FlightProvider):
         self.base_url = base_url.rstrip("/")
         self.headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
 
-    async def flights_for_airport(self, airport_iata: str, start: date, end: date) -> list[FlightRecord]:
+    async def flights_for_airport(
+        self, airport_iata: str, start: date, end: date
+    ) -> list[FlightRecord]:
         results: dict[str, FlightRecord] = {}
         cursor = datetime.combine(start, time.min)
         finish = datetime.combine(end + timedelta(days=1), time.min)
-        # 12-hour windows work across all current paid tiers.
+        # Request bounded windows; provider coverage and account limits vary.
         while cursor < finish:
             window_end = min(cursor + timedelta(hours=12), finish)
             payload = await self._fetch_window(airport_iata, cursor, window_end)
@@ -49,10 +60,17 @@ class AeroDataBoxProvider(FlightProvider):
 
     async def _fetch_window(self, airport: str, start: datetime, end: datetime) -> dict[str, Any]:
         url = f"{self.base_url}/flights/airports/iata/{airport}/{start:%Y-%m-%dT%H:%M}/{end:%Y-%m-%dT%H:%M}"
-        response = await self.client.get(url, headers=self.headers, params={
-            "withLeg": "true", "withCancelled": "true", "withCodeshared": "true",
-            "withCargo": "false", "withPrivate": "false",
-        })
+        response = await self.client.get(
+            url,
+            headers=self.headers,
+            params={
+                "withLeg": "true",
+                "withCancelled": "true",
+                "withCodeshared": "true",
+                "withCargo": "false",
+                "withPrivate": "false",
+            },
+        )
         response.raise_for_status()
         return response.json()
 
@@ -65,16 +83,27 @@ class AeroDataBoxProvider(FlightProvider):
         number = item.get("number")
         if not all((origin, destination, scheduled_out, scheduled_in, number)):
             return None
-        identity = item.get("movementId") or "|".join((number, origin, destination, scheduled_out.isoformat()))
+        identity = item.get("movementId") or "|".join(
+            (number, origin, destination, scheduled_out.isoformat())
+        )
         provider_id = hashlib.sha256(identity.encode()).hexdigest()[:32]
         return FlightRecord(
-            provider=self.name, provider_id=provider_id, flight_number=number.replace(" ", "").upper(),
-            airline_iata=item.get("airline", {}).get("iata"), origin_iata=origin,
-            destination_iata=destination, departure_scheduled=scheduled_out,
-            arrival_scheduled=scheduled_in, departure_actual=self._time(departure, "actualTime"),
+            provider=self.name,
+            provider_id=provider_id,
+            flight_number=number.replace(" ", "").upper(),
+            airline_iata=item.get("airline", {}).get("iata"),
+            origin_iata=origin,
+            destination_iata=destination,
+            departure_scheduled=scheduled_out,
+            arrival_scheduled=scheduled_in,
+            departure_actual=self._time(departure, "actualTime"),
             arrival_actual=self._time(arrival, "actualTime"),
             status=self._status.get(str(item.get("status", "")).lower(), FlightStatus.UNKNOWN),
-            codeshares=[x.get("number") for x in item.get("codeshareStatus", {}).get("all", []) if x.get("number")],
+            codeshares=[
+                x.get("number")
+                for x in item.get("codeshareStatus", {}).get("all", [])
+                if x.get("number")
+            ],
             fetched_at=fetched_at,
         )
 

@@ -1,7 +1,8 @@
 """Provider fetching and normalization orchestration."""
+
 from datetime import date
 
-from core.models import IngestResult
+from core.models import IngestRequest, IngestResult
 from ingestion.providers.base import FlightProvider
 from ingestion.updater import FlightUpdater
 
@@ -11,6 +12,8 @@ class IngestionService:
         self.store, self.provider, self.max_days = store, provider, max_days
 
     async def ingest(self, airports: list[str], start: date, end: date) -> IngestResult:
+        request = IngestRequest(airports=airports, start=start, end=end)
+        airports, start, end = request.airports, request.start, request.end
         if (end - start).days + 1 > self.max_days:
             raise ValueError(f"date range exceeds configured maximum of {self.max_days} days")
         unique = {}
@@ -18,5 +21,11 @@ class IngestionService:
             for record in await self.provider.flights_for_airport(airport, start, end):
                 unique[(record.provider, record.provider_id)] = record
         count = self.store.upsert(unique.values())
-        return IngestResult(provider=self.provider.name, fetched=len(unique), upserted=count,
-                            airports=airports, start=start, end=end)
+        return IngestResult(
+            provider=self.provider.name,
+            fetched=len(unique),
+            upserted=count,
+            airports=airports,
+            start=start,
+            end=end,
+        )

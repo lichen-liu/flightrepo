@@ -1,0 +1,3612 @@
+{
+  "schema_version": 1,
+  "campaign": "R09",
+  "date": "2026-10-13",
+  "scope": "customer research and proposal review; no product-code/runtime change",
+  "declared_counts": {
+    "needs": 84,
+    "tasks": 26,
+    "proposals": 10,
+    "owner_inputs": 8
+  },
+  "owner_inputs": [
+    {
+      "id": "O01",
+      "requirement": "Flyji, fly subdomain; Python, SQLite and FastAPI; separate updater/reader/admin; local-first.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O02",
+      "requirement": "Serve travelers, enthusiasts and researchers; refine all three visual alternatives before choosing.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O03",
+      "requirement": "Standard concise geeky copy; no AI-style slogans.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O04",
+      "requirement": "Directed same-city airport connections; immediate/overnight/any-later customization; subsequent legs update.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O05",
+      "requirement": "Useful playful sphere/globe with temporal interpretation; visual quality matters.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O06",
+      "requirement": "Customer-first comprehensive exploration and opposing-role iterative review with QA and signoff.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O07",
+      "requirement": "Accurate, reasonable, debug-friendly, traceable, extensible, maintainable, performant backend.",
+      "state": "confirmed_in_conversation"
+    },
+    {
+      "id": "O08",
+      "requirement": "Latest task focus: exploring, selecting, analyzing and playing around with each flight option.",
+      "state": "confirmed_in_conversation",
+      "verbatim": "the part for exploring, selecting, analyzing, \"play around\" each flight option"
+    }
+  ],
+  "sources": [
+    {
+      "id": "E01",
+      "title": "CAA 2025 Aviation Consumer Survey, Wave 14",
+      "url": "https://www.caa.co.uk/publication/download/26850",
+      "kind": "external_survey",
+      "locator": "Q7 slide34/PDFpage33; methodology slide61/PDFpage60; publication CAP3213 dated26Feb2026",
+      "claim": "In October 2025, 3,500 UK adults were surveyed. Q7 reports top-three aviation-industry investment priorities: reducing cost 52%, airport queues 41%, disruption 36%, environmental impact 32%, ground access 29%.",
+      "limits": "Industry-investment priorities, not flight-choice weights, Flyji preferences, or a global ranking. Self-report; the detailed top-three question takes precedence over the executive summary. Search metadata incorrectly labels the PDF Wave13/2024; body and publication identify Wave14/2025.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E02",
+      "title": "IATA 2025 Global Passenger Survey release",
+      "url": "https://www.iata.org/en/pressroom/2025-releases/2025-11-05-02/",
+      "kind": "external_survey_summary",
+      "locator": "Mobile reliance, regional trends, About GPS",
+      "claim": "The release reports over10,000 responses from more than200 countries, growing phone use and regional differences, including North American emphasis on journey duration and fewer layovers.",
+      "limits": "Industry-published summary; full sampling/weighting details not audited here. No inference of Flyji audience size, causal behavior, or one universal priority.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E03",
+      "title": "Google Flights official help",
+      "url": "https://support.google.com/travel/answer/2475306?hl=en",
+      "kind": "product_documentation",
+      "locator": "Find flights; flight insights; self-transfer tickets; missing flights",
+      "claim": "Documents city/airport input, date calendar, map discovery, stops/airline/time filters and booking handoff. It describes baggage and missed-onward-flight issues for separate tickets.",
+      "limits": "A product pattern and commercial context; no evidence that Flyji users prefer this interface or that any Flyji journey is purchasable.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E04",
+      "title": "Heathrow connecting flights guidance",
+      "url": "https://www.heathrow.com/connecting-flights",
+      "kind": "airport_guidance",
+      "locator": "Separate tickets; transfer questions",
+      "claim": "Transfer procedure depends on the booking and journey; separate tickets can require immigration, baggage collection/recheck and security.",
+      "limits": "Heathrow-specific contextual guidance. A city relation or generic elapsed gap cannot establish feasibility. Current instructions must be checked for the actual trip.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E05",
+      "title": "WCAG2.2 W3C Recommendation",
+      "url": "https://www.w3.org/TR/WCAG22/",
+      "kind": "standard",
+      "locator": "2.1.1;2.5.7;2.5.8;1.4.10;4.1.3",
+      "claim": "Contains keyboard, non-drag pointer access, minimum target-size, reflow and status-message criteria.",
+      "limits": "Using these criteria as requirements does not establish compliance. Full processes and human/assistive-technology evaluation remain necessary.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E06",
+      "title": "GOV.UK planning user research rounds",
+      "url": "https://www.gov.uk/service-manual/user-research/plan-round-of-user-research",
+      "kind": "method_guidance",
+      "locator": "Objectives; participants; prepare prototype; practice session",
+      "claim": "Research rounds need explicit objectives, suitable participants/access needs, informed consent, working prototypes and preparation.",
+      "limits": "Method guidance, not an aviation preference study or evidence that the proposed sample is sufficient.",
+      "verified": "2026-10-13"
+    },
+    {
+      "id": "E07",
+      "title": "GOV.UK planning research for a service",
+      "url": "https://www.gov.uk/service-manual/user-research/plan-user-research-for-your-service",
+      "kind": "method_guidance",
+      "locator": "Research questions; rounds; participant numbers",
+      "claim": "Turn unsupported assumptions into research questions and adjust rounds as findings emerge; qualitative rounds and quantitative surveys require different sample planning.",
+      "limits": "No universal nine-person saturation threshold. Flyji recruitment, sessions and population estimates are still absent.",
+      "verified": "2026-10-13"
+    }
+  ],
+  "needs": [
+    {
+      "id": "U01",
+      "category": "Trip intent",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "What can I reach without choosing a destination first?",
+      "input": "City/airport, dates, optional region",
+      "response": "Reachable dated destinations as list/map",
+      "previous_needs": [
+        "N01"
+      ],
+      "test": "T02",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U02",
+      "category": "Trip intent",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "Which complete journey reaches my destination?",
+      "input": "Exact places and departure window",
+      "response": "Ranked dated options with elapsed time",
+      "previous_needs": [
+        "N02"
+      ],
+      "test": "T06",
+      "evidence": [
+        "E02",
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U03",
+      "category": "Trip intent",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "Can I arrive before a fixed event?",
+      "input": "Destination-local deadline, date flexibility",
+      "response": "Feasible arrivals and visible day/zone consequences",
+      "previous_needs": [
+        "N04"
+      ],
+      "test": "T03",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U04",
+      "category": "Trip intent",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "How do I return or visit several places?",
+      "input": "Ordered places and stays, return date",
+      "response": "Separate dated sequences and ticket boundaries",
+      "previous_needs": [
+        "N11"
+      ],
+      "test": "T25",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U05",
+      "category": "Places and ground access",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I search without knowing an airport code?",
+      "input": "Name, city, region, aliases",
+      "response": "Disambiguated airport identity and location",
+      "previous_needs": [
+        "N01",
+        "N09"
+      ],
+      "test": "T02",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U06",
+      "category": "Places and ground access",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Which airports belong to this city?",
+      "input": "City selection and exact-airport override",
+      "response": "Named airport alternatives without merging vertices",
+      "previous_needs": [
+        "N09",
+        "N23"
+      ],
+      "test": "T04",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U07",
+      "category": "Places and ground access",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "How much time does getting to/from the airport add?",
+      "input": "Starting/final place and transport assumptions",
+      "response": "Door-to-door components with unknown ground time",
+      "previous_needs": [
+        "N09",
+        "N19"
+      ],
+      "test": "T17",
+      "evidence": [
+        "E01"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U08",
+      "category": "Places and ground access",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Would rail or another nearby airport make more sense?",
+      "input": "Alternative city/airport/mode",
+      "response": "Comparable alternatives without invented transport facts",
+      "previous_needs": [
+        "N09",
+        "N19"
+      ],
+      "test": "T17",
+      "evidence": [
+        "E01"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U09",
+      "category": "Dates and clocks",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "What changes on another departure day?",
+      "input": "Exact day or flexible inclusive range",
+      "response": "Date-specific counts with coverage state",
+      "previous_needs": [
+        "N03",
+        "N12"
+      ],
+      "test": "T08",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U10",
+      "category": "Dates and clocks",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Which local day do I leave and arrive?",
+      "input": "Local dates with airport zone",
+      "response": "Both endpoint dates/offsets and elapsed duration",
+      "previous_needs": [
+        "N04",
+        "N25"
+      ],
+      "test": "T03",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U11",
+      "category": "Dates and clocks",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "How do repeated/skipped clocks or date-line crossings work?",
+      "input": "Local clock with explicit ambiguity choice",
+      "response": "Resolved instant or explanation requiring correction",
+      "previous_needs": [
+        "N04"
+      ],
+      "test": "T03",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U12",
+      "category": "Dates and clocks",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Is this a repeating timetable or one dated instance?",
+      "input": "Service period and evidence basis",
+      "response": "Separate recurrence claims from loaded instances",
+      "previous_needs": [
+        "N12",
+        "N13"
+      ],
+      "test": "T08",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U13",
+      "category": "Connection requirements",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I connect at the same airport?",
+      "input": "Personal minimum/maximum gap",
+      "response": "Elapsed wait and unverified operational requirements",
+      "previous_needs": [
+        "N05"
+      ],
+      "test": "T04",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U14",
+      "category": "Connection requirements",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I change airports within a city?",
+      "input": "Opt-in exact arrival/departure airports",
+      "response": "Directed ground segment with assumption source",
+      "previous_needs": [
+        "N09",
+        "N23"
+      ],
+      "test": "T04",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U15",
+      "category": "Connection requirements",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I wait overnight or until a specific time?",
+      "input": "Per-gap not-before, local stay date or no maximum within horizon",
+      "response": "Dated onward choices, exact waits and bounded horizon",
+      "previous_needs": [
+        "N22"
+      ],
+      "test": "T05",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U16",
+      "category": "Connection requirements",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "What baggage, border, terminal or check-in steps apply?",
+      "input": "Ticket/terminal/baggage context if known",
+      "response": "Known requirements separately from unknowns",
+      "previous_needs": [
+        "N05",
+        "N19",
+        "N23"
+      ],
+      "test": "T04",
+      "evidence": [
+        "E03",
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U17",
+      "category": "Journey construction",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I select each next leg myself?",
+      "input": "Dated choice after current arrival",
+      "response": "Candidate continuations and visible dead ends",
+      "previous_needs": [
+        "N07"
+      ],
+      "test": "T05",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U18",
+      "category": "Journey construction",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I change the middle without losing the beginning?",
+      "input": "Exact prefix and selected next flight",
+      "response": "Preserved prefix, updated suffix, changes and Undo",
+      "previous_needs": [
+        "N21"
+      ],
+      "test": "T05",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U19",
+      "category": "Journey construction",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I keep a later flight fixed while editing?",
+      "input": "Optional explicit downstream lock",
+      "response": "Feasibility result or explained conflict, never silent unlock",
+      "previous_needs": [
+        "N21",
+        "N26"
+      ],
+      "test": "T05",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U20",
+      "category": "Journey construction",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I visit or avoid a particular hub?",
+      "input": "Required/ordered via and avoided airports",
+      "response": "Constrained choices with exclusion/recovery reasons",
+      "previous_needs": [
+        "N06"
+      ],
+      "test": "T15",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U21",
+      "category": "Tradeoffs and comparison",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "Which option spends least time traveling or waiting?",
+      "input": "Explicit duration/arrival/stops sort",
+      "response": "Transparent order and proportional time lanes",
+      "previous_needs": [
+        "N08"
+      ],
+      "test": "T06",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U22",
+      "category": "Tradeoffs and comparison",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "What do I gain by accepting another stop?",
+      "input": "Pin comparable dated journeys",
+      "response": "Aligned differences in arrival, wait, travel and unknown facts",
+      "previous_needs": [
+        "N08",
+        "N16"
+      ],
+      "test": "T06",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U23",
+      "category": "Tradeoffs and comparison",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "Can I avoid exhausting times or long airport waits?",
+      "input": "Personal flight-time/wait constraints",
+      "response": "Day/night consequences; no invented comfort score",
+      "previous_needs": [
+        "N05",
+        "N22"
+      ],
+      "test": "T06",
+      "evidence": [
+        "E01"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U24",
+      "category": "Tradeoffs and comparison",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "validate_value",
+      "question": "Why is this recommended and what was excluded?",
+      "input": "Visible query and ranking rule",
+      "response": "Deterministic explanation, ties, limits and repair options",
+      "previous_needs": [
+        "N08",
+        "N15"
+      ],
+      "test": "T15",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U25",
+      "category": "Commercial decision",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Can I afford the total trip including extras?",
+      "input": "Budget, baggage, party and currency",
+      "response": "Verified total cost or explicit unavailable status",
+      "previous_needs": [
+        "N19"
+      ],
+      "test": "T01",
+      "evidence": [
+        "E01",
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U26",
+      "category": "Commercial decision",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Can I actually buy these flights together?",
+      "input": "Inventory/date/party/ticket context",
+      "response": "Verified availability and protection or unknown boundary",
+      "previous_needs": [
+        "N19"
+      ],
+      "test": "T18",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U27",
+      "category": "Commercial decision",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "What happens if I cancel, change or miss a leg?",
+      "input": "Ticket/airline terms and disruption context",
+      "response": "Source-backed options or direct authoritative handoff",
+      "previous_needs": [
+        "N19",
+        "N26"
+      ],
+      "test": "T18",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U28",
+      "category": "Commercial decision",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Which cabin, baggage and loyalty rules fit me?",
+      "input": "Carrier/cabin/allowance preferences",
+      "response": "Dated commercial facts without guessing from flight number",
+      "previous_needs": [
+        "N19",
+        "N20"
+      ],
+      "test": "T18",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U29",
+      "category": "Personal circumstances",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Will this work for children or companions?",
+      "input": "Group needs and acceptable pacing",
+      "response": "Readable tradeoffs and facts needing confirmation",
+      "previous_needs": [
+        "N19"
+      ],
+      "test": "T16",
+      "evidence": [
+        "E01"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U30",
+      "category": "Personal circumstances",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Can I travel with mobility or other assistance needs?",
+      "input": "Voluntary relevant requirements",
+      "response": "Accessible interface and verified assistance facts separately",
+      "previous_needs": [
+        "N17",
+        "N19"
+      ],
+      "test": "T16",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U31",
+      "category": "Personal circumstances",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "What if I need medication, equipment or pet arrangements?",
+      "input": "Relevant needs without unnecessary sensitive details",
+      "response": "Airline/airport confirmation paths, explicit unknowns",
+      "previous_needs": [
+        "N19"
+      ],
+      "test": "T16",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U32",
+      "category": "Personal circumstances",
+      "audiences": [
+        "traveler"
+      ],
+      "priority": "validate_value",
+      "question": "Can I reduce stress or get help when uncertain?",
+      "input": "Optional explanations and human-source links",
+      "response": "Plain factual guidance without unsupported reassurance",
+      "previous_needs": [
+        "N15",
+        "N17",
+        "N19"
+      ],
+      "test": "T16",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U33",
+      "category": "Trust and revisions",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Does no result mean there is no service?",
+      "input": "No additional input burden",
+      "response": "No loaded matches vs missing/partial/error distinctions",
+      "previous_needs": [
+        "N15"
+      ],
+      "test": "T07",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U34",
+      "category": "Trust and revisions",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "How old and complete is this information?",
+      "input": "Source/time/coverage detail on demand",
+      "response": "Observed refresh separate from provider coverage",
+      "previous_needs": [
+        "N15",
+        "N26"
+      ],
+      "test": "T07",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U35",
+      "category": "Trust and revisions",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "What if my selected flight changes or disappears?",
+      "input": "Explicit recheck of saved dated identities",
+      "response": "Old/new facts and reevaluation without substitution",
+      "previous_needs": [
+        "N26"
+      ],
+      "test": "T14",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U36",
+      "category": "Trust and revisions",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Was this scheduled, cancelled or actually flown?",
+      "input": "Status and evidence-basis filters",
+      "response": "Scheduled/actual evidence, provenance and unknowns",
+      "previous_needs": [
+        "N13"
+      ],
+      "test": "T11",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U37",
+      "category": "Geography and playful exploration",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Where does this journey go geographically?",
+      "input": "Linked leg/card selection",
+      "response": "Exact airport locations and illustrative great-circle lines",
+      "previous_needs": [
+        "N14",
+        "N24"
+      ],
+      "test": "T09",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U38",
+      "category": "Geography and playful exploration",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I stay oriented while exploring a global route?",
+      "input": "Sphere/flat/topology/list, Face/Fit and leg focus",
+      "response": "Stable selected identities and explicit off-view recovery",
+      "previous_needs": [
+        "N14",
+        "N24"
+      ],
+      "test": "T09",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U39",
+      "category": "Geography and playful exploration",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can I tell a flight line from a ground transfer?",
+      "input": "Select either segment",
+      "response": "Distinct segment shape, name, timing and assumption",
+      "previous_needs": [
+        "N23",
+        "N24"
+      ],
+      "test": "T04",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U40",
+      "category": "Geography and playful exploration",
+      "audiences": [
+        "traveler",
+        "enthusiast"
+      ],
+      "priority": "explore",
+      "question": "Can exploration be enjoyable enough to revisit?",
+      "input": "Optional event stepping, discoveries and saved views",
+      "response": "Playful factual consequences with no automatic motion",
+      "previous_needs": [
+        "N14",
+        "N25"
+      ],
+      "test": "T19",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U41",
+      "category": "Time visualization",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "When is each leg flying, waiting or completed?",
+      "input": "Schedule cursor or event step",
+      "response": "Synchronized phases explicitly illustrating a schedule",
+      "previous_needs": [
+        "N14"
+      ],
+      "test": "T09",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U42",
+      "category": "Time visualization",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I compare elapsed timing and local dates across journeys?",
+      "input": "Shared axis with local endpoint dates or equivalent facts",
+      "response": "Scaled flight/wait lanes and readable alternatives",
+      "previous_needs": [
+        "N08",
+        "N14"
+      ],
+      "test": "T06",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U43",
+      "category": "Time visualization",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "What departure/arrival tradeoffs fit a deadline?",
+      "input": "Time bounds and optional brush",
+      "response": "Chart/list equivalent with query semantics distinct from cursor",
+      "previous_needs": [
+        "N04",
+        "N08"
+      ],
+      "test": "T03",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U44",
+      "category": "Time visualization",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "How do patterns vary by day or period?",
+      "input": "Week/day/cohort selection",
+      "response": "Calendar/timetable/small multiples with coverage denominators",
+      "previous_needs": [
+        "N12",
+        "N18"
+      ],
+      "test": "T11",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U45",
+      "category": "Network and enthusiast inquiry",
+      "audiences": [
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Which hubs or destinations connect this network?",
+      "input": "Airport/carrier/date/region",
+      "response": "Map, schematic or adjacency view with dated edges",
+      "previous_needs": [
+        "N01",
+        "N20"
+      ],
+      "test": "T02",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U46",
+      "category": "Network and enthusiast inquiry",
+      "audiences": [
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Which carrier or aircraft operates a movement?",
+      "input": "Operating/marketing carrier and aircraft criteria",
+      "response": "Source-backed identity without codeshare double counting",
+      "previous_needs": [
+        "N20"
+      ],
+      "test": "T11",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U47",
+      "category": "Network and enthusiast inquiry",
+      "audiences": [
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I search inbound to a fixed destination?",
+      "input": "Open origin/region and arrival window",
+      "response": "Reachable origins with complete dated timing",
+      "previous_needs": [
+        "N10"
+      ],
+      "test": "T02",
+      "evidence": [
+        "E02"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U48",
+      "category": "Network and enthusiast inquiry",
+      "audiences": [
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I discover unusual routes or reconstruct a flight?",
+      "input": "Known flight/airport/time and filters",
+      "response": "Matching evidence and uncertainty rather than invented track",
+      "previous_needs": [
+        "N13",
+        "N14",
+        "N20"
+      ],
+      "test": "T19",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U49",
+      "category": "Research and reproducibility",
+      "audiences": [
+        "researcher",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Has service grown, moved or disappeared?",
+      "input": "Matched periods/carriers/weekdays",
+      "response": "Comparable cohorts with unknowns separated from removal",
+      "previous_needs": [
+        "N18"
+      ],
+      "test": "T11",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U50",
+      "category": "Research and reproducibility",
+      "audiences": [
+        "researcher",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I reproduce or export this result?",
+      "input": "Export query, IDs, snapshot and methodology",
+      "response": "Readable artifact and exact evidence provenance",
+      "previous_needs": [
+        "N16",
+        "N18"
+      ],
+      "test": "T12",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U51",
+      "category": "Research and reproducibility",
+      "audiences": [
+        "researcher",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "Are duplicate/codeshare records inflating counts?",
+      "input": "Movement basis and normalization rule",
+      "response": "Raw vs normalized counts and documented identity",
+      "previous_needs": [
+        "N20"
+      ],
+      "test": "T11",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U52",
+      "category": "Research and reproducibility",
+      "audiences": [
+        "researcher",
+        "enthusiast"
+      ],
+      "priority": "semantic_gate",
+      "question": "What limits make the conclusion incomplete?",
+      "input": "Coverage/loading/search/trace bounds",
+      "response": "Distinct truncation dimensions, no false exhaustive ranking",
+      "previous_needs": [
+        "N15",
+        "N18"
+      ],
+      "test": "T13",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U53",
+      "category": "Workflow and recovery",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I save and return to an exploration?",
+      "input": "Local shortlist/query link/export",
+      "response": "Restored intent with stale evidence labeled",
+      "previous_needs": [
+        "N16",
+        "N26"
+      ],
+      "test": "T14",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U54",
+      "category": "Workflow and recovery",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can someone else understand what I found?",
+      "input": "Readable share/export and query summary",
+      "response": "Context, source, time basis and limitations retained",
+      "previous_needs": [
+        "N16"
+      ],
+      "test": "T12",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U55",
+      "category": "Workflow and recovery",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I undo, retry or correct input without starting over?",
+      "input": "Undo/retry/edit and explicit submit",
+      "response": "Retained draft/results, latest-response state and clear change",
+      "previous_needs": [
+        "N07",
+        "N21"
+      ],
+      "test": "T15",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U56",
+      "category": "Workflow and recovery",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I compare alternatives without repeated reentry?",
+      "input": "Pins and presentation switching",
+      "response": "Stable query, selection, cursor and camera",
+      "previous_needs": [
+        "N08",
+        "N16",
+        "N24"
+      ],
+      "test": "T06",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U57",
+      "category": "Access and device",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I complete the task using keyboard or screen reader?",
+      "input": "Native controls and equivalent route/schedule detail",
+      "response": "Named focus/state changes and no map-only information",
+      "previous_needs": [
+        "N17"
+      ],
+      "test": "T10",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U58",
+      "category": "Access and device",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Can I use touch without precision dragging?",
+      "input": "Single-pointer controls and mobile views",
+      "response": "Discoverable selection/rotation alternatives and usable targets",
+      "previous_needs": [
+        "N17",
+        "N24"
+      ],
+      "test": "T09",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U59",
+      "category": "Access and device",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Does it work with zoom, low vision or reduced motion?",
+      "input": "Text zoom, appearance, reduced motion",
+      "response": "Reflow, contrast, patterns and controlled movement",
+      "previous_needs": [
+        "N17"
+      ],
+      "test": "T10",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U60",
+      "category": "Access and device",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "semantic_gate",
+      "question": "Does it remain usable on slow or low-power devices?",
+      "input": "Small/dense data and degraded-network fixtures",
+      "response": "Responsive feedback, bounded work and useful fallback",
+      "previous_needs": [
+        "N17"
+      ],
+      "test": "T13",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U61",
+      "category": "Language, privacy and wider impact",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I understand the terminology and dates in my locale?",
+      "input": "Names, dates and optional unit/clock preferences",
+      "response": "Plain standard labels, unambiguous local date/zone",
+      "previous_needs": [
+        "N17",
+        "N25"
+      ],
+      "test": "T20",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U62",
+      "category": "Language, privacy and wider impact",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I explore without an account or sharing sensitive plans?",
+      "input": "Local save and explicit share action",
+      "response": "Clear storage/sharing boundary and removal control",
+      "previous_needs": [
+        "N16"
+      ],
+      "test": "T20",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U63",
+      "category": "Language, privacy and wider impact",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "What is the environmental impact and could I travel differently?",
+      "input": "Comparable modes and explicit method if available",
+      "response": "Source-backed estimates with method/uncertainty or unavailable",
+      "previous_needs": [
+        "N19"
+      ],
+      "test": "T17",
+      "evidence": [
+        "E01"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U64",
+      "category": "Language, privacy and wider impact",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I learn the tool without losing my task?",
+      "input": "Brief examples, progressive detail and repeat-user shortcuts",
+      "response": "Helpful starting points with editable real intent",
+      "previous_needs": [
+        "N25"
+      ],
+      "test": "T24",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U65",
+      "category": "Exploring and selecting options",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Can I browse interesting flights before defining a whole trip?",
+      "input": "Place/date/flight as an editable starting point",
+      "response": "Scoped dated options and reachable neighborhoods with coverage",
+      "previous_needs": [
+        "N01",
+        "N07",
+        "N20"
+      ],
+      "test": "T21",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U66",
+      "category": "Exploring and selecting options",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Am I selecting one flight, a shared map edge or a complete journey?",
+      "input": "Explicit dated flight/journey identity",
+      "response": "Clear selection scope and synchronized details",
+      "previous_needs": [
+        "N07",
+        "N08",
+        "N24"
+      ],
+      "test": "T21",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U67",
+      "category": "Exploring and selecting options",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Can I compare several options while keeping a reference?",
+      "input": "Persistent pins and explicit sort/metric",
+      "response": "Shared-scale timing, identity and differences without hidden scoring",
+      "previous_needs": [
+        "N08",
+        "N16"
+      ],
+      "test": "T21",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U68",
+      "category": "Exploring and selecting options",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Can I return quickly to an interesting option while browsing?",
+      "input": "Local pins and browse history",
+      "response": "Preserved exact option and stale-status distinction",
+      "previous_needs": [
+        "N16",
+        "N26"
+      ],
+      "test": "T21",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U69",
+      "category": "Reversible what-if play",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "What would change if I move a date, wait or hub?",
+      "input": "Editable what-if constraints with visible scope",
+      "response": "Preview differences distinct from applied query and saved facts",
+      "previous_needs": [
+        "N03",
+        "N06",
+        "N21",
+        "N22"
+      ],
+      "test": "T22",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U70",
+      "category": "Reversible what-if play",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Can I keep important legs fixed while trying alternatives?",
+      "input": "Explicit prefix/later-leg commitments and cancel/apply",
+      "response": "Constraint conflict or preview; no silent replacement/unlock",
+      "previous_needs": [
+        "N21",
+        "N26"
+      ],
+      "test": "T22",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U71",
+      "category": "Reversible what-if play",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Why did an option or later leg change after an edit?",
+      "input": "Before/after identities and changed constraint",
+      "response": "Leg-by-leg changes, reasons and exact Undo",
+      "previous_needs": [
+        "N21",
+        "N25",
+        "N26"
+      ],
+      "test": "T22",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U72",
+      "category": "Reversible what-if play",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "validate_value",
+      "question": "Which small change could recover a dead end?",
+      "input": "Named candidate date/gap/stops/hub relaxation",
+      "response": "Computed alternatives under the same stated coverage/budget",
+      "previous_needs": [
+        "N07",
+        "N15",
+        "N22"
+      ],
+      "test": "T22",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U73",
+      "category": "Analytical depth",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Which flights overlap or offer different departure/arrival tradeoffs?",
+      "input": "Flight cohort, shared clock and selected metrics",
+      "response": "Aligned schedule/chart and readable facts with local dates",
+      "previous_needs": [
+        "N04",
+        "N08",
+        "N14"
+      ],
+      "test": "T23",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U74",
+      "category": "Analytical depth",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I isolate a carrier, date or reachable network around my choice?",
+      "input": "Clearly applied cohort/filter vs local highlighting",
+      "response": "Selected/context layers with counts and scope preserved",
+      "previous_needs": [
+        "N12",
+        "N14",
+        "N20"
+      ],
+      "test": "T23",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U75",
+      "category": "Analytical depth",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I inspect the evidence behind an interesting option?",
+      "input": "Flight detail, status, source and method expansion",
+      "response": "Progressive dated evidence with unknown fields explicit",
+      "previous_needs": [
+        "N13",
+        "N15",
+        "N20"
+      ],
+      "test": "T23",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U76",
+      "category": "Analytical depth",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Which alternatives improve one metric without hiding another?",
+      "input": "Explicit arrival/stops/wait/elapsed comparison",
+      "response": "Tradeoff set or matrix, no unverified weighted best",
+      "previous_needs": [
+        "N08"
+      ],
+      "test": "T23",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U77",
+      "category": "Exploration continuity and control",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I move between local detail and global geography easily?",
+      "input": "Leg/airport focus, zoom/context and flat/sphere switch",
+      "response": "Stable selected facts; camera changes do not change the query",
+      "previous_needs": [
+        "N14",
+        "N24"
+      ],
+      "test": "T24",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U78",
+      "category": "Exploration continuity and control",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I move quickly through options without precision gestures?",
+      "input": "Named previous/next/event controls and shortcuts",
+      "response": "Predictable focus, exact identities and non-drag touch parity",
+      "previous_needs": [
+        "N17",
+        "N24"
+      ],
+      "test": "T24",
+      "evidence": [
+        "E05"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U79",
+      "category": "Exploration continuity and control",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I backtrack through exploration and explain my changes?",
+      "input": "History/undo with dated query and edit summaries",
+      "response": "Recoverable state and understandable previous-versus-current facts",
+      "previous_needs": [
+        "N16",
+        "N21",
+        "N26"
+      ],
+      "test": "T24",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U80",
+      "category": "Exploration continuity and control",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I reveal more analytical detail as I learn?",
+      "input": "Progressive controls and optional compact view",
+      "response": "Useful dense detail while plain names/access paths remain",
+      "previous_needs": [
+        "N17",
+        "N25"
+      ],
+      "test": "T24",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U81",
+      "category": "Service reliability and stay constraints",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "What does historical disruption evidence say about this option?",
+      "input": "Matched route/operator/period and operational evidence",
+      "response": "Sample and missingness with no unvalidated future reliability score",
+      "previous_needs": [
+        "N05",
+        "N13"
+      ],
+      "test": "T26",
+      "evidence": [],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U82",
+      "category": "Service reliability and stay constraints",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I specify nights or local days in an ordered stopover?",
+      "input": "Ordered places, local stays and exact fixed flights",
+      "response": "Date-consistent sequence and conflicts, separate ticket boundaries",
+      "previous_needs": [
+        "N07",
+        "N11",
+        "N22"
+      ],
+      "test": "T25",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U83",
+      "category": "Service reliability and stay constraints",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can I explore trips within a leave or total-time budget?",
+      "input": "Departure/return window, stay length and elapsed cap",
+      "response": "Complete bounded sequences and clear infeasible/unknown cases",
+      "previous_needs": [
+        "N03",
+        "N11"
+      ],
+      "test": "T25",
+      "evidence": [
+        "E03"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    },
+    {
+      "id": "U84",
+      "category": "Service reliability and stay constraints",
+      "audiences": [
+        "traveler",
+        "enthusiast",
+        "researcher"
+      ],
+      "priority": "explore",
+      "question": "Can each connection have its own hard or preferred wait?",
+      "input": "Per-gap minimum/not-before/maximum and preferences",
+      "response": "Named constraint conflicts and explicit rebuilt suffix choices",
+      "previous_needs": [
+        "N05",
+        "N21",
+        "N22"
+      ],
+      "test": "T25",
+      "evidence": [
+        "E04"
+      ],
+      "evidence_relation": "context_only_not_validation",
+      "provenance": [
+        "owner_direction",
+        "author_hypothesis"
+      ],
+      "evidence_state": "hypothesis",
+      "customer_validated": false,
+      "current_support": "Candidate response, not signed off as implemented; bounded R08 overlap and explicit gaps are in recommendations.md and first-slice.md."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Value without fares",
+      "fixture": "Recent real traveler task; current booking tools available",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Record standalone value, useful complement or non-use; do not count a click or aesthetic preference as solved travel planning.",
+      "status": "planned_not_run",
+      "customer_prompt": "Describe a recent flight decision and try to advance it using the available facts and your usual tools.",
+      "qa_actions": "Ask for a recent decision before showing Flyji. Observe whether route/timing changes a decision, what remains unresolved, and return to existing tool."
+    },
+    {
+      "id": "T02",
+      "title": "Open destination, city and inbound discovery",
+      "fixture": "Names including ambiguous cities, an open destination and an open origin",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Participant identifies correct airport/dated reachability and explains absent/unknown coverage; inbound/open input is an experiment, not current implementation.",
+      "status": "planned_not_run",
+      "customer_prompt": "Find a dated destination or origin that fits your own exploration question, using the place names you know.",
+      "qa_actions": "Compare compact form, linked geographic workspace and guided entry using identical dated evidence."
+    },
+    {
+      "id": "T03",
+      "title": "Deadline, local dates and difficult clocks",
+      "fixture": "Overnight/date-line journeys; skipped and repeated local clocks",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Resolved instants match independent expected UTC facts; participant correctly explains local days and elapsed time without prompting.",
+      "status": "planned_not_run",
+      "customer_prompt": "Find a journey arriving before this event and explain its local days and waiting time.",
+      "qa_actions": "Set arrival before an event; compare endpoint cards, lanes and optional chart. Explain query vs cursor."
+    },
+    {
+      "id": "T04",
+      "title": "Transfer and commercial inference",
+      "fixture": "Same-airport, directed same-city and reverse-direction disallowed cases; unknown ticket/baggage context",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Participant distinguishes elapsed gap/geographic eligibility from protected or personally feasible transfer; no universal safety inference.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explain what you would need to confirm before accepting these two connection options.",
+      "qa_actions": "Compare concise adjacent transfer disclosure, expandable detail and explicit transfer checklist."
+    },
+    {
+      "id": "T05",
+      "title": "Edit a journey",
+      "fixture": "Exact prefix; immediate/overnight/not-before next choices; dead end; future lock conflict",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Exact unchanged prefix and explicitly chosen next flight retained; later replacements disclosed; Undo restores old facts; lock conflict explicit; task evidence decides effort/discoverability.",
+      "status": "planned_not_run",
+      "customer_prompt": "Try a different onward flight while keeping the part of this journey you care about; explain what changed and recover your former choice.",
+      "qa_actions": "Change next leg, inspect changed suffix, Undo; compare editor placements and explicit later-lock concept."
+    },
+    {
+      "id": "T06",
+      "title": "Compare and retain context",
+      "fixture": "Three identical-route/different-day journeys; meaningful wait/arrival differences",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Explain sort, local dates and tradeoff; presentation changes retain IDs/cursor/query; explicit role swap changes only roles; query changes label excluded pins and preserve old evidence; record interpretation errors and needless camera actions.",
+      "status": "planned_not_run",
+      "customer_prompt": "Compare these journeys and explain a tradeoff that matters to you; retain a reference while exploring.",
+      "qa_actions": "Compare list/time, linked 2D and optional globe layouts; pin/swap and change presentation."
+    },
+    {
+      "id": "T07",
+      "title": "Empty and incomplete evidence",
+      "fixture": "No matches, missing metadata, unknown coverage, partial search and source error",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "No participant claim of nonexistent service from missing data; UI states remain distinct; any critical false inference triggers repair/retest.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explain what these empty or incomplete results establish and what you would do next.",
+      "qa_actions": "Ask what each result establishes and how to recover."
+    },
+    {
+      "id": "T08",
+      "title": "Flexible dates and recurring service",
+      "fixture": "Some dated flights, an intentionally missing day and a known covered no-match day",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Unknown is distinct from zero; selected dates correctly constrain initial departure; recurrence is not inferred from sparse rows.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explore different departure days and explain what the available evidence says about service.",
+      "qa_actions": "Use calendar/table alternatives and date range; explain daily-service inference."
+    },
+    {
+      "id": "T09",
+      "title": "Globe/flat map on phone",
+      "fixture": "Occluded long-haul route, city transfer, touch and non-drag pointer input",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Correct dated choice and phase; schedule marker not interpreted as measured live position; pointer alternatives work; camera cost recorded.",
+      "status": "planned_not_run",
+      "customer_prompt": "Understand where this route goes and when its legs occur; find a leg that is hard to see.",
+      "qa_actions": "Locate a leg, Face/Fit, switch flat/sphere and time cursor; compare task effort with equivalent list."
+    },
+    {
+      "id": "T10",
+      "title": "Inclusive critical flow",
+      "fixture": "Keyboard, assistive technology, zoom/reflow and reduced motion; participant access needs",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Focus/status and complete task reviewed manually; automated checks are supporting evidence, not full WCAG conformance.",
+      "status": "planned_not_run",
+      "customer_prompt": "Complete your search, comparison and change task using your usual input/access tools.",
+      "qa_actions": "Search, compare, edit, undo and explain limitations without map manipulation."
+    },
+    {
+      "id": "T11",
+      "title": "Network and historical inference",
+      "fixture": "Matched/unmatched periods, duplicate codeshares, cancellations, scheduled-only and actual evidence",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Unknown coverage cannot establish removal; normalized movement basis and comparable denominator visible; aircraft facts remain unknown unless sourced.",
+      "status": "planned_not_run",
+      "customer_prompt": "Investigate this service-change question and explain the basis for your counts and conclusion.",
+      "qa_actions": "Compare evidence table, small multiples and topology; explain counts/additions/removals."
+    },
+    {
+      "id": "T12",
+      "title": "Export and reproducibility",
+      "fixture": "Canonical query, exact records/metadata and snapshot; recipient without prior context",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Dated identities, method, engine/snapshot and scope survive; query-only link is distinguished from a frozen reproducible snapshot.",
+      "status": "planned_not_run",
+      "customer_prompt": "Retain a result so another person can understand and reproduce your explanation.",
+      "qa_actions": "Export, restore/replay where available and explain method from artifact alone."
+    },
+    {
+      "id": "T13",
+      "title": "Density and operating limits",
+      "fixture": "1/10/100/1000 options and representative dense networks; slow response",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "No inconsistent selection or false total; CPU/memory/latency measured on named devices; any proposed budget labeled unvalidated until measured.",
+      "status": "planned_not_run",
+      "customer_prompt": "Find and inspect the options you need in this crowded or slow-response case.",
+      "qa_actions": "Compare list paging, selected-context map and overview/detail; test loading/truncation and low-power fallback."
+    },
+    {
+      "id": "T14",
+      "title": "Stale saved selection",
+      "fixture": "Saved flight rescheduled/cancelled, metadata revised and restored old snapshot",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Old evidence visible; stale identities not silently substituted; explicit decision required before applying a change.",
+      "status": "planned_not_run",
+      "customer_prompt": "Revisit this saved choice after new facts arrive; explain what remains valid and what changed.",
+      "qa_actions": "Reopen, reevaluate, compare old/new and recover."
+    },
+    {
+      "id": "T15",
+      "title": "Constraints and failure recovery",
+      "fixture": "Via/avoid conflict, invalid clock, network error and superseded request",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Draft/applied query distinction clear; no silent relaxation; latest state coherent; logs identify actual failure and recovery.",
+      "status": "planned_not_run",
+      "customer_prompt": "Correct a problem in this exploration without losing the useful work you have done.",
+      "qa_actions": "Correct the query, relax explicitly, retry, undo and preserve comparison."
+    },
+    {
+      "id": "T16",
+      "title": "Personal and access circumstances",
+      "fixture": "Real voluntarily supplied companion/accessibility/assistance context",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Capture unmet requirements and authoritative confirmation path; accessible app does not imply accessible journey.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explain how these options fit the requirements of your party and what still needs confirmation; include conflicting needs.",
+      "qa_actions": "Ask what must be known before accepting a route; avoid collecting irrelevant sensitive details."
+    },
+    {
+      "id": "T17",
+      "title": "Door-to-door and environmental tradeoffs",
+      "fixture": "Alternative airports/rail/ground assumptions with unknown costs/times/impact",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Cannot rank door-to-door time or emissions without supported values/method; establish whether missing components prevent useful decisions.",
+      "status": "planned_not_run",
+      "customer_prompt": "Compare getting to the actual destination using these alternative airports or transport assumptions.",
+      "qa_actions": "Compare component breakdown and unknown indicators against airport-only ranking."
+    },
+    {
+      "id": "T18",
+      "title": "Ticket/booking scope",
+      "fixture": "Separate vs through-ticket, baggage/cabin/inventory/terms unknown",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "No purchasability or protection inference; evaluate whether contextual links help without claiming inventory reconciliation.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explain what would still need confirmation before purchasing or using this candidate.",
+      "qa_actions": "Ask what an itinerary proves; attempt handoff or confirmation with existing source."
+    },
+    {
+      "id": "T19",
+      "title": "Enthusiast learning and return interest",
+      "fixture": "Recent real enthusiast activity; self-directed time after tasks",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Separate stated enjoyment/novelty from task value and future actual return; schedule illustration/track distinction retained.",
+      "status": "planned_not_run",
+      "customer_prompt": "Investigate a flight question you find interesting and retain something useful from it.",
+      "qa_actions": "Compare globe, timetable and network discovery; ask what they would use again and observe chosen task."
+    },
+    {
+      "id": "T20",
+      "title": "Locale and privacy",
+      "fixture": "Ambiguous numeric dates, translated names, local save/share and account-free use",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Correct date/place interpretation, explicit share boundaries; privacy preferences gathered without generalizing from biometrics survey.",
+      "status": "planned_not_run",
+      "customer_prompt": "Interpret these places/dates and explain what is retained or disclosed when saving or sharing.",
+      "qa_actions": "Explain labels/time conventions and what becomes visible when saving/sharing."
+    },
+    {
+      "id": "T21",
+      "title": "Explore, select and compare flight options",
+      "fixture": "Owner-directed exploration task; identical dated choices including a shared edge, different local days and an interesting seed flight",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Useful question/answer stated by the participant; exact flight/journey scope understood; comparison preserves IDs and reference; no claim of actual customer success yet.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explore these dated options, choose something worth understanding, compare alternatives and keep a useful insight.",
+      "qa_actions": "Let people browse and choose their own question, then compare list/time, linked map and globe placements. Select an individual flight and a whole journey; pin alternatives and return to a reference."
+    },
+    {
+      "id": "T22",
+      "title": "Play with alternatives reversibly",
+      "fixture": "Date/gap/hub variations, retained prefix and later commitment; invalid/dead-end option",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Visible applied/draft scope and changed identities; no silent commitment replacement; recovery actually computed under stated bounds; observe surprise and exploration effort.",
+      "status": "planned_not_run",
+      "customer_prompt": "Try a change to a date, wait or next leg that interests you; explain the consequences and return to the original when desired.",
+      "qa_actions": "Compare preview/apply with direct reversible edits. Change one constraint, explain each changed leg, cancel/undo, and try a computed recovery."
+    },
+    {
+      "id": "T23",
+      "title": "Analyze an interesting flight cohort",
+      "fixture": "Selected flight with alternative departure/arrival times, marketed duplicates and incomplete carrier/date coverage",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Correct units, local dates, selection and cohort/query scope; no hidden best score, doubled movement or unsupported completeness. Count useful comparisons and interpretation errors separately.",
+      "status": "planned_not_run",
+      "customer_prompt": "Analyze a meaningful difference among these options and explain which facts or constraints account for it.",
+      "qa_actions": "Compare aligned lanes, tradeoff chart/matrix, selected/context geography and progressive evidence. Explain what a highlighted filter changes."
+    },
+    {
+      "id": "T24",
+      "title": "Keep exploration fluid across views",
+      "fixture": "Long-haul/polar option, occluded map item, phone, keyboard, non-drag input and exploration history",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "State and focus remain predictable; view/camera do not mutate query; facts/history remain dated; actual device/access effort and delight are observed separately.",
+      "status": "planned_not_run",
+      "customer_prompt": "Start an exploration of your own, learn what can be changed and move between useful details without losing your place.",
+      "qa_actions": "Move between option, leg detail, schedule, map/globe and evidence; use next/previous/event controls and backtrack. Compare progressive analytical detail."
+    },
+    {
+      "id": "T25",
+      "title": "Stay lengths and per-gap intent",
+      "fixture": "Ordered multi-city/return case; local-night versus elapsed stay; later fixed leg and different rules per gap",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Whole sequence is date-consistent; local nights not silently treated as elapsed24hours; exact locks honored or conflict disclosed; infeasibility distinct from unknown coverage; current engine does not promise all these constraints.",
+      "status": "planned_not_run",
+      "customer_prompt": "Construct a sequence matching these local stays, return date and fixed commitment; explain any conflict.",
+      "qa_actions": "Express leave/stay constraints, edit one gap and compare sequence/builder inputs; distinguish hard rules from preferences."
+    },
+    {
+      "id": "T26",
+      "title": "Historical operational reliability",
+      "fixture": "Matched flight/operator/time cohort with actual delay/cancellation evidence and missing observations",
+      "method": "Unprompted outcome task first using customer_prompt. Log hints and interpretation probes separately; qa_actions are later prescribed functional checks, not evidence of discoverability.",
+      "truth_and_observation": "Future reliability not inferred from a timetable; sample basis/period/missingness and scheduled-vs-actual truth clear; no unvalidated probability or guarantee.",
+      "status": "planned_not_run",
+      "customer_prompt": "Explain what these schedule and historical operational facts establish about disruption, including what remains unknown.",
+      "qa_actions": "Inspect a route reliability question and compare schedule-only facts with operational summary if sourced."
+    }
+  ],
+  "proposals": [
+    {
+      "id": "Q01",
+      "title": "Task entry",
+      "needs": [
+        "U01",
+        "U02",
+        "U03",
+        "U49",
+        "U45",
+        "U65",
+        "U66",
+        "U67",
+        "U68"
+      ],
+      "proposal": "Compare compact universal query, three task/action entries and contextual actions from a place/flight/result, sharing state. Within each compare trip/date, geography/network and service/evidence representations. Do not ask for a persona.",
+      "counterargument": "Task modes can hide functions or fragment context; a universal workspace may suffice.",
+      "tests": [
+        "T02",
+        "T06",
+        "T11",
+        "T21"
+      ],
+      "families": [
+        "F01",
+        "F02",
+        "F04",
+        "F05",
+        "F07",
+        "F08"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q02",
+      "title": "Globe role",
+      "needs": [
+        "U37",
+        "U38",
+        "U40",
+        "U41",
+        "U44",
+        "U77",
+        "U78"
+      ],
+      "proposal": "Preserve optional globe, flat map and complete list/time equivalents; compare initial placement across all three visual treatments.",
+      "counterargument": "Optional can become undiscoverable; globe appeal may not offset camera cost or occlusion.",
+      "tests": [
+        "T09",
+        "T19",
+        "T10",
+        "T24"
+      ],
+      "families": [
+        "F02",
+        "F03",
+        "F09",
+        "F12"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q03",
+      "title": "Time semantics",
+      "needs": [
+        "U09",
+        "U10",
+        "U11",
+        "U41",
+        "U42",
+        "U43",
+        "U73",
+        "U82"
+      ],
+      "proposal": "Separate search dates, arrival deadline and illustrative schedule cursor; always pair local endpoint dates with elapsed waits.",
+      "counterargument": "Dense clocks can impair scanning; a single UTC reference is expert-friendly but insufficient for traveler days.",
+      "tests": [
+        "T03",
+        "T06",
+        "T08",
+        "T23",
+        "T25"
+      ],
+      "families": [
+        "F04",
+        "F05",
+        "F11",
+        "F12"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q04",
+      "title": "Transfers",
+      "needs": [
+        "U13",
+        "U14",
+        "U16",
+        "U39"
+      ],
+      "proposal": "Keep exact airport vertices and directed sourced/assumed ground allowances; state unverified ticket/processing facts beside transfer decisions with expandable detail.",
+      "counterargument": "Too much warning overwhelms; hiding unknowns lets timing fit look guaranteed.",
+      "tests": [
+        "T04",
+        "T16",
+        "T18"
+      ],
+      "families": [
+        "F01",
+        "F02",
+        "F06"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q05",
+      "title": "Flexible editing",
+      "needs": [
+        "U15",
+        "U17",
+        "U18",
+        "U19",
+        "U20",
+        "U69",
+        "U70",
+        "U71",
+        "U72",
+        "U84"
+      ],
+      "proposal": "Preserve prefix and rebuild suffix with visible changes and exact Undo; separately test downstream locks and per-gap policies.",
+      "counterargument": "Auto-update can overwrite user intent; locks can create complex conflicts or dead ends.",
+      "tests": [
+        "T05",
+        "T15",
+        "T14",
+        "T22",
+        "T25"
+      ],
+      "families": [
+        "F06",
+        "F10"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q06",
+      "title": "Evidence and empty states",
+      "needs": [
+        "U33",
+        "U34",
+        "U35",
+        "U36",
+        "U52",
+        "U72"
+      ],
+      "proposal": "Distinguish coverage, source status, row loading, search limits and refresh time; unknown coverage cannot prove absence.",
+      "counterargument": "Persistent evidence detail can overwhelm; counts or refresh timestamps may falsely look exhaustive.",
+      "tests": [
+        "T07",
+        "T11",
+        "T13",
+        "T22"
+      ],
+      "families": [
+        "F07",
+        "F11"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q07",
+      "title": "Exploration value and commercial boundary",
+      "needs": [
+        "U25",
+        "U26",
+        "U27",
+        "U28",
+        "U31",
+        "U63",
+        "U65",
+        "U67",
+        "U76"
+      ],
+      "proposal": "Put exploring, selecting, analyzing and reversible what-if play first across the three audiences; evaluate useful insight and retained decisions. Keep traveler price, inventory and personal transfer needs explicitly unanswered and test when these block bounded exploration.",
+      "counterargument": "An unpriced explorer may fail the actual purchase decision even if its schedule tasks pass.",
+      "tests": [
+        "T01",
+        "T17",
+        "T18",
+        "T21",
+        "T23"
+      ],
+      "families": [
+        "F01",
+        "F04",
+        "F05",
+        "F10"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q08",
+      "title": "Inclusive plain interaction",
+      "needs": [
+        "U29",
+        "U30",
+        "U32",
+        "U57",
+        "U58",
+        "U59",
+        "U60",
+        "U61",
+        "U64",
+        "U78",
+        "U80"
+      ],
+      "proposal": "Use standard concise headings, progressive detail and complete keyboard/screen-reader/non-drag equivalents; audit whole tasks.",
+      "counterargument": "Concise/geeky may mean unexplained codes, tiny targets or hidden state; accessibility cannot rely on automated scores.",
+      "tests": [
+        "T09",
+        "T10",
+        "T16",
+        "T20",
+        "T24"
+      ],
+      "families": [
+        "F01",
+        "F02",
+        "F03",
+        "F08"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q09",
+      "title": "Research identity",
+      "needs": [
+        "U12",
+        "U36",
+        "U46",
+        "U47",
+        "U48",
+        "U49",
+        "U50",
+        "U51",
+        "U52",
+        "U74",
+        "U75",
+        "U81"
+      ],
+      "proposal": "Keep operating/marketing identity and scheduled/actual bases distinct, compare matched covered cohorts and export frozen evidence/method.",
+      "counterargument": "Raw exports can be mistaken for normalized/exhaustive data; observed tracks cannot fill schedule gaps automatically.",
+      "tests": [
+        "T11",
+        "T12",
+        "T13",
+        "T23",
+        "T26"
+      ],
+      "families": [
+        "F07",
+        "F09",
+        "F11"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    },
+    {
+      "id": "Q10",
+      "title": "Iteration and scope",
+      "needs": [
+        "U01",
+        "U25",
+        "U30",
+        "U40",
+        "U49",
+        "U79",
+        "U83"
+      ],
+      "proposal": "Follow O08 option exploration with small falsifiable slices; keep comprehensive questions, actual dissent and version-specific QA. Continue on new evidence, never vote missing customer or owner evidence into consensus.",
+      "counterargument": "An endless internal debate creates process without customer learning; wide feature scope creates a toolbox nobody understands.",
+      "tests": [
+        "T01",
+        "T10",
+        "T11",
+        "T19",
+        "T21",
+        "T22",
+        "T25"
+      ],
+      "families": [
+        "F01",
+        "F02",
+        "F03",
+        "F04",
+        "F05",
+        "F06",
+        "F07",
+        "F08",
+        "F09",
+        "F10",
+        "F11",
+        "F12"
+      ],
+      "status": "proposed",
+      "owner_signoff": "pending",
+      "customer_validation": "pending"
+    }
+  ],
+  "families": [
+    {
+      "id": "F01",
+      "name": "Journey list/time",
+      "disposition": "compare",
+      "tests": [
+        "T06"
+      ]
+    },
+    {
+      "id": "F02",
+      "name": "Linked geographic workspace",
+      "disposition": "compare",
+      "tests": [
+        "T02",
+        "T09"
+      ]
+    },
+    {
+      "id": "F03",
+      "name": "Earth studio",
+      "disposition": "compare",
+      "tests": [
+        "T09",
+        "T19"
+      ]
+    },
+    {
+      "id": "F04",
+      "name": "Date explorer",
+      "disposition": "compare",
+      "tests": [
+        "T08"
+      ]
+    },
+    {
+      "id": "F05",
+      "name": "Arrival planner",
+      "disposition": "compare",
+      "tests": [
+        "T03"
+      ]
+    },
+    {
+      "id": "F06",
+      "name": "Next-leg builder",
+      "disposition": "compare",
+      "tests": [
+        "T05"
+      ]
+    },
+    {
+      "id": "F07",
+      "name": "Evidence workspace",
+      "disposition": "compare",
+      "tests": [
+        "T11",
+        "T12"
+      ]
+    },
+    {
+      "id": "F08",
+      "name": "Guided brief",
+      "disposition": "registered_not_implemented",
+      "tests": [
+        "T02",
+        "T20"
+      ]
+    },
+    {
+      "id": "F09",
+      "name": "Network topology/matrix",
+      "disposition": "registered_not_implemented",
+      "tests": [
+        "T11"
+      ]
+    },
+    {
+      "id": "F10",
+      "name": "Comparison workbench",
+      "disposition": "partial_compare",
+      "tests": [
+        "T06",
+        "T14"
+      ]
+    },
+    {
+      "id": "F11",
+      "name": "Temporal small multiples",
+      "disposition": "registered_not_implemented",
+      "tests": [
+        "T08",
+        "T11"
+      ]
+    },
+    {
+      "id": "F12",
+      "name": "3D space-time",
+      "disposition": "defer_until_simpler_views_fail",
+      "tests": [
+        "T03",
+        "T11"
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "G01",
+      "name": "Input and public-source legitimacy",
+      "state": "pending_agent_audit",
+      "human_required": false
+    },
+    {
+      "id": "G02",
+      "name": "Requirement trace and alternative coverage",
+      "state": "pending_agent_audit",
+      "human_required": false
+    },
+    {
+      "id": "G03",
+      "name": "Opposing-role review of current proposal revision",
+      "state": "pending_agent_audit",
+      "human_required": false
+    },
+    {
+      "id": "G04",
+      "name": "Technical implementation verification",
+      "state": "historical_bounded_author_qa_only",
+      "human_required": false
+    },
+    {
+      "id": "G05",
+      "name": "Observed customer task and inclusive usability evidence",
+      "state": "pending_not_run",
+      "human_required": true
+    },
+    {
+      "id": "G06",
+      "name": "Owner acceptance of specific final design",
+      "state": "pending",
+      "human_required": true
+    }
+  ],
+  "deferrals": [
+    {
+      "id": "X01",
+      "needs": [
+        "U16",
+        "U20"
+      ],
+      "advocate": [
+        "V13"
+      ],
+      "reason": "Country/transit-region avoidance is not covered by exact-airport avoidance. Personal entry eligibility remains externally confirmed.",
+      "next_evidence": "Define geographical membership and a country-avoidance fixture/task if a real exploration requires it; no generic visa answer.",
+      "state": "explicitly_deferred"
+    },
+    {
+      "id": "X02",
+      "needs": [
+        "U29",
+        "U30"
+      ],
+      "advocate": [
+        "V03"
+      ],
+      "reason": "Group hard requirements versus preferences are elicited inT16. Automated conflict/preference aggregation is not specified or implemented.",
+      "next_evidence": "Observe actual conflicting constraints before proposing a model or comfort ranking.",
+      "state": "explicitly_deferred"
+    },
+    {
+      "id": "X03",
+      "needs": [
+        "U50",
+        "U54"
+      ],
+      "advocate": [
+        "V28"
+      ],
+      "reason": "Export/share rights and retention for real provider data have not been established. Synthetic local artifacts do not prove redistribution permission.",
+      "next_evidence": "Audit source terms and intended retention/distribution before offering real-data sharing; document permitted fields and scope.",
+      "state": "explicitly_deferred"
+    }
+  ],
+  "advocate_trace": [
+    {
+      "id": "V01",
+      "needs": [
+        "U03",
+        "U07"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V02",
+      "needs": [
+        "U15",
+        "U23",
+        "U82"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V03",
+      "needs": [
+        "U29",
+        "U30"
+      ],
+      "deferrals": [
+        "X02"
+      ],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V04",
+      "needs": [
+        "U05",
+        "U06"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V05",
+      "needs": [
+        "U01",
+        "U47"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V06",
+      "needs": [
+        "U04",
+        "U09",
+        "U83"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V07",
+      "needs": [
+        "U04",
+        "U82",
+        "U83"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V08",
+      "needs": [
+        "U18",
+        "U19",
+        "U70"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V09",
+      "needs": [
+        "U15",
+        "U17",
+        "U82",
+        "U84"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V10",
+      "needs": [
+        "U13",
+        "U14",
+        "U16",
+        "U26"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V11",
+      "needs": [
+        "U07",
+        "U14",
+        "U25"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V12",
+      "needs": [
+        "U13",
+        "U16"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V13",
+      "needs": [
+        "U16",
+        "U20"
+      ],
+      "deferrals": [
+        "X01"
+      ],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V14",
+      "needs": [
+        "U25",
+        "U26"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V15",
+      "needs": [
+        "U28",
+        "U29",
+        "U30",
+        "U31"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V16",
+      "needs": [
+        "U28",
+        "U46"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V17",
+      "needs": [
+        "U34",
+        "U35",
+        "U36"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V18",
+      "needs": [
+        "U81"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V19",
+      "needs": [
+        "U35",
+        "U53"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V20",
+      "needs": [
+        "U21",
+        "U22",
+        "U42",
+        "U56",
+        "U67",
+        "U76"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V21",
+      "needs": [
+        "U24",
+        "U55",
+        "U72"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V22",
+      "needs": [
+        "U37",
+        "U38",
+        "U77"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V23",
+      "needs": [
+        "U41",
+        "U48"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V24",
+      "needs": [
+        "U12",
+        "U44",
+        "U45",
+        "U49",
+        "U74"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V25",
+      "needs": [
+        "U46",
+        "U51"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V26",
+      "needs": [
+        "U33",
+        "U34",
+        "U49",
+        "U52"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V27",
+      "needs": [
+        "U36",
+        "U49"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V28",
+      "needs": [
+        "U50",
+        "U52",
+        "U54"
+      ],
+      "deferrals": [
+        "X03"
+      ],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V29",
+      "needs": [
+        "U12",
+        "U46",
+        "U48"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V30",
+      "needs": [
+        "U08",
+        "U63"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V31",
+      "needs": [
+        "U50",
+        "U54"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V32",
+      "needs": [
+        "U35",
+        "U53"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V33",
+      "needs": [
+        "U57",
+        "U58",
+        "U59"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V34",
+      "needs": [
+        "U58",
+        "U60"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V35",
+      "needs": [
+        "U10",
+        "U11",
+        "U61"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V36",
+      "needs": [
+        "U62"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V37",
+      "needs": [
+        "U55",
+        "U56",
+        "U69",
+        "U79"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V38",
+      "needs": [
+        "U38",
+        "U40",
+        "U64"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    },
+    {
+      "id": "V39",
+      "needs": [
+        "U26",
+        "U50",
+        "U54"
+      ],
+      "deferrals": [],
+      "claim": "Question represented or explicitly deferred; this trace is not an implementation/customer-validation claim."
+    }
+  ],
+  "gate_results": "Final agent verdicts are in hash-bound reviews; human gates remain pending.",
+  "customer_sessions": [],
+  "final_design_approved": false
+}

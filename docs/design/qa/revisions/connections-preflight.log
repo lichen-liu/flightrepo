@@ -1,0 +1,120 @@
+PASS air: published world renders 177 countries
+PASS air: plain task headings
+PASS air: exact initial three-leg route
+PASS air: later leg replaces the entire dependent suffix
+PASS air: native next-leg focus retained
+PASS air: updated suffix identified
+PASS air: Undo restores exact route
+PASS air: same-city choices respect transfer allowance
+PASS air: LHR → LGW rebuilds Amsterdam onward flight
+PASS air: airport transfer assumption visible
+PASS air: ground change has a distinct dashed geographic link
+PASS air: overnight selection rebuilds next-day final leg
+PASS air: overnight wait displayed at actual duration
+PASS air: origin-local departure threshold converts to the right instant
+PASS air: no loaded continuation keeps earlier leg and exposes gap
+PASS air: incomplete prefix does not claim arrival in Paris
+PASS air: explicitly chosen dead end remains selected
+PASS air: Show leg orients globe and schedule to that exact leg
+PASS air: flat view remains available
+PASS air: sphere retains published basemap
+PASS canvas: published world renders 177 countries
+PASS canvas: plain task headings
+PASS canvas: exact initial three-leg route
+PASS canvas: later leg replaces the entire dependent suffix
+PASS canvas: native next-leg focus retained
+PASS canvas: updated suffix identified
+PASS canvas: Undo restores exact route
+PASS canvas: same-city choices respect transfer allowance
+PASS canvas: LHR → LGW rebuilds Amsterdam onward flight
+PASS canvas: airport transfer assumption visible
+PASS canvas: ground change has a distinct dashed geographic link
+PASS canvas: overnight selection rebuilds next-day final leg
+PASS canvas: overnight wait displayed at actual duration
+PASS canvas: origin-local departure threshold converts to the right instant
+PASS canvas: no loaded continuation keeps earlier leg and exposes gap
+PASS canvas: incomplete prefix does not claim arrival in Paris
+PASS canvas: explicitly chosen dead end remains selected
+PASS canvas: Show leg orients globe and schedule to that exact leg
+PASS canvas: flat view remains available
+PASS canvas: sphere retains published basemap
+PASS orbit: published world renders 177 countries
+PASS orbit: plain task headings
+PASS orbit: exact initial three-leg route
+PASS orbit: later leg replaces the entire dependent suffix
+PASS orbit: native next-leg focus retained
+PASS orbit: updated suffix identified
+PASS orbit: Undo restores exact route
+PASS orbit: same-city choices respect transfer allowance
+PASS orbit: LHR → LGW rebuilds Amsterdam onward flight
+PASS orbit: airport transfer assumption visible
+PASS orbit: ground change has a distinct dashed geographic link
+PASS orbit: overnight selection rebuilds next-day final leg
+PASS orbit: overnight wait displayed at actual duration
+PASS orbit: origin-local departure threshold converts to the right instant
+PASS orbit: no loaded continuation keeps earlier leg and exposes gap
+PASS orbit: incomplete prefix does not claim arrival in Paris
+PASS orbit: explicitly chosen dead end remains selected
+PASS orbit: Show leg orients globe and schedule to that exact leg
+PASS orbit: flat view remains available
+PASS orbit: sphere retains published basemap
+PASS air 320px: no horizontal overflow
+PASS air 320px: next-flight control fits
+PASS air 320px: date control fits
+PASS air 320px: map projects to its actual width
+PASS canvas 320px: no horizontal overflow
+PASS canvas 320px: next-flight control fits
+PASS canvas 320px: date control fits
+PASS canvas 320px: map projects to its actual width
+PASS orbit 320px: no horizontal overflow
+PASS orbit 320px: next-flight control fits
+PASS orbit 320px: date control fits
+PASS orbit 320px: map projects to its actual width
+PASS air 390px: no horizontal overflow
+PASS air 390px: next-flight control fits
+PASS air 390px: date control fits
+PASS air 390px: map projects to its actual width
+PASS canvas 390px: no horizontal overflow
+PASS canvas 390px: next-flight control fits
+PASS canvas 390px: date control fits
+PASS canvas 390px: map projects to its actual width
+PASS orbit 390px: no horizontal overflow
+PASS orbit 390px: next-flight control fits
+PASS orbit 390px: date control fits
+PASS orbit 390px: map projects to its actual width
+PASS air 736px: no horizontal overflow
+PASS air 736px: next-flight control fits
+PASS air 736px: date control fits
+PASS air 736px: map projects to its actual width
+PASS canvas 736px: no horizontal overflow
+PASS canvas 736px: next-flight control fits
+PASS canvas 736px: date control fits
+PASS canvas 736px: map projects to its actual width
+PASS orbit 736px: no horizontal overflow
+PASS orbit 736px: next-flight control fits
+PASS orbit 736px: date control fits
+PASS orbit 736px: map projects to its actual width
+PASS air 1024px: no horizontal overflow
+PASS air 1024px: next-flight control fits
+PASS air 1024px: date control fits
+PASS air 1024px: map projects to its actual width
+PASS canvas 1024px: no horizontal overflow
+PASS canvas 1024px: next-flight control fits
+PASS canvas 1024px: date control fits
+PASS canvas 1024px: map projects to its actual width
+PASS orbit 1024px: no horizontal overflow
+PASS orbit 1024px: next-flight control fits
+PASS orbit 1024px: date control fits
+PASS orbit 1024px: map projects to its actual width
+frame.waitForSelector: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('.fr-editor select') to be visible[22m
+[2m    63 × locator resolved to 9 elements. Proceeding with the first one: <select name="connection-window">…</select>[22m
+
+    at /Users/lichen/p/flightrepo/docs/design/qa/connections-check.cjs:76:66 {
+  log: [
+    "  - waiting for locator('.fr-editor select') to be visible",
+    '    63 × locator resolved to 9 elements. Proceeding with the first one: <select name="connection-window">…</select>'
+  ],
+  name: 'TimeoutError'
+}

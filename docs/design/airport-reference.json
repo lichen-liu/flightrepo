@@ -1,0 +1,55 @@
+{
+  "source": "https://ourairports.com/data/",
+  "retrieved": "2026-10-10",
+  "airports": {
+    "KEF": {
+      "name": "Keflavik International Airport",
+      "latitude_deg": "63.985001",
+      "longitude_deg": "-22.6056",
+      "iata_code": "KEF",
+      "municipality": "Reykjav\u00edk"
+    },
+    "YUL": {
+      "name": "Montreal / Pierre Elliott Trudeau International Airport",
+      "latitude_deg": "45.467837",
+      "longitude_deg": "-73.742294",
+      "iata_code": "YUL",
+      "municipality": "Montr\u00e9al"
+    },
+    "YYZ": {
+      "name": "Toronto Pearson International Airport",
+      "latitude_deg": "43.675935",
+      "longitude_deg": "-79.629421",
+      "iata_code": "YYZ",
+      "municipality": "Toronto"
+    },
+    "LHR": {
+      "name": "London Heathrow Airport",
+      "latitude_deg": "51.470748",
+      "longitude_deg": "-0.459909",
+      "iata_code": "LHR",
+      "municipality": "London"
+    },
+    "AMS": {
+      "name": "Amsterdam Airport Schiphol",
+      "latitude_deg": "52.308601",
+      "longitude_deg": "4.76389",
+      "iata_code": "AMS",
+      "municipality": "Amsterdam"
+    },
+    "CDG": {
+      "name": "Charles de Gaulle International Airport",
+      "latitude_deg": "49.00896",
+      "longitude_deg": "2.554117",
+      "iata_code": "CDG",
+      "municipality": "Paris (Roissy-en-France, Val-d'Oise)"
+    },
+    "NRT": {
+      "name": "Narita International Airport",
+      "latitude_deg": "35.76858",
+      "longitude_deg": "140.388714",
+      "iata_code": "NRT",
+      "municipality": "Narita"
+    }
+  }
+}

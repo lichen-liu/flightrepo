@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Explore dated flight routes, compare schedules, and edit connections."
+    />
+    <title>Flyji · Flight routes</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/vendor/d3-7.9.0.min.js" defer></script>
+    <script type="module" src="/assets/app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip" href="#results">Skip to flight options</a>
+    <header class="site-header">
+      <a href="/" class="brand" aria-label="Flyji home"
+        >flyji<span>flight routes</span></a
+      >
+      <div class="header-actions">
+        <button id="copy-search" type="button">Copy search link</button
+        ><a href="/docs">API</a>
+      </div>
+    </header>
+    <main>
+      <section class="search-section" aria-labelledby="page-title">
+        <div class="heading-row">
+          <h1 id="page-title">Flight routes</h1>
+          <span id="dataset-tag" class="tag">Connecting to data…</span>
+        </div>
+        <form id="search-form">
+          <div class="search-grid">
+            <label
+              >From<input
+                name="origin"
+                id="origin"
+                type="text"
+                list="airport-suggestions"
+                pattern="[A-Za-z]{3}"
+                title="Enter a three-letter airport code."
+                aria-label="From"
+                placeholder="e.g. YYZ"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                data-airport-code
+                aria-describedby="origin-name"
+                required
+              /><span id="origin-name" class="airport-name"
+                >Three-letter airport code</span
+              ></label
+            >
+            <button
+              id="swap"
+              type="button"
+              aria-label="Swap origin and destination"
+            >
+              ⇄
+            </button>
+            <label
+              >To<input
+                name="destination"
+                id="destination"
+                type="text"
+                list="airport-suggestions"
+                pattern="[A-Za-z]{3}"
+                title="Enter a three-letter airport code."
+                aria-label="To"
+                placeholder="e.g. CDG"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                data-airport-code
+                aria-describedby="destination-name"
+                required
+              /><span id="destination-name" class="airport-name"
+                >Three-letter airport code</span
+              ></label
+            >
+            <label
+              >Departure date<input name="date" id="date" type="date" required
+            /></label>
+            <label
+              >Arrive by<input
+                name="arrival"
+                id="arrival"
+                type="datetime-local"
+                required
+            /></label>
+            <button id="search-button" class="primary" type="submit" disabled>
+              Search flights
+            </button>
+          </div>
+          <div class="route-filter">
+            <label
+              >Via airport (optional)<input
+                name="via"
+                id="via"
+                type="text"
+                list="airport-suggestions"
+                pattern="[A-Za-z]{3}"
+                title="Enter a three-letter airport code."
+                aria-label="Via airport"
+                placeholder="e.g. AMS"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                data-airport-code
+                aria-describedby="via-hint via-name" /><span
+                id="via-name"
+                class="airport-name"
+                hidden
+              ></span
+            ></label>
+            <span id="via-hint" class="small muted"
+              >Require this airport on the route.</span
+            >
+          </div>
+          <datalist id="airport-suggestions"></datalist>
+          <div class="clock-row">
+            <span id="date-zones">Dates use airport local time.</span
+            ><label class="inline-label"
+              >Input clock<select name="input-clock">
+                <option value="local">Airport local</option>
+                <option value="UTC">UTC</option>
+              </select></label
+            >
+          </div>
+          <details id="search-details">
+            <summary>Search filters</summary>
+            <div class="filter-grid">
+              <label
+                >Last departure date<input name="last-date" type="date"
+              /></label>
+              <label
+                >Maximum stops<select name="stops">
+                  <option value="0">Nonstop</option>
+                  <option value="1">1 stop</option>
+                  <option value="2" selected>2 stops</option>
+                  <option value="3">3 stops</option>
+                </select></label
+              >
+              <label
+                >Sort by<select name="ranking">
+                  <option value="fewest_legs">Fewest stops</option>
+                  <option value="shortest_elapsed">Shortest journey</option>
+                  <option value="earliest_arrival">Earliest arrival</option>
+                </select></label
+              >
+              <label
+                >Minimum connection (minutes)<input
+                  name="minimum"
+                  type="number"
+                  min="0"
+                  max="1440"
+                  value="45"
+                  required
+              /></label>
+              <label
+                >Maximum connection<select name="maximum">
+                  <option value="180">3 hours</option>
+                  <option value="360" selected>6 hours</option>
+                  <option value="720">12 hours</option>
+                  <option value="1440">24 hours</option>
+                  <option value="any">Any time before arrival deadline</option>
+                </select></label
+              >
+              <label
+                >Avoid airports<input
+                  name="avoid"
+                  placeholder="e.g. LHR, AMS"
+                  maxlength="199"
+                  autocomplete="off"
+              /></label>
+              <label class="check"
+                ><input type="checkbox" name="airport-change" />Allow
+                connections between airports in the same city</label
+              >
+              <label
+                >Repeated arrival time<select name="arrival-fold">
+                  <option value="">Ask if clock repeats</option>
+                  <option value="0">Earlier occurrence</option>
+                  <option value="1">Later occurrence</option>
+                </select></label
+              >
+            </div>
+          </details>
+        </form>
+        <p id="status" class="status" role="status" aria-live="polite">
+          Loading the airport catalog…
+        </p>
+        <p id="error" class="error" role="alert" hidden></p>
+        <button id="retry-catalog" type="button" hidden>
+          Retry data connection
+        </button>
+      </section>
+
+      <nav class="mobile-views" aria-label="Workspace view">
+        <button data-view="options" type="button" aria-pressed="true">
+          Options</button
+        ><button data-view="journey" type="button" aria-pressed="false">
+          Journey</button
+        ><button data-view="map" type="button" aria-pressed="false">Map</button>
+      </nav>
+      <div class="workspace" data-view="options">
+        <section
+          class="options-panel"
+          id="results"
+          aria-labelledby="options-heading"
+          aria-busy="false"
+        >
+          <div class="panel-heading">
+            <h2 id="options-heading">Flight options</h2>
+            <span id="result-count"></span>
+          </div>
+          <p id="applied-query" class="muted small">
+            Search the imported schedules.
+          </p>
+          <p id="partial" class="notice" hidden></p>
+          <div id="options">
+            <p class="empty">
+              Choose airports and departure dates to find a route.
+            </p>
+          </div>
+        </section>
+        <div class="journey-workspace">
+          <section class="map-panel" aria-labelledby="map-heading">
+            <div class="panel-heading">
+              <h2 id="map-heading">Route map</h2>
+              <div class="segmented" aria-label="Map projection">
+                <button id="globe-mode" type="button" aria-pressed="true">
+                  Globe</button
+                ><button id="flat-mode" type="button" aria-pressed="false">
+                  Map
+                </button>
+              </div>
+            </div>
+            <div id="map-container">
+              <svg
+                id="route-map"
+                role="img"
+                aria-label="World map. Choose a flight journey to display its route."
+              ></svg
+              ><span class="map-caption" id="map-caption">Scheduled route</span>
+            </div>
+            <div class="map-toolbar">
+              <span id="map-info" class="small muted"
+                >Use the controls to rotate or zoom.</span
+              >
+              <div aria-label="Map controls">
+                <button
+                  id="rotate-left"
+                  type="button"
+                  aria-label="Rotate globe west"
+                >
+                  ←
+                </button>
+                <button
+                  id="rotate-right"
+                  type="button"
+                  aria-label="Rotate globe east"
+                >
+                  →
+                </button>
+                <button id="tilt-up" type="button" aria-label="Tilt globe up">
+                  ↑
+                </button>
+                <button
+                  id="tilt-down"
+                  type="button"
+                  aria-label="Tilt globe down"
+                >
+                  ↓
+                </button>
+                <button id="zoom-out" type="button" aria-label="Zoom out">
+                  −
+                </button>
+                <button id="zoom-in" type="button" aria-label="Zoom in">
+                  +
+                </button>
+                <button id="fit-map" type="button">Fit journey</button>
+              </div>
+            </div>
+            <p id="map-error" class="small error" role="status" hidden></p>
+          </section>
+          <section class="schedule-panel" aria-labelledby="schedule-heading">
+            <div class="panel-heading">
+              <h2 id="schedule-heading">Flight schedule</h2>
+              <label class="inline-label"
+                >Leg times<select id="display-clock">
+                  <option value="local">Airport local</option>
+                  <option value="UTC">UTC</option>
+                </select></label
+              >
+            </div>
+            <div id="timeline"></div>
+            <label class="cursor-label" for="time-cursor"
+              >Schedule time <output id="cursor-time">—</output></label
+            >
+            <input
+              id="time-cursor"
+              type="range"
+              min="0"
+              max="1000"
+              value="0"
+              disabled
+            />
+            <p id="cursor-detail" class="small muted">
+              Flight positions illustrate the schedule, not live tracking.
+            </p>
+          </section>
+          <section class="journey-panel" aria-labelledby="journey-heading">
+            <div class="panel-heading">
+              <h2 id="journey-heading">Selected journey</h2>
+              <div>
+                <button id="undo" type="button" disabled>Undo edit</button
+                ><button id="export" type="button" disabled>Export JSON</button>
+              </div>
+            </div>
+            <p id="journey-status" class="small muted">
+              Select a flight option to inspect its legs.
+            </p>
+            <div id="legs"></div>
+            <section
+              id="connection-editor"
+              aria-labelledby="editor-title"
+              hidden
+            >
+              <div class="panel-heading">
+                <h3 id="editor-title">Change connection</h3>
+                <button id="close-editor" type="button">Close</button>
+              </div>
+              <form id="connection-form">
+                <div class="filter-grid">
+                  <label
+                    >Next airport (optional)<input
+                      name="next-airport"
+                      id="next-airport"
+                      type="text"
+                      list="airport-suggestions"
+                      pattern="[A-Za-z]{3}"
+                      title="Enter a three-letter airport code."
+                      aria-label="Next airport"
+                      placeholder="e.g. AMS"
+                      autocomplete="off"
+                      autocapitalize="characters"
+                      spellcheck="false"
+                      data-airport-code
+                      aria-describedby="next-airport-hint next-airport-name" /><span
+                      id="next-airport-hint"
+                      class="airport-name"
+                      >Destination of next flight</span
+                    ><span
+                      id="next-airport-name"
+                      class="airport-name"
+                      hidden
+                    ></span
+                  ></label>
+                  <label
+                    >Next departure<select name="window">
+                      <option value="soon">Within 6 hours</option>
+                      <option value="day">Within 24 hours</option>
+                      <option value="any">
+                        Any time before arrival deadline
+                      </option>
+                      <option value="after">After a date and time</option>
+                    </select></label
+                  >
+                  <label
+                    >Minimum connection (minutes)<input
+                      name="minimum"
+                      type="number"
+                      min="0"
+                      max="1440"
+                      value="45"
+                      required
+                  /></label>
+                  <label id="after-field" hidden
+                    >Not before<input name="after" type="datetime-local"
+                  /></label>
+                  <label id="fold-field" hidden
+                    >Repeated local time<select name="fold">
+                      <option value="">Ask if clock repeats</option>
+                      <option value="0">Earlier occurrence</option>
+                      <option value="1">Later occurrence</option>
+                    </select></label
+                  >
+                  <label class="check"
+                    ><input name="airport-change" type="checkbox" />Allow a
+                    same-city airport change</label
+                  >
+                </div>
+                <p id="editor-zone" class="small muted"></p>
+                <button class="primary" id="find-next" type="submit">
+                  Find next flights
+                </button>
+              </form>
+              <p
+                id="editor-status"
+                role="status"
+                aria-live="polite"
+                class="small"
+              ></p>
+              <p id="editor-error" role="alert" class="error" hidden></p>
+              <div id="next-options"></div>
+            </section>
+          </section>
+          <details id="evidence" class="evidence-panel">
+            <summary>Data and search details</summary>
+            <div id="evidence-content"></div>
+          </details>
+        </div>
+      </div>
+      <footer>
+        <span
+          >Scheduled flights · fares and seat availability are outside this
+          explorer</span
+        ><span
+          >Coverage and commercial transfer suitability are unverified</span
+        >
+      </footer>
+    </main>
+    <noscript
+      ><p>
+        JavaScript is needed for route exploration. The
+        <a href="/docs">API documentation</a> remains available.
+      </p></noscript
+    >
+  </body>
+</html>

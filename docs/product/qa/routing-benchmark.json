@@ -1,0 +1,262 @@
+{
+  "recorded_at": "2026-10-13T16:44:45.855009+00:00",
+  "engine_version": "routing-3",
+  "environment": {
+    "python": "3.14.7",
+    "sqlite": "3.53.4",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64"
+  },
+  "method": "One warm-up, timed full core/reader call plus JSON serialization; setup/import excluded. Memory is a separate tracemalloc run. Local synthetic single-request measurements, not production latency guarantees.",
+  "source_sha256": {
+    "src/core/routing/__init__.py": "9c1cd17edfa2a0d7d3f73b0f22a37c3e78da189b0c4a0da4727add49ba3c6a7e",
+    "src/core/routing/debug.py": "31acc47dc357e2e240edd34816c576ceb71c40a73522d20c00b074b4f8269b15",
+    "src/core/routing/index.py": "7b3685812495c1fb8a3e61976eb8adfe900c2727098c18d0df9145d91bc69866",
+    "src/core/routing/models.py": "d38ad354af6b9e2892082c675d26117634d28f1682b8f3da11d30f6a90cafa9c",
+    "src/core/routing/policy.py": "7769a98068c4182f323db95a38101a8923c1ff96c0494fbdd1144623b0a755a0",
+    "src/core/routing/results.py": "cf9e0b43e40eade72a94971d9c3adc461caa9da0f4b3908fc62e235bcde95011",
+    "src/core/routing/search.py": "2e7cbcdae5456657d5139c22d443c7ef021d80b38997e4eacd29dbdb597f1bb2",
+    "src/core/routing/session.py": "7120c06673179532a36494a90e04a70df4e6903e30756a5c924798c9a7a2851f",
+    "src/core/routing/snapshot.py": "29796bd145a13ebbdd9e3dbe424551510c788fc0b505419d3e0b27804c7209fe",
+    "src/core/models.py": "cb29bab3af7b70dc3828c19d16e6f02a39d1f57672c85ca5659b80847d97448c",
+    "src/core/planning.py": "e52d99022cdd5e77ead5907cb7a2d6dff5b59d43be340b37a64ba8a3007c2a9f",
+    "src/core/connections.py": "39f5bfa1e3881dd4e701186ff32b0f3ad310d90708cb748aa9e1b1168f60ba3f",
+    "src/server/reader.py": "b3c1d60ee67411234e422bfd698e53a15d2b65e1e34af3c1468481451283b759",
+    "src/core/storage.py": "5b22625a4a0e1474748c4367dea32b6550a706b3c8e08e44957172628d91d24e",
+    "scripts/benchmark_routing.py": "51d751d75478ed516de0b61973fc4093bc119a8022433b7c979bece153e61dca"
+  },
+  "sqlite_query_plan": [
+    {
+      "id": 5,
+      "parent": 0,
+      "notused": 48,
+      "detail": "SEARCH flights USING INDEX idx_flights_routing (origin_iata=? AND departure_scheduled>? AND departure_scheduled<?)"
+    }
+  ],
+  "cases": [
+    {
+      "case": "6000_direct",
+      "fixture_records": 6000,
+      "iterations": 3,
+      "milliseconds": [
+        34.394209,
+        34.302917,
+        34.3955
+      ],
+      "median_ms": 34.394209,
+      "min_ms": 34.302917,
+      "max_ms": 34.3955,
+      "peak_operation_mib": 8.743219375610352,
+      "returned_items": 20,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "96712d01a379cf5d904b954588fb0337f8b2176800ed4caefde0225cbb1e7505",
+        "request_id": "d21a31a803355dc5bdd4a4b4b61895afa66c180d8932ec274d4256404049adc9",
+        "ranking": "fewest_legs",
+        "scope": "loaded_snapshot",
+        "exhaustive": true,
+        "termination_reasons": [],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 6000,
+          "origins_queried": 0,
+          "candidates_checked": 6000,
+          "candidates_skipped_by_time": 0,
+          "states_expanded": 1,
+          "memo_hits": 0,
+          "routes_found": 6000,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    },
+    {
+      "case": "dense_connections",
+      "fixture_records": 1232,
+      "iterations": 3,
+      "milliseconds": [
+        34.840375,
+        34.116833,
+        34.190333
+      ],
+      "median_ms": 34.190333,
+      "min_ms": 34.116833,
+      "max_ms": 34.840375,
+      "peak_operation_mib": 1.8535213470458984,
+      "returned_items": 20,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "90b04d55ffa2436f71d0480926ef53a7230627a75cf82fdf6d44ca6f08aa3ba4",
+        "request_id": "097e60a3b02ce440e1d8d90c47dc74c83ec061c7f707cff6bfcc245ce3289742",
+        "ranking": "fewest_legs",
+        "scope": "loaded_snapshot",
+        "exhaustive": true,
+        "termination_reasons": [],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 1232,
+          "origins_queried": 0,
+          "candidates_checked": 8736,
+          "candidates_skipped_by_time": 317696,
+          "states_expanded": 545,
+          "memo_hits": 0,
+          "routes_found": 8192,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    },
+    {
+      "case": "candidate_budget_100",
+      "fixture_records": 1232,
+      "iterations": 3,
+      "milliseconds": [
+        5.121209,
+        5.094041,
+        5.125333
+      ],
+      "median_ms": 5.121209,
+      "min_ms": 5.094041,
+      "max_ms": 5.125333,
+      "peak_operation_mib": 1.7378787994384766,
+      "returned_items": 20,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "90b04d55ffa2436f71d0480926ef53a7230627a75cf82fdf6d44ca6f08aa3ba4",
+        "request_id": "89f2eef2559147120343f1e553cf7764956e824c92e60122b3ecb37616dfd9ab",
+        "ranking": "fewest_legs",
+        "scope": "loaded_snapshot",
+        "exhaustive": false,
+        "termination_reasons": [
+          "candidate_limit"
+        ],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 1232,
+          "origins_queried": 0,
+          "candidates_checked": 100,
+          "candidates_skipped_by_time": 4088,
+          "states_expanded": 8,
+          "memo_hits": 0,
+          "routes_found": 93,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    },
+    {
+      "case": "8000_outside_time_window",
+      "fixture_records": 8046,
+      "iterations": 3,
+      "milliseconds": [
+        32.20175,
+        32.348042,
+        32.375292
+      ],
+      "median_ms": 32.348042,
+      "min_ms": 32.20175,
+      "max_ms": 32.375292,
+      "peak_operation_mib": 11.655086517333984,
+      "returned_items": 20,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "2cfb6cd64aa2cf437a01295c0b2004d25d84d485819896cda20b69d1d2ef96de",
+        "request_id": "924e70c4caf15ffee4e72d470d5dcddcfe42f364bc6b7aa94a34923abe96c540",
+        "ranking": "fewest_legs",
+        "scope": "loaded_snapshot",
+        "exhaustive": true,
+        "termination_reasons": [],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 8046,
+          "origins_queried": 0,
+          "candidates_checked": 496,
+          "candidates_skipped_by_time": 128000,
+          "states_expanded": 17,
+          "memo_hits": 0,
+          "routes_found": 480,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    },
+    {
+      "case": "6000_continuation_options",
+      "fixture_records": 6001,
+      "iterations": 3,
+      "milliseconds": [
+        54.466,
+        56.414125,
+        55.004583
+      ],
+      "median_ms": 55.004583,
+      "min_ms": 54.466,
+      "max_ms": 56.414125,
+      "peak_operation_mib": 8.922114372253418,
+      "returned_items": 100,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "2b26ea49e3d1014a64a98be0742cd3f4eba297a7e6b1591f4b5e68a80a25b2b1",
+        "request_id": "27b00e4d3e8bdc964483cda32bd85983d29e57750754436530e0b197ccd3a154",
+        "ranking": "next_departure_then_tail_arrival_legs_identity",
+        "scope": "loaded_snapshot",
+        "exhaustive": true,
+        "termination_reasons": [],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 6001,
+          "origins_queried": 0,
+          "candidates_checked": 6000,
+          "candidates_skipped_by_time": 0,
+          "states_expanded": 0,
+          "memo_hits": 0,
+          "routes_found": 6000,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    },
+    {
+      "case": "sqlite_30000_unreachable",
+      "fixture_records": 30064,
+      "iterations": 3,
+      "milliseconds": [
+        1.380166,
+        1.2395,
+        1.345167
+      ],
+      "median_ms": 1.345167,
+      "min_ms": 1.2395,
+      "max_ms": 1.380166,
+      "peak_operation_mib": 0.22364425659179688,
+      "returned_items": 20,
+      "diagnostics": {
+        "engine_version": "routing-3",
+        "snapshot_id": "964bf90e6fa5976c60514c3dacc636a9d13108a53fab1c4479c2aea80255aa8c",
+        "request_id": "a068c3fcf5b501a6067d7933ef4dfff23e872221ee22630c9b0552472b108cb7",
+        "ranking": "fewest_legs",
+        "scope": "loaded_snapshot",
+        "exhaustive": true,
+        "termination_reasons": [],
+        "result_limit_reached": true,
+        "stats": {
+          "rows_loaded": 64,
+          "origins_queried": 1,
+          "candidates_checked": 64,
+          "candidates_skipped_by_time": 0,
+          "states_expanded": 1,
+          "memo_hits": 0,
+          "routes_found": 64,
+          "rejections": {},
+          "trace_events_omitted": 0
+        },
+        "events": []
+      }
+    }
+  ]
+}

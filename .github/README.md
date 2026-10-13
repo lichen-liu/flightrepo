@@ -1,7 +1,9 @@
 # Running CI
 
-PR tests are manual. Tests on `main` are automatic. Both use Python 3.13 and
-run the full pytest suite.
+PR checks are label-triggered. Checks on `main` are automatic. Both run pytest
+on Python 3.11 and 3.13, verify Python style, research receipts and the built wheel,
+and exercise the served demo in Chromium. Browser tooling is used only for QA;
+the app itself still needs only Python and SQLite.
 
 ## Before merging a PR
 
@@ -10,7 +12,7 @@ run the full pytest suite.
    your branch.
 2. Add a label to the PR to request CI. Any label works; `run-ci` is a useful
    convention. If the label is already attached, remove it and add it again.
-3. Wait for `pytest (Python 3.13)` to pass. Merge using **Squash and merge** or
+3. Wait for all checks, including the required `pytest (Python 3.13)`, to pass. Merge using **Squash and merge** or
    **Rebase and merge**.
 
 Opening a PR, reopening it, or pushing commits does not start CI. After pushing

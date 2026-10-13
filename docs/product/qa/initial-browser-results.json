@@ -1,0 +1,40 @@
+{
+  "url": "http://127.0.0.1:8013",
+  "checks": [
+    "Exactly one dated journey selected",
+    "Published basemap renders from local assets",
+    "Visible globe countries have projected geometry",
+    "Selected journey is drawn on the globe",
+    "Synthetic data is identified",
+    "Airport-local input clock is explicit",
+    "Select exact three-leg journey from actual API results",
+    "Explicit overnight next leg retained",
+    "All later legs recalculated",
+    "Airport change has distinct ground segment",
+    "Undo restores exact prior dated sequence",
+    "Schedule cursor is labelled as an illustration",
+    "Flat map remains available",
+    "Focus a leg recovers the globe",
+    "320px: no horizontal page overflow",
+    "320px: projection uses measured width",
+    "390px: no horizontal page overflow",
+    "390px: projection uses measured width",
+    "736px: no horizontal page overflow",
+    "736px: projection uses measured width",
+    "1024px: no horizontal page overflow",
+    "1024px: projection uses measured width",
+    "1510px: no horizontal page overflow",
+    "1510px: projection uses measured width",
+    "No external runtime requests",
+    "No browser runtime or CSP errors"
+  ],
+  "errors": [],
+  "source_sha256": {
+    "src/server/web/index.html": "511b7881080c463b0203dac62da6ed8e1f64bc7382c45a2ec1580c7534c60472",
+    "src/server/web/app.css": "667ff46591718f6bf0a0b6b07be4f5bbe5a7631d33fef183a668d3552614e042",
+    "src/server/web/app.mjs": "397b19ce97c23316126467dbee760017bdd3a2f3823394a4aa6ae9d4f9e24d8a",
+    "src/server/web/map.mjs": "4caab46c5ca95de4c6a94f0ca43e2c3953b3a55eefcbe593869beab1b650bfbb",
+    "src/server/web/format.mjs": "30737c38e60f9bd3340a6dab486ace7f3ed5afcd15ba10c553b389f70d789e82",
+    "scripts/qa_web.cjs": "146230dbbf32f3907ebfe53c6eac4ecab603968062837fea5df0c481bae6d7f7"
+  }
+}

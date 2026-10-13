@@ -1,0 +1,6 @@
+{
+  "initial_probe": "Built wheel predated the last frontend HTML edit; exact byte verifier rejected server/web/index.html.",
+  "resolution": "Waited for frontend source freeze, rebuilt wheel, repeated full byte and installed API checks.",
+  "final_result": "42 package files match; installed required-via search passes.",
+  "no_product_code_change_needed": true
+}

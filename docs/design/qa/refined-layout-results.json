@@ -1,0 +1,490 @@
+{
+  "date": "2026-10-13",
+  "browser": "155.0.8059.40",
+  "headless": true,
+  "script_sha256": "b7d20912a58990cf67437b70cdf01502df0122b34ffabfcc42f100cece2cc76e",
+  "results": [
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 320,
+      "direction": "air",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 2281,
+      "content_bottom_px": 1944.21875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 892.71875,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 1456.71875,
+        "height": 467.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 320,
+      "direction": "canvas",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 2281,
+      "content_bottom_px": 2185.28125,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1121.78125,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 1687.78125,
+        "height": 477.5
+      },
+      "departure_days": {
+        "top": 495.53125,
+        "height": 299.5625
+      }
+    },
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 320,
+      "direction": "orbit",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 2281,
+      "content_bottom_px": 1924.21875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 892.71875,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 1436.71875,
+        "height": 467.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 390,
+      "direction": "air",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 2107,
+      "content_bottom_px": 1777.40625,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 781.40625,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 1328.90625,
+        "height": 428.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 390,
+      "direction": "canvas",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 2107,
+      "content_bottom_px": 2027.515625,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1053.015625,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 1569.015625,
+        "height": 438.5
+      },
+      "departure_days": {
+        "top": 462.765625,
+        "height": 299.5625
+      }
+    },
+    {
+      "version": "R04c",
+      "source_sha256": "737b7dce72c83f97129df6a0319723e82990457960b85a6d546d03585784435b",
+      "viewport_width_px": 390,
+      "direction": "orbit",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 2107,
+      "content_bottom_px": 1778.40625,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 802.40625,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 1329.90625,
+        "height": 428.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 320,
+      "direction": "air",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1936,
+      "content_bottom_px": 1748.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1182.96875,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 511.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 320,
+      "direction": "canvas",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1936,
+      "content_bottom_px": 1842.4375,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1225.4375,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 624.25,
+        "height": 511.5
+      },
+      "departure_days": {
+        "top": 327.75,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 320,
+      "direction": "orbit",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1936,
+      "content_bottom_px": 1769.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1223.96875,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 511.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 390,
+      "direction": "air",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1762,
+      "content_bottom_px": 1638.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1088.78125,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 467.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 390,
+      "direction": "canvas",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1762,
+      "content_bottom_px": 1684.8125,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1131.8125,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 574.625,
+        "height": 467.5
+      },
+      "departure_days": {
+        "top": 278.125,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05a",
+      "source_sha256": "6d6259c7948fffdd08d03dc78275b698af9725877b225cde9b63789f897611f6",
+      "viewport_width_px": 390,
+      "direction": "orbit",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1762,
+      "content_bottom_px": 1618.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1088.78125,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 467.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 320,
+      "direction": "air",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1702.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1136.96875,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 465.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 320,
+      "direction": "canvas",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1823.4375,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1206.4375,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 651.25,
+        "height": 465.5
+      },
+      "departure_days": {
+        "top": 354.75,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 320,
+      "direction": "orbit",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1723.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1177.96875,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 465.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 390,
+      "direction": "air",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1743,
+      "content_bottom_px": 1592.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1042.78125,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 421.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 390,
+      "direction": "canvas",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1743,
+      "content_bottom_px": 1665.8125,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1112.8125,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 601.625,
+        "height": 421.5
+      },
+      "departure_days": {
+        "top": 305.125,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05b",
+      "source_sha256": "a7b8238f132498924c93ba1d9e273871dc833bf6b6a4513865736edc17c77c27",
+      "viewport_width_px": 390,
+      "direction": "orbit",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1743,
+      "content_bottom_px": 1572.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1042.78125,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 421.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 320,
+      "direction": "air",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1702.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1136.96875,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 465.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 320,
+      "direction": "canvas",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1823.4375,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1206.4375,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 651.25,
+        "height": 465.5
+      },
+      "departure_days": {
+        "top": 354.75,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 320,
+      "direction": "orbit",
+      "actual_app_width_px": 288,
+      "shared_stage_height_px": 1917,
+      "content_bottom_px": 1723.96875,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1177.96875,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 533.375,
+        "height": 465.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 390,
+      "direction": "air",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1789,
+      "content_bottom_px": 1592.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1042.78125,
+        "height": 300
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 421.5
+      },
+      "departure_days": null
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 390,
+      "direction": "canvas",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1789,
+      "content_bottom_px": 1711.8125,
+      "active_view": "time",
+      "first_graphic": {
+        "top": 1112.8125,
+        "height": 178
+      },
+      "local_day_summary": {
+        "top": 601.625,
+        "height": 421.5
+      },
+      "departure_days": {
+        "top": 305.125,
+        "height": 154
+      }
+    },
+    {
+      "version": "R05c",
+      "source_sha256": "e3bf59dc45db7d8fb5caa0860b700e7cf488252c901d3cff22049ba243c1ca4c",
+      "viewport_width_px": 390,
+      "direction": "orbit",
+      "actual_app_width_px": 358,
+      "shared_stage_height_px": 1789,
+      "content_bottom_px": 1572.28125,
+      "active_view": "map",
+      "first_graphic": {
+        "top": 1042.78125,
+        "height": 280
+      },
+      "local_day_summary": {
+        "top": 483.1875,
+        "height": 421.5
+      },
+      "departure_days": null
+    }
+  ],
+  "scope": "Default fixture and mobile views, native carousel activation; CSS pixel distances within each application. Preview gutter reduces actual application width. Stage includes shared carousel height; content bottom excludes footer/remaining stage whitespace.",
+  "limitation": "Author layout geometry, not observed scrolling, task effort, preference, accessibility conformance, performance or user behavior."
+}

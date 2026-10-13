@@ -1,0 +1,9 @@
+{
+  "scope": "Final review before signoff; acceptance withheld.",
+  "manifest_sha256": "4c66c074ca04980c48a5d66afe6efb3a5f18368e384190648dbfca9607de69b3",
+  "reviewer": "/root/customer_advocate",
+  "finding": "Partial empty search combined a no-match assertion with a stopped-early qualification; continuation copy could likewise overstate absence. Existing check asserted the qualifier but missed the contradiction.",
+  "secondary_finding": "Release README stated remote PR run was attached before a PR existed.",
+  "repair": "Make partial empty and incomplete continuation copy accurately describe search uncertainty; add negative assertions; make remote CI prospective.",
+  "retention": "Changed source/harness/copy and actual pre-repair screenshot/result retained here; other source members unchanged."
+}

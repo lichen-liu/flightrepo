@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "errors": [],
+  "campaign": "R09",
+  "needs": 84,
+  "categories": 21,
+  "tasks": 26,
+  "proposals": 10,
+  "previous_needs": 26,
+  "design_families": 12,
+  "sources": 7,
+  "reviewed_roles": [
+    "customer_advocate",
+    "evidence_skeptic",
+    "qa_auditor"
+  ],
+  "manifest_sha256": "e50937ddb0c3ae13e66ae8b92c8f35078670028440a4e5210e468e13db45eb86",
+  "customer_sessions": 0,
+  "final_design_approved": false,
+  "limitation": "Integrity checks only; source and design judgments require the actual reviewer records.",
+  "verified_at_utc": "2026-10-13T17:27:29.885901+00:00",
+  "review_file_sha256": {
+    "docs/research/2026-10-13/reviews/advocate-final.md": "742bd9acc617541973ce5c0e83956af0f109cdaf65d4ce5ce420434f9f4895ed",
+    "docs/research/2026-10-13/reviews/advocate-round3.md": "387cee4bb970f40a5c38a6d26be59d7b1c0bb6227198bcf38e200a4e79c91bc8",
+    "docs/research/2026-10-13/reviews/customer_advocate.json": "7bdf345ae07935bda6da14cee30b7b9159dc596dd7bc08354568415a84449a8f",
+    "docs/research/2026-10-13/reviews/evidence_skeptic.json": "6413c76231679c0887075b03b1fc8bb7ea73976303f53f2ed4383a49cd9be31e",
+    "docs/research/2026-10-13/reviews/qa-final.md": "ea006649014e0adfb9b207ce484d392c0aefdcdb52a22201f9f235fd646f28b9",
+    "docs/research/2026-10-13/reviews/qa-probes-harness-failure.json": "f52a2614407ef884a480670c54ba4bc5feac337ee2a3e8ad448ef4914f5c3d33",
+    "docs/research/2026-10-13/reviews/qa-probes.json": "cad90d07f6213ca549b2d2d3c18c8f578144e3621a62bf24ec26c2424fc812c7",
+    "docs/research/2026-10-13/reviews/qa-round3.md": "0a57c34a717b10eb773ba34db431334d3cb44beeb51f8d277ec61fb3a77ae189",
+    "docs/research/2026-10-13/reviews/qa_auditor.json": "79b022eb74974cca40b7916ac530ea3f5863c9207a8cf4bb5faea6a9ea082e0c",
+    "docs/research/2026-10-13/reviews/skeptic-final.md": "879bc2c7c27e6c61b21c6c3da8b93968647c5856dac2de0de1da055aba15ac53",
+    "docs/research/2026-10-13/reviews/skeptic-round3.md": "a0b86350fd16d15d28e93f977173fdee099bed4e98f11c0da05086afba8c3114"
+  },
+  "negative_probe_result": true,
+  "negative_probes": 26,
+  "public_readiness_approved": false,
+  "product_code_changed_in_this_round": false
+}

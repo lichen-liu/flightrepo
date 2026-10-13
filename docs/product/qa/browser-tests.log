@@ -1,0 +1,66 @@
+PASS Exactly one dated journey selected
+PASS Published basemap renders from local assets
+PASS Visible globe countries have projected geometry
+PASS Selected journey is drawn on the globe
+PASS Synthetic data is identified
+PASS Airport-local input clock is explicit
+PASS Select exact three-leg journey from actual API results
+PASS Dead-end choices remain explicit
+PASS Explicit overnight next leg retained
+PASS All later legs recalculated
+PASS Airport change has distinct ground segment
+PASS Undo restores exact prior dated sequence
+PASS Schedule cursor is labelled as an illustration
+PASS Flat map remains available
+PASS Focus a leg recovers the globe
+PASS Scrubbing preserves projected basemap paths
+PASS Scrubbing reuses basemap elements rather than rebuilding geometry
+PASS Display clock preserves dated flight identities
+PASS Display clock preserves cursor
+PASS Export retains exact selected dated records
+PASS Export carries coverage and snapshot evidence
+PASS 320px: no horizontal page overflow
+PASS 320px: projection uses measured width
+PASS Mobile map view avoids scrolling past the results
+PASS 390px: no horizontal page overflow
+PASS 390px: projection uses measured width
+PASS Mobile map view avoids scrolling past the results
+PASS 736px: no horizontal page overflow
+PASS 736px: projection uses measured width
+PASS 1024px: no horizontal page overflow
+PASS 1024px: projection uses measured width
+PASS 1510px: no horizontal page overflow
+PASS 1510px: projection uses measured width
+PASS No external runtime requests
+PASS No browser runtime or CSP errors in normal flows
+PASS Browser sends actual connection constraints
+PASS Avoided airport filter is enforced by actual engine
+PASS Connection editing retains avoided-airport filter
+PASS Search URL restores canonical constraints
+PASS Not-before local time resolves through actual airport zone endpoint
+PASS Not-before window excludes earlier next legs
+PASS Reopening editor clears hidden required-date constraint
+PASS Rejected stale choice preserves previous journey
+PASS Latest request wins when transport ignores cancellation
+PASS UTC input is interpreted independently of browser timezone
+PASS Empty search clears selected journey without inventing a route
+PASS Actual bounded search is visibly partial
+PASS Partial empty result does not claim no route
+PASS Unavailable storage has a visible recovery action
+PASS Retry recovers the real data connection
+PASS Stale timezone reference fails visibly instead of reinterpreting local dates
+PASS Timezone mismatch updates the declared input reference
+PASS Retry uses returned snapshot metadata for leg clocks
+PASS Map failure leaves flight facts available
+PASS Map failure leaves connection editing available
+PASS Touch phone: no horizontal overflow
+PASS Touch phone: view controls have 44px targets
+PASS Keyboard selects a dated journey
+PASS Keyboard selection retains focus after rendering
+PASS Keyboard opens connection editor
+PASS Keyboard applies next leg and lands on undo
+PASS Keyboard undoes route edit
+PASS All buttons have accessible names
+PASS No JavaScript runtime errors across happy and recovery flows
+PASS All audited pages make only same-origin runtime requests
+Finished 65 checks

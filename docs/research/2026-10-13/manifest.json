@@ -1,0 +1,34 @@
+{
+  "campaign": "R09",
+  "revision": "synthesis-repair-1",
+  "created_at_utc": "2026-10-13T17:20:09.539765+00:00",
+  "scope": "desk_research_and_comparative_plan",
+  "artifacts": {
+    "docs/research/2026-10-13/README.md": "e6af496c3ce3bf53d18bf52454b75553a6b8ad05d9057dbef84d827c9a5a7373",
+    "docs/research/2026-10-13/advocate.md": "a36ef241bf8f2858031248c6d68062051b06cb35435725a346f6d8ea9cd0184a",
+    "docs/research/2026-10-13/debate.md": "424294742211f97cf41ddfc327ce5ec35ab7508e28092faf622b715040b82f81",
+    "docs/research/2026-10-13/evidence.md": "bf6be0a0172c7367ddb13ef054a75f97b4be4be3555f840f5364695c2cbb5596",
+    "docs/research/2026-10-13/first-slice.md": "463c70d16605143f9fa0e99aa2534ac876adc7317a4ffb9fd36f4b077b9850d2",
+    "docs/research/2026-10-13/needs.md": "d0d217dda54385305176990ba509da755ed24f9b851a6dd5f0e898c61cc47c92",
+    "docs/research/2026-10-13/qa-plan.md": "d2ce391d58840847461456c53613e7df2815206e765729c4d59be6068127bb40",
+    "docs/research/2026-10-13/recommendations.md": "4f7f2100c4074dee2178e8619198f9a4719c7a929e225fa9b3fba6c2cd4db855",
+    "docs/research/2026-10-13/skeptic.md": "cca9eb0e43af406e7babb8bb535e2e05e133531e9c5fd2fdf6083958bd222a69",
+    "docs/research/2026-10-13/validation.md": "ba70d05df0a2e17b7bc66383de174980b9b7a04249a6a50ccc68698addd5231e",
+    "docs/research/2026-10-13/register.json": "ffffe09c40a67143d08f9ebd0e3f23ea6984fd1e157597bc7095ba995131f9e6",
+    "scripts/verify_research.py": "0757316dddfc50b4c71ff69d846c271103215755383c0a5a2de0ff3573e3fd27",
+    "docs/research/2026-10-13/reviews/advocate-round3.md": "387cee4bb970f40a5c38a6d26be59d7b1c0bb6227198bcf38e200a4e79c91bc8",
+    "docs/research/2026-10-13/reviews/qa-round3.md": "0a57c34a717b10eb773ba34db431334d3cb44beeb51f8d277ec61fb3a77ae189",
+    "docs/research/2026-10-13/reviews/skeptic-round3.md": "a0b86350fd16d15d28e93f977173fdee099bed4e98f11c0da05086afba8c3114"
+  },
+  "inputs": {
+    "docs/design/customer-needs.md": "bb2d72413e40f28e8262f2663b8dc5fc268017dfdd7da421976dee7ee82d91fc",
+    "docs/design/exploration-program.md": "53c616a5366f7845fd3c76c4b396b596ea01a51b6b6a29bc3645bc81893e023a",
+    "docs/design/design-space.md": "5518bc41512115e7951feebe46627b027529b752cd87b17b1423b47bd09a8e29",
+    "docs/design/design-decisions.md": "07a07f15991e3f82b11e0583728970b29ae1c4b0eda67654ffeb101a31064fed",
+    "docs/design/qa-audit.md": "2a45ee3e50ae48f932d3dd8d6dfa511e881077ba13b65259a64494448b6f6af6",
+    "docs/product/README.md": "1bed41f7cc40332dddfb9d0edf59aa379538daec4cde84efed86a120e7f4838f",
+    "docs/product/qa/final.json": "c1576879b7d9aabe6a2bf200a2d73a95203e15c92099764916c9bf54aea411ea",
+    "fixtures/connections-demo.json": "d062f27d0f4adb730fec403dab12fd0e06231a127db8c224db16b301902900ef"
+  },
+  "human_gates": "customer validation and final design owner acceptance pending"
+}

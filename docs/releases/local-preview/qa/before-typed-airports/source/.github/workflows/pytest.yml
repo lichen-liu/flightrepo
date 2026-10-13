@@ -1,0 +1,97 @@
+name: Python tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pytest:
+    name: pytest (Python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project and test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+      - name: Check Python style
+        run: |
+          ruff check src tests scripts
+          ruff format --check src tests scripts
+
+      - name: Verify research receipts
+        run: python scripts/verify_research.py --require-reviews
+
+      - name: Verify the installed package
+        run: |
+          python scripts/seed_connection_demo.py
+          python -m build --wheel --outdir var/wheels
+          python scripts/verify_package.py var/wheels/*.whl
+
+  minimum-python:
+    name: pytest (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest -q
+
+  browser:
+    name: Browser workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Install browser QA tools
+        run: |
+          npm install --prefix var/browser-qa --no-save playwright@1.62.1
+          var/browser-qa/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run browser checks against the demo
+        env:
+          NODE_PATH: var/browser-qa/node_modules
+          FLYJI_QA_BROWSER: chromium
+        run: |
+          python scripts/run_demo.py --port 8013 > var/demo-server.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8013/health/ready; then break; fi
+            sleep 1
+          done
+          node scripts/qa_web.cjs

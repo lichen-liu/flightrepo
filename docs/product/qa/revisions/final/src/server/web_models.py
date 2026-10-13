@@ -1,0 +1,112 @@
+"""Browser-facing inputs and dataset evidence. All calculations remain in core."""
+from datetime import date, datetime, time, timedelta
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from core.connections import Airport
+from core.routing.models import Ranking, RouteSearchRequest, RoutingError, SearchLimits, airport_code
+from core.routing.results import RouteSearchResult
+from core.timezones import resolve_local
+
+
+class LocalRouteSearchRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    origin: str
+    destination: str
+    departure_date: date
+    departure_last_date: date | None = None
+    arrival_by_local: datetime
+    arrival_fold: Literal[0, 1] | None = None
+    departure_timezone: str | None = None
+    arrival_timezone: str | None = None
+    max_legs: int = Field(default=3, ge=1, le=4)
+    minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
+    maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44640)
+    allow_airport_change: bool = False
+    avoid_airports: tuple[str, ...] = Field(default=(), max_length=50)
+    ranking: Ranking = 'fewest_legs'
+    limit: int = Field(default=20, ge=1, le=100)
+    trace: bool = False
+    limits: SearchLimits = Field(default_factory=SearchLimits)
+
+    @field_validator('origin', 'destination', mode='before')
+    @classmethod
+    def codes(cls, value):
+        return airport_code(value)
+
+    def utc_request(self, airports: tuple[Airport, ...]) -> RouteSearchRequest:
+        by_code = {a.iata: a for a in airports}
+        for field in ('origin', 'destination'):
+            if getattr(self, field) not in by_code:
+                raise RoutingError('airport_metadata_missing', 'Airport local time requires timezone metadata. Use UTC or import the airport catalog.',
+                                   context={'field': field, 'airport': getattr(self, field)})
+        for field, code in (('departure_timezone', self.origin), ('arrival_timezone', self.destination)):
+            expected = getattr(self, field)
+            actual = by_code[code].timezone
+            if expected is not None and expected != actual:
+                raise RoutingError('airport_timezone_changed', 'Airport timezone changed. Review the dates and retry.',
+                                   context={'airport': code, 'field': field, 'expected_timezone': expected, 'actual_timezone': actual})
+        first = self.departure_date
+        last = self.departure_last_date or first
+        if last < first:
+            raise RoutingError('invalid_local_dates', 'Last departure date must be on or after the first.', context={'field': 'departure_last_date'})
+        if (last-first).days >= 31:
+            raise RoutingError('invalid_local_dates', 'Choose at most 31 departure dates.', context={'field': 'departure_last_date'})
+        try:
+            end = last + timedelta(days=1)
+        except OverflowError as error:
+            raise RoutingError('invalid_local_dates', 'Departure date is outside the supported range.') from error
+        zone = by_code[self.origin].timezone
+        values = self.model_dump(exclude={'departure_date', 'departure_last_date', 'arrival_by_local', 'arrival_fold',
+                                         'departure_timezone', 'arrival_timezone'})
+        return RouteSearchRequest(**values,
+            departure_start=resolve_local(datetime.combine(first, time.min), zone, field='departure_date'),
+            departure_end=resolve_local(datetime.combine(end, time.min), zone, field='departure_last_date'),
+            horizon_end=resolve_local(self.arrival_by_local, by_code[self.destination].timezone,
+                                     fold=self.arrival_fold, field='arrival_by_local'))
+
+
+class LocalRouteSearchResult(RouteSearchResult):
+    departure_timezone: str
+    arrival_timezone: str
+
+
+class ResolveTimeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    airport: str = Field(pattern=r'^[A-Z]{3}$')
+    local_time: datetime
+    fold: Literal[0, 1] | None = None
+    expected_timezone: str | None = None
+
+
+class ResolvedTime(BaseModel):
+    airport: str
+    timezone: str
+    utc: datetime
+
+
+class CatalogAirport(BaseModel):
+    iata: str
+    name: str | None = None
+    city_id: str | None = None
+    timezone: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class DatasetEvidence(BaseModel):
+    flight_count: int
+    cancelled_count: int
+    first_departure: datetime | None
+    last_departure: datetime | None
+    oldest_fact_refresh: datetime | None
+    newest_fact_refresh: datetime | None
+    providers: list[str]
+    coverage: Literal['unknown'] = 'unknown'
+
+
+class WebCatalog(BaseModel):
+    airports: list[CatalogAirport]
+    airports_truncated: bool
+    dataset: DatasetEvidence
