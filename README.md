@@ -17,6 +17,8 @@ Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe o
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
+To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). The first hosted version uses a separate synthetic database under `var/hosted/`; building the real flight database is the next phase.
+
 ## What works
 
 | Capability | Current behavior |
@@ -75,8 +77,8 @@ Reset clears flights, airport metadata and transfer rules transactionally, prese
 
 ```sh
 python -m pytest -q
-ruff check src tests scripts
-ruff format --check src tests scripts
+ruff check src tests scripts installation deployment
+ruff format --check src tests scripts installation deployment
 node --test tests/test_frontend.mjs
 python -m build --wheel --outdir var/wheels
 python scripts/verify_package.py var/wheels/*.whl

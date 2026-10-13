@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+flyji_runtime="${FLYJI_RUNTIME_DIR-$HOME/Library/Application Support/Flyji}"
+flyji_need_runtime=false
+flyji_command=""
+for flyji_argument in "$@"; do
+    if [ "$flyji_need_runtime" = true ]; then
+        flyji_runtime="$flyji_argument"
+        flyji_need_runtime=false
+        continue
+    fi
+    case "$flyji_argument" in
+        --runtime-dir) flyji_need_runtime=true ;;
+        --runtime-dir=*) flyji_runtime="${flyji_argument#--runtime-dir=}" ;;
+        start|stop|status|tunnel|check|-h|--help) flyji_command="$flyji_argument" ;;
+    esac
+done
+if [ "$flyji_need_runtime" = true ]; then
+    echo "Error: --runtime-dir requires an absolute path." >&2
+    exit 1
+fi
+case "$flyji_runtime" in
+    "~") flyji_runtime="$HOME" ;;
+    "~/"*) flyji_runtime="$HOME/${flyji_runtime#\~/}" ;;
+esac
+case "$flyji_runtime" in
+    /*) ;;
+    *) echo "Error: the runtime directory must be an absolute path." >&2; exit 1 ;;
+esac
+if [ ! -x "$flyji_runtime/venv/bin/python" ] || [ ! -f "$flyji_runtime/manage.py" ]; then
+    case "$flyji_command" in
+        stop|status|-h|--help) exec python3 "$(dirname "$0")/manage.py" "$@" ;;
+    esac
+    echo "Install first: python3 installation/install.py" >&2
+    exit 1
+fi
+exec "$flyji_runtime/venv/bin/python" "$flyji_runtime/manage.py" "$@"
