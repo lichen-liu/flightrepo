@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 var/
 
+.ruff_cache/
+node_modules/
+dist/
+*.egg-info/

@@ -1,7 +1,9 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from core.routing.models import airport_code, airport_codes, utc_instant
 
 
 class FlightStatus(StrEnum):
@@ -13,12 +15,12 @@ class FlightStatus(StrEnum):
 
 
 class FlightRecord(BaseModel):
-    provider: str
-    provider_id: str
-    flight_number: str
+    provider: str = Field(min_length=1)
+    provider_id: str = Field(min_length=1)
+    flight_number: str = Field(min_length=1)
     airline_iata: str | None = None
-    origin_iata: str = Field(min_length=3, max_length=3)
-    destination_iata: str = Field(min_length=3, max_length=3)
+    origin_iata: str = Field(pattern=r"^[A-Z]{3}$")
+    destination_iata: str = Field(pattern=r"^[A-Z]{3}$")
     departure_scheduled: datetime
     arrival_scheduled: datetime
     departure_actual: datetime | None = None
@@ -27,19 +29,29 @@ class FlightRecord(BaseModel):
     codeshares: list[str] = Field(default_factory=list)
     fetched_at: datetime
 
-    @field_validator("origin_iata", "destination_iata", mode="before")
+    _codes = field_validator("origin_iata", "destination_iata", mode="before")(airport_code)
+
+    @field_validator("flight_number", mode="before")
     @classmethod
-    def uppercase_airport(cls, value: str) -> str:
-        return value.strip().upper()
+    def nonblank_number(cls, value):
+        if not isinstance(value, str):
+            # TypeError escapes Pydantic validation instead of producing HTTP 422.
+            raise ValueError("flight number must be a string")  # noqa: TRY004
+        return value.strip()
 
     @model_validator(mode="after")
     def sensible_leg(self) -> "FlightRecord":
-        for field in ("departure_scheduled", "arrival_scheduled", "departure_actual", "arrival_actual", "fetched_at"):
+        # Also validate existing model instances supplied by internal callers.
+        for field in (
+            "departure_scheduled",
+            "arrival_scheduled",
+            "departure_actual",
+            "arrival_actual",
+            "fetched_at",
+        ):
             value = getattr(self, field)
             if value is not None:
-                if value.tzinfo is None or value.utcoffset() is None:
-                    raise ValueError(f"{field} must include a UTC offset")
-                setattr(self, field, value.astimezone(timezone.utc))
+                setattr(self, field, utc_instant(value))
         if self.origin_iata == self.destination_iata:
             raise ValueError("origin and destination must differ")
         if self.arrival_scheduled <= self.departure_scheduled:
@@ -52,13 +64,7 @@ class IngestRequest(BaseModel):
     start: date
     end: date
 
-    @field_validator("airports", mode="before")
-    @classmethod
-    def normalize_airports(cls, values: list[str]) -> list[str]:
-        airports = sorted({v.strip().upper() for v in values})
-        if any(len(code) != 3 or not code.isalpha() for code in airports):
-            raise ValueError("airports must be three-letter IATA codes")
-        return airports
+    _airports = field_validator("airports", mode="before")(airport_codes)
 
     @model_validator(mode="after")
     def valid_range(self) -> "IngestRequest":

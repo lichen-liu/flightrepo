@@ -1,125 +1,97 @@
 # Flyji
 
-Product name: **Flyji**. Intended hosting domain: **fly.boboji.fyi** (subdomain: `fly`). This naming decision was confirmed on October 9, 2026.
+Explore dated flight options, inspect their routes and schedules, and change a connection to see how the rest of the journey changes. Flyji runs locally with Python, FastAPI and SQLite. Its intended domain is **fly.boboji.fyi**.
 
-A provider-neutral engine for ingesting real commercial flight movements and exploring legitimate routes. It intentionally excludes fares, availability, booking, and OTA concerns.
+This preview uses imported schedules. It does not establish seat availability, fares, booking protection or whether a transfer is suitable for a traveler. The demo data is synthetic; coverage is unknown.
+
+## Try the demo
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+python scripts/run_demo.py --port 8013
+```
+
+Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe or flat map, and scrub the schedule. Choose **Change connection**, widen the time window, allow an airport change, and apply a flight. Later legs are recalculated; **Undo** restores the previous journey. See the [demo walkthrough](docs/demo.md).
+
+The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
+
+## What works
+
+| Capability | Current behavior |
+|---|---|
+| Search | Typed airport codes with suggestions, a required via airport, local or UTC dates, arrival deadline, connection bounds, avoided airports and deterministic ranking |
+| Explore | Linked route list, globe/flat map, leg details, local clocks and a schedule cursor |
+| Edit | Keep a selected prefix, type the next airport, choose a later flight, rebuild subsequent legs, show dead ends and undo |
+| Airport changes | Opt-in, same-city changes with an explicit directed allowance in SQLite |
+| Inspect | Coverage/refresh evidence, bounded search diagnostics, exact exports and offline routing replay |
+| Manage data | Internal shell, validated JSON/CSV imports, exports, ingestion and guarded reset |
 
 ## Architecture
 
 ```text
-providers / CSV -> updater + ingestion -> SQLite <- reader <- serving API
-                            ^                        ^
-                            +-- internal admin CLI --+
+provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web app
+                              ↑                   ↑
+                              └── internal admin ─┘
 ```
 
-The fetching layer (`src/ingestion/providers`) depends on upstream provider formats. The serving layer (`src/server/api.py`) depends only on `FlightReader`, which opens read-only SQLite connections. `src/ingestion/updater.py` owns initialization, upserts, deletion, and reset; `src/ingestion/service.py` orchestrates fetching; it is not imported by the serving API. Shared connection/schema helpers live in `src/core/storage.py`. This lets a hosted deployment replace AeroDataBox with OAG, Cirium, or another licensed feed without changing public API contracts.
+`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns read-only queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
 
-## Package boundaries
+SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
-```text
-src/
-  core/                 # shared library; no server/admin/ingestion imports
-    models.py
-    config.py
-    storage.py          # SQLite schema, connections, timestamp helpers
-    contracts.py        # query interface for route algorithms
-    itineraries.py
-  ingestion/            # internal crawler/updater package
-    providers/          # AeroDataBox and CSV adapters
-    service.py          # fetching, normalization, deduplication
-    updater.py          # database initialization and mutation
-  server/               # future webapp backend
-    reader.py           # read-only queries
-    api.py              # FastAPI serving
-  admin/                # internal terminal client using both packages
-    client.py
-    __main__.py
-```
+## Use your local data
 
-`server` and `ingestion` depend on `core` and do not import each other. `admin` integrates both. All packages ship together for this prototype; they require no additional services. The default data path stays anchored to the repository's `var/` directory.
-
-## Run locally
-
-Development stays local: SQLite data lives at `var/flights.db`; `var/` is ignored by Git, including SQLite WAL sidecar files. Python uses its built-in `sqlite3` module; there is no database server or additional dependency. The default path is anchored to this project even when the client is launched from another directory. `FLIGHT_DATABASE_PATH` can override it.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+```sh
 cp .env.example .env
-python -m admin stats  # initialize the local database
-uvicorn server.api:app --reload
+python -m admin stats
+uvicorn server.api:app --reload --host 127.0.0.1 --port 8001
 ```
 
-Set `FLIGHT_PROVIDER_API_KEY` to an AeroDataBox RapidAPI key. Swagger UI is at `http://localhost:8000/docs`.
+The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the OpenAPI schema at `/openapi.json`. The API exposes queries and calculations; data changes go through the internal client. Use an absolute `FLIGHT_DATABASE_PATH` when running outside an editable checkout.
 
-## Local development client
+Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
-The internal admin terminal client integrates both modules: `FlightReader` for queries/stats/export and `FlightUpdater` for initialization/import/ingestion/delete/reset. The itinerary engine uses only the reader. A future web app can use those same core modules through the API.
-
-```bash
-# Start the interactive client after installing the project
-.venv/bin/python -m admin
-# After pip install -e '.[dev]', the equivalent command is: flyji
+```sh
+python -m admin import-json var/flights.json
+python -m admin import-airports var/airports.json
+python -m admin export-json var/flights-export.json
+python -m admin export-airports var/airport-catalog.json
+python -m admin ingest --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
+python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
 
-Commands work both at the `flyji>` prompt and as arguments to `python -m admin`:
+Use `help` in the shell or `COMMAND --help` for options. JSON flight imports are arrays of `FlightRecord` objects; matching `(provider, provider_id)` records are updated and omitted records retained. Airport catalogs contain `airports` and optional directed `transfers`. Imports validate the entire batch before writing. CSV date bounds use UTC departure dates; timestamps require offsets. Keep working files under `var/`.
 
-```text
-stats
-flights --origin YYZ --start 2026-10-10T00:00:00Z --end 2026-10-11T00:00:00Z
-routes --origin YYZ --start 2026-10-10T00:00:00Z --end 2026-10-11T00:00:00Z
-itineraries --origin YYZ --destination CDG --start 2026-10-10T00:00:00Z --end 2026-10-11T00:00:00Z --max-legs 3
-ingest --csv var/feed.csv --airports YYZ YUL --start 2026-10-10 --end 2026-10-11
-ingest --airports YYZ --start 2026-10-10 --end 2026-10-11
-export-json var/flights-export.json
-import-json var/flights-export.json
-delete aerodatabox PROVIDER_ID
-quit
+AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, caching and redistribution rights must be checked for your account. Automatic refresh is not implemented; run `ingest` separately to update the same database while readers remain connected.
+
+```sh
+python scripts/reset_local_data.py --yes
 ```
 
-Use `help` or `COMMAND --help` for options. To add or edit records, export JSON, edit it in your editor, then import it. Import validates the whole file before writing and updates records with matching `(provider, provider_id)`; omitted records are retained. CSV inputs use `FlightRecord` column names and must contain licensed commercial flight data. AeroDataBox ingestion requires a configured API key. Keep local imports and exports under `var/` so Git ignores them.
+Reset clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
 
-Reset the local data file with:
+## Development checks
 
-```bash
-.venv/bin/python scripts/reset_local_data.py --yes
-# Or inside the client: reset --yes
+```sh
+python -m pytest -q
+ruff check src tests scripts
+ruff format --check src tests scripts
+node --test tests/test_frontend.mjs
+python -m build --wheel --outdir var/wheels
+python scripts/verify_package.py var/wheels/*.whl
 ```
 
-Reset deletes flight records in a transaction, preserving the schema, database file, imports, and exports. It only permits databases under this project's `var/` directory. Pause ingestion before resetting if you want the database to remain empty.
+The wheel check installs the built package in a temporary environment and probes its CLI, API and bundled assets from outside the checkout. It reuses the current environment's third-party dependencies.
 
-SQLite WAL mode lets separate Python processes share the database on the same machine: client reads use consistent snapshots while ingestion commits updates. Connections wait up to 10 seconds for locks; only one writer operates at a time. Provider requests finish before the ingestion service opens its write transaction. JSON/CSV remain import/export formats; do not edit the SQLite file directly.
+For browser tests, start the demo in another terminal, then run:
 
-To run a separate fetcher now, execute `.venv/bin/python -m admin ingest --airports YYZ --start 2026-10-10 --end 2026-10-11` in another terminal. It uses the same database as the client and API. This is a manual one-shot fetcher; an automatic refresh loop is not implemented yet.
-
-Ingestion is internal and runs through the terminal client. The serving API exposes no ingestion or mutation endpoints. Initialize the database through the internal client before starting the API; the reader never creates a missing database.
-
-Search real flights and aggregate routes:
-
-```bash
-curl 'http://localhost:8000/v1/flights?origin=YYZ&start=2026-10-01T00:00:00Z&end=2026-10-08T00:00:00Z'
-curl 'http://localhost:8000/v1/routes?origin=YYZ&start=2026-10-01T00:00:00Z&end=2026-10-08T00:00:00Z'
-curl 'http://localhost:8000/v1/itineraries?origin=YYZ&destination=CDG&start=2026-10-01T00:00:00Z&end=2026-10-08T00:00:00Z&max_legs=2'
+```sh
+npm install --prefix var/browser-qa --no-save playwright@1.62.1
+var/browser-qa/node_modules/.bin/playwright install chromium
+NODE_PATH=var/browser-qa/node_modules node scripts/qa_web.cjs
 ```
 
-## What “legitimate” means
+Browser tests check search, editing, undo, error recovery, keyboard access and responsive use against the real API. They compare flight identities and constraints rather than saved screenshots or exact presentation strings. Failed cases save a screenshot under ignored `var/web-qa/`.
 
-A public route exists only when at least one non-cancelled commercial flight instance from an identified provider exists in the requested period. The service never fabricates airport pairs. Scheduled future flights and operated historical flights share one model; `status`, actual timestamps, provider, and `fetched_at` preserve the distinction and provenance.
-
-## Production notes
-
-- Confirm that the chosen provider contract permits caching and re-serving derived flight data. AeroDataBox coverage and rights depend on plan.
-- Ingestion stays internal through the updater module and CLI; add a worker/scheduler when periodic refresh is needed.
-- For future multi-instance deployment, consider replacing SQLite with a PostgreSQL repository if multiple hosts are needed. The reader/updater interfaces are the boundary.
-- Refresh near-term scheduled flights often, and immutable historical flights less often. Keep provider-specific retention rules in the ingestion worker.
-- Add API authentication, per-tenant quotas, request tracing, and a cache before exposing the service publicly.
-- Airport-local timestamps are normalized from provider UTC when available. Clients should send offset-aware ISO 8601 timestamps.
-
-## Test
-
-GitHub uses the same branch protections and CI policy as `trip_dollar`: label-triggered PR tests, automatic tests on `main`, required current CI before merging, and linear development branches. See [.github/README.md](.github/README.md).
-
-```bash
-pytest
-```
+Keep generated reports, screenshots, replay files and build outputs under `var/`. GitHub uses label-triggered PR checks and automatic checks on `main`; see the [CI policy](.github/README.md).

@@ -1,0 +1,566 @@
+// Behavior checks against the real demo API. No saved output or screenshot baselines.
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { test, before, after } = require("node:test");
+const { chromium } = require("playwright");
+const { expect } = require("playwright/test");
+const base = process.env.FLYJI_QA_URL || "http://127.0.0.1:8013";
+const out = process.env.FLYJI_QA_OUTPUT || path.resolve("var/web-qa");
+const searchPath = /\/v1\/itineraries\/search(?:\/local)?$/;
+const identity = (legs) =>
+  legs.map(({ provider, provider_id }) => ({ provider, provider_id }));
+let browser;
+before(async () => {
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.FLYJI_QA_BROWSER === "chrome" ? { channel: "chrome" } : {}),
+  });
+});
+after(async () => {
+  await browser?.close();
+});
+
+function check(name, run, options = {}) {
+  test(name, { timeout: 30_000 }, async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1180, height: 1000 },
+      timezoneId: "Asia/Tokyo",
+      reducedMotion: "reduce",
+      ...options,
+    });
+    const errors = [],
+      requests = [];
+    context.on("page", (page) => {
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("console", (message) => {
+        if (
+          message.type() === "error" &&
+          !/Failed to load resource.*(?:4\d\d|5\d\d)/.test(message.text())
+        )
+          errors.push(message.text());
+      });
+    });
+    context.on("request", (request) => requests.push(request.url()));
+    const page = await context.newPage();
+    page.setDefaultTimeout(8000);
+    try {
+      await run(page, context);
+      assert.deepEqual(errors, [], "no JavaScript or CSP errors");
+      assert.ok(
+        requests.every((url) => new URL(url).origin === new URL(base).origin),
+        "runtime requests stay on the app origin",
+      );
+    } catch (error) {
+      await fs.mkdir(out, { recursive: true });
+      await page
+        .screenshot({
+          path: path.join(out, name.replace(/[^a-z0-9]+/gi, "-") + ".png"),
+          fullPage: true,
+        })
+        .catch(() => {});
+      throw error;
+    } finally {
+      await context.close();
+    }
+  });
+}
+async function result(page, endpoint, action) {
+  const pending = page.waitForResponse(
+    (response) =>
+      endpoint.test(new URL(response.url()).pathname) &&
+      response.request().method() === "POST",
+  );
+  await action();
+  const response = await pending;
+  assert.equal(response.status(), 200, await response.text());
+  return response.json();
+}
+async function open(page, routes = true) {
+  const data = await result(page, searchPath, () => page.goto(base));
+  await expect(
+    page.getByRole("button", { name: "Search flights", exact: true }),
+  ).toBeEnabled();
+  if (routes) await expect(page.locator("[data-option]").first()).toBeVisible();
+  return data;
+}
+async function search(
+  page,
+  action = () =>
+    page.getByRole("button", { name: "Search flights", exact: true }).click(),
+) {
+  const data = await result(page, searchPath, action);
+  await expect(
+    page.getByRole("button", { name: "Search flights", exact: true }),
+  ).toBeEnabled();
+  return data;
+}
+async function exported(page) {
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export JSON", exact: true }).click();
+  const stream = await (await pending).createReadStream(),
+    chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
+async function edit(page) {
+  await page
+    .getByRole("button", { name: "Change connection", exact: true })
+    .first()
+    .click();
+  await expect(page.getByLabel("Next airport", { exact: true })).toBeFocused();
+}
+async function next(
+  page,
+  action = () =>
+    page
+      .getByRole("button", { name: "Find next flights", exact: true })
+      .click(),
+) {
+  const data = await result(page, /\/v1\/plans\/rebuild$/, action);
+  await expect(
+    page.getByRole("button", { name: "Find next flights", exact: true }),
+  ).toBeEnabled();
+  return data;
+}
+async function viaSearch(page) {
+  await open(page);
+  await page.getByLabel("Via airport", { exact: true }).fill("ams");
+  const data = await search(page, () =>
+    page.getByLabel("Via airport", { exact: true }).press("Enter"),
+  );
+  assert.equal(data.query.via_airport, "AMS");
+  assert.ok(data.items.length);
+  assert.ok(
+    data.items.every((item) =>
+      item.legs.some((flight) => flight.destination_iata === "AMS"),
+    ),
+  );
+  return data;
+}
+
+check(
+  "typed constraints survive search links and exports",
+  async (page, context) => {
+    const data = await viaSearch(page),
+      selected = await exported(page);
+    assert.deepEqual(
+      identity(selected.selection.legs),
+      identity(data.items[0].legs),
+    );
+    assert.equal(selected.query.via_airport, "AMS");
+    assert.equal(selected.coverage, "unknown");
+    assert.ok(selected.selection.diagnostics.snapshot_id);
+    assert.equal(new URL(page.url()).searchParams.get("via"), "AMS");
+    const reloaded = await context.newPage();
+    await reloaded.goto(page.url());
+    await expect(reloaded.locator("[data-option]").first()).toBeVisible();
+    await expect(
+      reloaded.getByLabel("Via airport", { exact: true }),
+    ).toHaveValue("AMS");
+  },
+);
+
+check(
+  "connection edits preserve prefix rebuild suffix and undo",
+  async (page) => {
+    await viaSearch(page);
+    const before = (await exported(page)).selection;
+    await edit(page);
+    await page.getByLabel("Next departure").selectOption("any");
+    await page.getByLabel("Allow a same-city airport change").check();
+    await page.getByLabel("Next airport", { exact: true }).fill("ams");
+    const plan = await next(page, () =>
+      page.getByLabel("Next airport", { exact: true }).press("Enter"),
+    );
+    assert.ok(plan.options.length);
+    assert.ok(
+      plan.options.every((option) => option.flight.destination_iata === "AMS"),
+    );
+    const index = plan.options.findIndex(
+      (option) =>
+        option.complete &&
+        option.connection.airport_change &&
+        Date.parse(option.flight.departure_scheduled) >
+          Date.parse(before.legs[1].departure_scheduled),
+    );
+    assert.ok(
+      index >= 0,
+      "fixture offers a later complete airport-change continuation",
+    );
+    const updated = await result(page, /\/v1\/plans\/rebuild$/, () =>
+      page.locator(`[data-next="${index}"]`).click(),
+    );
+    await expect(page.locator("#connection-editor")).toBeHidden();
+    assert.deepEqual(
+      identity(updated.legs.slice(0, 1)),
+      identity(before.legs.slice(0, 1)),
+    );
+    assert.deepEqual(
+      identity(updated.legs.slice(1)),
+      identity([plan.options[index].flight, ...plan.options[index].tail]),
+    );
+    assert.deepEqual(
+      identity((await exported(page)).selection.legs),
+      identity(updated.legs),
+    );
+    await page.getByRole("button", { name: "Undo edit", exact: true }).click();
+    assert.deepEqual(
+      identity((await exported(page)).selection.legs),
+      identity(before.legs),
+    );
+    await expect(
+      page.getByRole("button", { name: "Undo edit", exact: true }),
+    ).toBeDisabled();
+  },
+);
+
+check(
+  "connection bounds and avoided airports reach the engine",
+  async (page) => {
+    await open(page);
+    await page.locator("#search-details > summary").click();
+    await page
+      .locator("#search-form")
+      .getByLabel("Minimum connection (minutes)")
+      .fill("120");
+    await page.getByLabel("Maximum connection").selectOption("any");
+    await page.getByLabel("Avoid airports").fill("ams");
+    const data = await search(page);
+    assert.equal(data.query.minimum_connection_minutes, 120);
+    assert.equal(data.query.maximum_connection_minutes, null);
+    assert.deepEqual(data.query.avoid_airports, ["AMS"]);
+    assert.ok(data.items.length);
+    assert.ok(
+      data.items.every(
+        (item) =>
+          item.connections.every((gap) => gap.wait_minutes >= 120) &&
+          item.legs.every(
+            (f) => ![f.origin_iata, f.destination_iata].includes("AMS"),
+          ),
+      ),
+    );
+    await edit(page);
+    const plan = await next(page);
+    assert.ok(
+      plan.options.every((option) => option.flight.destination_iata !== "AMS"),
+    );
+  },
+);
+
+check("rejected stale choice keeps the selected journey", async (page) => {
+  await viaSearch(page);
+  const before = identity((await exported(page)).selection.legs);
+  await edit(page);
+  await next(page);
+  await page.route("**/v1/plans/rebuild", (route) =>
+    route.request().postDataJSON().chosen_next
+      ? route.fulfill({
+          status: 422,
+          json: {
+            detail: {
+              code: "prefix_cancelled",
+              message: "Selected flight is unavailable.",
+            },
+          },
+        })
+      : route.continue(),
+  );
+  await page.locator("[data-next]").first().click();
+  await expect(page.locator("#editor-error")).toBeVisible();
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+  await expect(page.locator("[data-next]").first()).toBeEnabled();
+});
+
+check("partial searches differ from exhaustive empty results", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch({
+      postData: JSON.stringify({
+        ...route.request().postDataJSON(),
+        limits: { max_candidates: 1 },
+      }),
+    });
+    await route.fulfill({ response });
+  });
+  const data = await open(page, false);
+  assert.equal(data.diagnostics.exhaustive, false);
+  await expect(page.locator("#partial")).toBeVisible();
+  await expect(page.locator("#options")).not.toContainText(
+    /no matching route/i,
+  );
+  await page.unroute("**/v1/itineraries/search/local");
+  await page.getByLabel("To", { exact: true }).fill("ABC");
+  await page.getByLabel("Input clock").selectOption("UTC");
+  const empty = await search(page);
+  assert.equal(empty.diagnostics.exhaustive, true);
+  assert.deepEqual(empty.items, []);
+  await expect(page.locator("#partial")).toBeHidden();
+  await expect(page.locator("[data-option]")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Export JSON", exact: true }),
+  ).toBeDisabled();
+});
+
+check("storage failure can be retried", async (page) => {
+  let fail = true;
+  await page.route("**/v1/catalog", (route) =>
+    fail
+      ? route.fulfill({
+          status: 503,
+          json: {
+            detail: {
+              code: "storage_unavailable",
+              message: "Storage unavailable.",
+            },
+          },
+        })
+      : route.continue(),
+  );
+  await page.goto(base);
+  await expect(page.getByRole("alert")).toBeVisible();
+  fail = false;
+  await page
+    .getByRole("button", { name: "Retry data connection", exact: true })
+    .click();
+  await expect(page.locator("[data-option]").first()).toBeVisible();
+  await expect(page.locator("#error")).toBeHidden();
+});
+
+check(
+  "UTC search works without suggestions and ignores browser timezone",
+  async (page) => {
+    await page.route("**/v1/catalog", async (route) => {
+      const response = await route.fetch(),
+        data = await response.json();
+      await route.fulfill({ response, json: { ...data, airports: [] } });
+    });
+    await page.goto(base);
+    await expect(
+      page.getByRole("button", { name: "Search flights", exact: true }),
+    ).toBeEnabled();
+    await page.getByLabel("From", { exact: true }).fill("yyz");
+    await page.getByLabel("To", { exact: true }).fill("cdg");
+    await page.getByLabel("Input clock").selectOption("UTC");
+    const date = await page
+      .getByLabel("Departure date", { exact: true })
+      .inputValue();
+    const data = await search(page);
+    assert.equal(data.query.origin, "YYZ");
+    assert.equal(data.query.destination, "CDG");
+    assert.equal(
+      Date.parse(data.query.departure_start),
+      Date.parse(date + "T00:00:00Z"),
+    );
+    assert.ok(data.items.length);
+  },
+);
+
+check(
+  "bounded connection search retains the original journey",
+  async (page) => {
+    await viaSearch(page);
+    const before = identity((await exported(page)).selection.legs);
+    await page.route("**/v1/plans/rebuild", async (route) => {
+      const response = await route.fetch({
+        postData: JSON.stringify({
+          ...route.request().postDataJSON(),
+          limits: { max_candidates: 1 },
+        }),
+      });
+      await route.fulfill({ response });
+    });
+    await edit(page);
+    await page.getByLabel("Next airport", { exact: true }).fill("CDG");
+    const plan = await next(page);
+    assert.equal(plan.diagnostics.exhaustive, false);
+    assert.deepEqual(identity((await exported(page)).selection.legs), before);
+    await expect(page.locator("#editor-status")).toContainText(/partial/i);
+  },
+);
+
+check(
+  "map controls and clock changes preserve the selected flights",
+  async (page) => {
+    await open(page);
+    const before = identity((await exported(page)).selection.legs);
+    await expect(
+      page.getByRole("img", { name: /flight route|world map/i }),
+    ).toBeVisible();
+    await expect(page.locator("#map-error")).toBeHidden();
+    await page.getByRole("button", { name: "Map", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Map", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Globe", exact: true }).click();
+    const mapImage = page.getByRole("img", { name: /flight route|world map/i });
+    await expect(mapImage.locator("path").first()).toBeAttached();
+    const cameraBefore = await mapImage.screenshot();
+    await page
+      .getByRole("button", { name: "Tilt globe up", exact: true })
+      .click();
+    await expect
+      .poll(async () => !(await mapImage.screenshot()).equals(cameraBefore))
+      .toBe(true);
+    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Fit journey", exact: true })
+      .click();
+    await page.getByLabel("Schedule time", { exact: false }).fill("500");
+    const cursor = await page
+      .getByLabel("Schedule time", { exact: false })
+      .inputValue();
+    await page.getByLabel("Leg times").selectOption("UTC");
+    assert.deepEqual(identity((await exported(page)).selection.legs), before);
+    assert.equal(
+      await page.getByLabel("Schedule time", { exact: false }).inputValue(),
+      cursor,
+    );
+  },
+);
+
+check("keyboard can select edit apply and undo", async (page) => {
+  await viaSearch(page);
+  const option = page.locator("[data-option]").first();
+  await option.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-option]").first()).toBeFocused();
+  const before = identity((await exported(page)).selection.legs);
+  const editButton = page
+    .getByRole("button", { name: "Change connection", exact: true })
+    .first();
+  await editButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Next airport", { exact: true })).toBeFocused();
+  await next(page, () =>
+    page.getByLabel("Next airport", { exact: true }).press("Enter"),
+  );
+  await page.locator("[data-next]").first().focus();
+  await result(page, /\/v1\/plans\/rebuild$/, () =>
+    page.keyboard.press("Enter"),
+  );
+  await expect(
+    page.getByRole("button", { name: "Undo edit", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+});
+
+check(
+  "phone workspace remains usable without horizontal overflow",
+  async (page) => {
+    await open(page);
+    const views = page.getByRole("navigation", { name: "Workspace view" });
+    for (const width of [320, 390, 736, 1180]) {
+      await page.setViewportSize({ width, height: 900 });
+      if (await views.isVisible()) {
+        await views.getByRole("button", { name: "Journey", exact: true }).tap();
+        await expect(
+          page.getByRole("button", { name: "Export JSON", exact: true }),
+        ).toBeVisible();
+        await views.getByRole("button", { name: "Map", exact: true }).tap();
+        await expect(
+          page.getByRole("button", { name: "Fit journey", exact: true }),
+        ).toBeVisible();
+      }
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        )
+        .toBe(true);
+    }
+  },
+  { viewport: { width: 390, height: 900 }, isMobile: true, hasTouch: true },
+);
+
+check(
+  "not-before time resolves in the airport zone and reopening resets it",
+  async (page) => {
+    await viaSearch(page);
+    const selected = (await exported(page)).selection;
+    const first = selected.legs[0],
+      airport = selected.airports.find(
+        (a) => a.iata === first.destination_iata,
+      );
+    const threshold = Date.parse(first.arrival_scheduled) + 12 * 60 * 60 * 1000;
+    const { localInput } = await import("../src/server/web/format.mjs");
+    await edit(page);
+    await page.getByLabel("Next departure").selectOption("after");
+    await page
+      .getByLabel("Not before", { exact: true })
+      .fill(localInput(threshold, airport.timezone));
+    const pending = page.waitForResponse(
+      (r) => new URL(r.url()).pathname === "/v1/plans/rebuild",
+    );
+    const resolved = await result(page, /\/v1\/time\/resolve$/, () =>
+      page
+        .getByRole("button", { name: "Find next flights", exact: true })
+        .click(),
+    );
+    assert.equal(Date.parse(resolved.utc), threshold);
+    const plan = await (await pending).json();
+    await expect(
+      page.getByRole("button", { name: "Find next flights", exact: true }),
+    ).toBeEnabled();
+    assert.ok(plan.options.length);
+    assert.ok(
+      plan.options.every(
+        (o) => Date.parse(o.flight.departure_scheduled) >= threshold,
+      ),
+    );
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await edit(page);
+    await expect(
+      page.getByLabel("Not before", { exact: true }),
+    ).toHaveJSProperty("required", false);
+    await next(page);
+  },
+);
+
+check("stale timezone metadata is corrected before retry", async (page) => {
+  let actualZone, departureDate;
+  await page.route("**/v1/catalog", async (route) => {
+    const response = await route.fetch(),
+      catalog = await response.json();
+    const origin = catalog.airports.find((a) => a.iata === "YYZ");
+    actualZone = origin.timezone;
+    const { localDate } = await import("../src/server/web/format.mjs");
+    departureDate = localDate(catalog.dataset.first_departure, actualZone);
+    origin.timezone = "Asia/Tokyo";
+    await route.fulfill({ response, json: catalog });
+  });
+  const pending = page.waitForResponse((r) =>
+    searchPath.test(new URL(r.url()).pathname),
+  );
+  await page.goto(base);
+  const failed = await pending;
+  assert.equal(failed.status(), 422);
+  assert.equal((await failed.json()).detail.code, "airport_timezone_changed");
+  await expect(page.locator("#error")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Search flights", exact: true }),
+  ).toBeEnabled();
+  // The error asks the traveler to review dates; retain explicit input rather
+  // than silently shifting it when corrected metadata changes the clock.
+  await page.getByLabel("Departure date", { exact: true }).fill(departureDate);
+  const retried = await search(page);
+  assert.equal(retried.departure_timezone, actualZone);
+  assert.ok(retried.items.length);
+  await expect(page.locator("#error")).toBeHidden();
+});
+
+check(
+  "map failure leaves flight inspection and editing available",
+  async (page) => {
+    await page.route("**/assets/vendor/world-110m.geojson", (route) =>
+      route.fulfill({ status: 503, body: "Geometry unavailable" }),
+    );
+    await viaSearch(page);
+    await expect(page.locator("#map-error")).toBeVisible();
+    assert.ok((await exported(page)).selection.legs.length);
+    await edit(page);
+    const plan = await next(page);
+    assert.ok(plan.options.length);
+  },
+);
