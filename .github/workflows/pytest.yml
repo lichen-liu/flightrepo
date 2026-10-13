@@ -40,8 +40,8 @@ jobs:
 
       - name: Check Python style
         run: |
-          ruff check src tests scripts
-          ruff format --check src tests scripts
+          ruff check src tests scripts installation deployment
+          ruff format --check src tests scripts installation deployment
 
       - name: Verify the installed package
         run: |
