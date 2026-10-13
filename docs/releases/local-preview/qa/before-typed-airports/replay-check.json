@@ -1,9 +1,0 @@
-{
-  "passed": true,
-  "matches_saved_result": true,
-  "route_count": 6,
-  "method": "Admin search to saved snapshot, then replay without database access; compare replay.result against search result.",
-  "initial_probe_error": "The first ad-hoc assertion compared the replay envelope with its result. Corrected comparison passes; no code was changed.",
-  "scope": "Supplemental check after source-manifest freeze; routing source bytes unchanged.",
-  "snapshot_sha256": "48e258c470c4c8fb921af39c7089a094b373f54f13ea58f5c7871937b61ff30f"
-}

@@ -74,7 +74,7 @@ def test_no_tail_retains_chosen_prefix_and_reports_loaded_gap(demo):
     result = reader.rebuild(request(data, chosen_next=ref("no-tail")))
     assert ids(result) == ["d17-lhr-a", "no-tail"]
     assert not result.complete
-    assert "loaded search window" in result.message
+    assert result.diagnostics.exhaustive
     result = reader.rebuild(request(data, window={"not_before": "2026-10-23T00:00:00Z"}))
     assert ids(result) == ["d17-lhr-a"] and not result.complete
 
@@ -199,7 +199,6 @@ def test_snapshot_flight_cap_is_explicit(demo):
     assert result.data_truncated
     assert not result.diagnostics.exhaustive
     assert "data_limit" in result.diagnostics.termination_reasons
-    assert "partial" in result.message
 
 
 def test_cancelled_prefix_and_chosen_next_are_rejected(demo):

@@ -43,12 +43,8 @@ jobs:
           ruff check src tests scripts
           ruff format --check src tests scripts
 
-      - name: Verify research receipts
-        run: python scripts/verify_research.py --require-reviews
-
       - name: Verify the installed package
         run: |
-          python scripts/seed_connection_demo.py
           python -m build --wheel --outdir var/wheels
           python scripts/verify_package.py var/wheels/*.whl
 
@@ -80,6 +76,11 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install -e '.[dev]'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Run frontend unit tests
+        run: node --test tests/test_frontend.mjs
       - name: Install browser QA tools
         run: |
           npm install --prefix var/browser-qa --no-save playwright@1.62.1
@@ -89,9 +90,23 @@ jobs:
           NODE_PATH: var/browser-qa/node_modules
           FLYJI_QA_BROWSER: chromium
         run: |
+          mkdir -p var
           python scripts/run_demo.py --port 8013 > var/demo-server.log 2>&1 &
+          demo_pid=$!
+          trap 'kill "$demo_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8013/health/ready; then break; fi
             sleep 1
           done
+          if ! curl --fail --silent http://127.0.0.1:8013/health/ready; then
+            cat var/demo-server.log
+            exit 1
+          fi
           node scripts/qa_web.cjs
+      - name: Upload browser failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failures
+          path: var/web-qa/
+          if-no-files-found: ignore

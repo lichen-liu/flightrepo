@@ -13,7 +13,7 @@ pip install -e '.[dev]'
 python scripts/run_demo.py --port 8013
 ```
 
-Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe or flat map, and scrub the schedule. Choose **Change connection**, widen the time window, allow an airport change, and apply a flight. Later legs are recalculated; **Undo** restores the previous journey. See the [demo walkthrough](docs/releases/local-preview/demo.md).
+Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe or flat map, and scrub the schedule. Choose **Change connection**, widen the time window, allow an airport change, and apply a flight. Later legs are recalculated; **Undo** restores the previous journey. See the [demo walkthrough](docs/demo.md).
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
@@ -28,8 +28,6 @@ The demo uses `var/connections-demo.db`, separate from the normal `var/flights.d
 | Inspect | Coverage/refresh evidence, bounded search diagnostics, exact exports and offline routing replay |
 | Manage data | Internal shell, validated JSON/CSV imports, exports, ingestion and guarded reset |
 
-The [research register](docs/research/README.md) maps the wider exploration needs and proposed experiments. Multiple pinned comparisons, protected commitments and further interaction designs are proposals. Customer sessions and selection of a final visual direction remain open; three directions and their reviews are retained in the [design archive](docs/design/README.md).
-
 ## Architecture
 
 ```text
@@ -38,7 +36,7 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
                               └── internal admin ─┘
 ```
 
-`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns read-only queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation. Trip Dollar keeps Flask; Flyji keeps FastAPI with Uvicorn.
+`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns read-only queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
 
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
@@ -73,15 +71,27 @@ python scripts/reset_local_data.py --yes
 
 Reset clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
 
-## Verify and review
+## Development checks
 
 ```sh
 python -m pytest -q
-ruff check src tests scripts --exclude scripts/verify_research.py
-ruff format --check src tests scripts --exclude scripts/verify_research.py
-python scripts/verify_research.py --require-reviews
+ruff check src tests scripts
+ruff format --check src tests scripts
+node --test tests/test_frontend.mjs
+python -m build --wheel --outdir var/wheels
+python scripts/verify_package.py var/wheels/*.whl
 ```
 
-The [release audit](docs/releases/local-preview/README.md) records current source identities, test evidence and review scope. Historical review bundles remain unchanged. GitHub uses label-triggered PR checks, automatic checks on `main`, a required current check and linear branch history; see the [CI policy](.github/README.md).
+The wheel check installs the built package in a temporary environment and probes its CLI, API and bundled assets from outside the checkout. It reuses the current environment's third-party dependencies.
 
-This milestone is a local preview. Final customer design approval, real-data validation, accessibility certification and public deployment controls remain future work.
+For browser tests, start the demo in another terminal, then run:
+
+```sh
+npm install --prefix var/browser-qa --no-save playwright@1.62.1
+var/browser-qa/node_modules/.bin/playwright install chromium
+NODE_PATH=var/browser-qa/node_modules node scripts/qa_web.cjs
+```
+
+Browser tests check search, editing, undo, error recovery, keyboard access and responsive use against the real API. They compare flight identities and constraints rather than saved screenshots or exact presentation strings. Failed cases save a screenshot under ignored `var/web-qa/`.
+
+Keep generated reports, screenshots, replay files and build outputs under `var/`. GitHub uses label-triggered PR checks and automatic checks on `main`; see the [CI policy](.github/README.md).

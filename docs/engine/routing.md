@@ -1,11 +1,5 @@
 # Routing engine
 
-The current local preview uses `routing-4`. Search accepts an optional exact `via_airport`; it must be an intermediate airport used by a flight arrival or a permitted same-city transfer departure. Rebuild keeps that requirement and accepts `next_airport`, the destination of the immediately following flight. Both constraints are evaluated before ranked-result and option-page limits. Unknown valid codes yield empty results within the loaded scope; partial diagnostics still apply. Routing-3 replay documents require their archived engine version; current replay rejects them explicitly. SQLite flight facts need no migration. See the [current release audit](../releases/local-preview/README.md).
-
-This preserves the R07 algorithm/audit record. [R08](../product/README.md) extends the engine to `routing-3` with rebuild avoidance, response airport snapshots and strict request validation, and connects it to the actual web workspace. R07 evidence remains associated with its archived source.
-
-R07 · 13 October 2026 · `routing-2`. This backend iteration replaces the legacy itinerary traversal and refines the R06 continuation planner. FastAPI, SQLite, the independent ingestion/updater package and the local admin client remain the deployment boundary. No service or dependency was added. The R06 browser experiment remains a separate fixed fixture.
-
 ## Behavior and limits
 
 The engine finds **schedule-feasible, simple airport paths** through exact dated flight records. It uses scheduled timestamps, excludes cancelled records, keeps provider identities, and checks configured transfer rules. It does not infer ticket protection, immigration, baggage transfer, inventory, published MCT or successful historical passenger connections from those records. Actual timestamps remain facts but are not the time basis for this search.
@@ -82,7 +76,7 @@ Legacy `GET /v1/itineraries` retains its list shape and default fewest-legs rank
 
 Naive/mixed-offset query times now return 422 at the HTTP boundary for flights/routes/itineraries, instead of leaking a Python comparison/reader error. Flight imports reject malformed airport codes and empty provider identities. Existing valid legacy flight rows remain queryable without airport metadata.
 
-The updater initializes the additive catalog/index schema. For an existing installation, run `.venv/bin/python -m admin stats` once before using the new reader. The existing project `var/flights.db` was initialized in this iteration: all six flight records were preserved. No reset/ingestion or provider call was performed. All local DBs and replay/debug JSON remain under ignored `var/`.
+The updater initializes the additive catalog/index schema. For an existing installation, run `.venv/bin/python -m admin stats` once before using the new reader. All local DBs and replay/debug JSON remain under ignored `var/`.
 
 ## Try locally
 
@@ -109,42 +103,15 @@ Swagger can use a separate demo instance:
 FLIGHT_DATABASE_PATH=var/connections-demo.db .venv/bin/uvicorn server.api:app --port 8002
 ```
 
-## Verification and actual iteration
+## Development
 
-The final full suite passes **109 tests**. An independent all-record exhaustive oracle checks 30 synthetic networks under all three rankings (90 ranked cases), including avoidance, cancellation, varying gap bounds and directed city transfers. Results are compared both to pure computation and to SQLite loading, and shuffled input order preserves results/IDs/traces. Twenty additional networks check every complete next-flight option, best suffix and automatic choice against an independent continuation oracle, plus consistency with SQLite. These are bounded synthetic correctness checks, not provider/customer validation.
-
-Targeted regressions cover exact departure/minimum/maximum/horizon endpoints; long flights followed by connections outside the original departure window; a transfer airport reused at a later time; ground-transfer airport cycles; avoiding early traversal/result cutoffs; stale/cancelled/missing choices; row/candidate/trace/option budgets; selected-route retention on a partial search; stable conflicting-identity errors; malformed facts; naive times; 409 legacy refusal; measured-gap 422 errors; no-DB replay; and metadata/flight consistency while another WAL connection commits updates. Existing separate-process WAL and reader/updater dependency checks also pass.
-
-| Revision | Evidence and change |
-|---|---|
-| Preflight | Original 31-test fixture cap assertion expected 2,001 disconnected flights to exhaust the global cap. Targeted loading intentionally changes that behavior. Replaced it with a regression proving disconnected rows do not consume the budget and a separate actual relevant-row cap test. Full suite then passed 32 tests. |
-| Baseline | [103-test record](qa/tests-baseline.json), [benchmark](qa/benchmark-baseline.json), `qa/revisions/baseline/`. Added independent-oracle/reader comparisons and replay. Ranking retained top-k by repeated sorting; suffix comparisons recomputed scores. |
-| Final | [109-test record](qa/tests-final.json), [test output](qa/tests-final.log), [benchmark](qa/benchmark-final.json), `qa/revisions/final/`. Replaced repeated sorting with a bounded heap; cached the current best suffix score; hardened fact identities, enriched selection errors and clarified retained-complete/max-leg messages. All six benchmark cases preserve their baseline routing diagnostics. Both actual CLI search/overnight replay results match the final engine. |
-
-The existing Starlette/httpx deprecation warning is recorded separately from test failures. Local testing used Python 3.14; the existing GitHub workflow targets 3.13 and runs pytest. No remote CI run, push, merge or deployment is claimed.
-
-## Performance measurements
-
-[Synthetic benchmark source](../../scripts/benchmark_routing.py) and both reports retain source hashes and environment. One warm-up precedes three timed repetitions. Timed work includes core calculation (SQLite reading for its case) and JSON serialization; fixture generation/import is excluded. Memory is measured in a separate tracemalloc run. Measurements are local single-request observations, not SLA, concurrent-load, total resident-memory or real-provider guarantees.
-
-| Case | Fixture rows | Checked candidates | Baseline median ms | Final median ms | Final operation peak MiB | Scope |
-|---|---:|---:|---:|---:|---:|---|
-| Direct ranking | 6,000 | 6,000 | 35.89 | 31.79 | 8.74 | Exhaustive; retain 20 results |
-| Dense three-leg schedules | 1,232 | 8,736 | 42.98 | 34.86 | 1.75 | Exhaustive; 8,192 completed paths |
-| Same dense case with candidate budget 100 | 1,232 | 100 | 5.53 | 5.23 | 1.84 | Explicitly partial |
-| Large same-airport time-window decoy set | 8,046 | 496 | 31.65 | 31.94 | 11.65 | Exhaustive; 128,000 per-lookup entries skipped by time |
-| Continuation options | 6,001 | 6,000 | 51.60 | 51.22 | 8.92 | Exhaustive calculation; option response capped at 100 |
-| SQLite with disconnected schedules | 30,064 | 64 | 1.28 | 1.29 | 0.23 | Load only 64 relevant rows; one origin query |
-
-The heap improves top-k asymptotic maintenance; the observed dense/ranking medians decreased in these runs. Fingerprinting/index construction still cost time proportional to the loaded snapshot, so skipping candidates does not make a large supplied snapshot free. Small numerical changes across three samples should not be interpreted as general speedup/regression claims. SQLite's captured `EXPLAIN QUERY PLAN` uses `idx_flights_routing`.
+The Python suite compares both the pure engine and SQLite loading with an independent exhaustive oracle on generated networks. It also covers connection boundaries, cycles, via and next-airport constraints, budget exhaustion, stale selections and concurrent updates.
 
 ```sh
-.venv/bin/python -m pytest -q
-.venv/bin/python scripts/benchmark_routing.py --output var/routing-benchmark.json --iterations 3
+python -m pytest -q
+python scripts/benchmark_routing.py --output var/routing-benchmark.json
 ```
 
-## Extension and next validation
+The benchmark measures synthetic CPU/SQLite workloads; its output stays under ignored `var/`.
 
-Add a rule in the policy layer with a stable reason/context and independent-oracle cases; add a ranking in the typed enum/comparator with tie tests. Keep snapshot loading conservative unless a narrower frontier is proven safe. Do not use result count as a traversal stop or discard a state solely because another path reaches the same airport earlier. Expand replay/engine version when semantics change.
-
-The next evidence needed is representative provider schedules and revisions, query-density distributions, concurrent API load, fairness of capped airport loading, and source-backed transfer assessments. Per-gap stopovers/locks, explicit repeated-airport trips, observed-time queries, physical-movement/codeshare reconciliation, and paged options remain customer-contract extensions. For global/dense networks, compare temporal labels or a proven k-best method against the oracle before replacing enumeration; preserve explained truncation and prefix semantics. Caching, worker concurrency and database changes should follow measured workloads. Independent review and actual production throughput remain unverified.
+Add policy rules and rankings with independent-oracle cases. Keep snapshot loading conservative unless narrower windows are proven safe. Result count must not stop traversal, and an earlier arrival alone does not justify dropping another path. Update the replay engine version when calculation semantics change.

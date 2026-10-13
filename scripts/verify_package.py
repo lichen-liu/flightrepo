@@ -1,82 +1,105 @@
-"""Verify the built wheel's assets and run its API from outside the checkout."""
+"""Install a built wheel and smoke-test it outside the checkout.
+
+Third-party dependencies are reused from the invoking Python environment.
+Application imports must resolve inside the temporary installation.
+"""
 
 import argparse
-import hashlib
 import json
 import os
+import site
 import subprocess
-import sys
+import venv
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
+
+PROBE = """
+import sys
+from pathlib import Path
+import admin.client, core.config, ingestion.updater, server.api
+from fastapi.testclient import TestClient
+
+for module in (admin.client, core.config, ingestion.updater, server.api):
+    assert Path(module.__file__).is_relative_to(Path(sys.prefix)), module.__file__
+with TestClient(server.api.app) as client:
+    assert client.get('/').status_code == 200
+    for asset in Path(server.api.WEB_ROOT).rglob('*'):
+        if asset.is_file():
+            path = asset.relative_to(server.api.WEB_ROOT).as_posix()
+            assert client.get('/assets/' + path).status_code == 200, path
+    assert client.get('/health/ready').status_code == 200
+    assert client.get('/v1/catalog').status_code == 200
+"""
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wheel", type=Path)
-    parser.add_argument("--database", type=Path, default=Path("var/connections-demo.db"))
-    parser.add_argument("--output", type=Path, default=Path("var/package-verification.json"))
+    parser.add_argument(
+        "--database", type=Path, help="optional existing database to probe read-only"
+    )
+    parser.add_argument("--output", type=Path, help="optional JSON report; keep under var/")
     args = parser.parse_args()
+    wheel = args.wheel.resolve()
     root = Path(__file__).resolve().parents[1]
-    verified = []
+    with ZipFile(wheel) as package:
+        for asset in (root / "src").rglob("*"):
+            if asset.is_file() and "__pycache__" not in asset.parts and asset.suffix != ".pyc":
+                name = asset.relative_to(root / "src").as_posix()
+                assert package.read(name) == asset.read_bytes(), (
+                    f"Missing or stale wheel file: {name}"
+                )
     with TemporaryDirectory(prefix="flyji-package-") as directory:
-        unpacked = Path(directory) / "package"
-        with ZipFile(args.wheel) as wheel:
-            for asset in (root / "src").rglob("*"):
-                if asset.is_file() and "__pycache__" not in asset.parts and asset.suffix != ".pyc":
-                    name = str(asset.relative_to(root / "src"))
-                    assert wheel.read(name) == asset.read_bytes(), (
-                        f"Missing or outdated wheel file: {name}"
-                    )
-                    verified.append(name)
-            wheel.extractall(unpacked)
+        environment_path = Path(directory) / "environment"
+        venv.EnvBuilder(with_pip=True).create(environment_path)
+        executable = environment_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         environment = dict(
             os.environ,
-            PYTHONPATH=str(unpacked),
-            FLIGHT_DATABASE_PATH=str(args.database.resolve()),
+            PYTHONPATH="",
+            PYTHONNOUSERSITE="1",
             PYTHONDONTWRITEBYTECODE="1",
+            PIP_NO_INDEX="1",
+            PIP_NO_CACHE_DIR="1",
+            FLIGHT_DATABASE_PATH=str(
+                args.database.resolve() if args.database else Path(directory) / "smoke.db"
+            ),
         )
-        code = """import json,sys
-from pathlib import Path
-import core.config,server.api
-from fastapi.testclient import TestClient
-root=Path(sys.argv[1])
-assert Path(core.config.__file__).is_relative_to(root)
-assert Path(server.api.__file__).is_relative_to(root)
-with TestClient(server.api.app) as client:
-    assert client.get('/').status_code==200
-    assert client.get('/assets/app.mjs').status_code==200
-    assert client.get('/assets/vendor/world-110m.geojson').status_code==200
-    assert client.get('/health/ready').status_code==200
-    result=client.post('/v1/itineraries/search/local',json={
-        'origin':'YYZ','destination':'CDG','departure_date':'2026-10-17',
-        'arrival_by_local':'2026-10-21T23:59','departure_timezone':'America/Toronto',
-        'arrival_timezone':'Europe/Paris','via_airport':'AMS'})
-    assert result.status_code==200,result.text
-    assert result.json()['items'] and result.json()['diagnostics']['exhaustive']
-    assert all(any(f['destination_iata']=='AMS' for f in item['legs']) for item in result.json()['items'])
-print(json.dumps({'imported_from_wheel':True,'working_directory_outside_checkout':True,
-                  'root_assets_readiness_and_local_search_passed':True,'required_via_search_passed':True}))
-"""
-        process = subprocess.run(
-            [sys.executable, "-c", code, str(unpacked)],
+
+        def run(*arguments):
+            subprocess.run(
+                [str(executable), *arguments], cwd=directory, env=environment, check=True
+            )
+
+        run(
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--disable-pip-version-check",
+            "--quiet",
+            str(wheel),
+        )
+        # A nested venv does not inherit the invoking venv's dependencies. Add
+        # those directories after installing the wheel; their editable-import
+        # .pth hooks are not executed. Our application import checks still
+        # require the temporary installation, never the checkout.
+        purelib = subprocess.check_output(
+            [str(executable), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
             cwd=directory,
             env=environment,
             text=True,
-            capture_output=True,
-            check=True,
-        )
-    report = {
-        "wheel": args.wheel.name,
-        "wheel_sha256": hashlib.sha256(args.wheel.read_bytes()).hexdigest(),
-        "verified_package_files": sorted(verified),
-        "installed_api_probe": json.loads(process.stdout),
-        "source_sha256": {
-            "scripts/verify_package.py": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-        },
-    }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+        ).strip()
+        Path(purelib, "smoke-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n")
+        if args.database is None:
+            # Exercise the installed CLI and initialize only a temporary, empty DB.
+            command = environment_path / ("Scripts/flyji.exe" if os.name == "nt" else "bin/flyji")
+            subprocess.run([str(command), "stats"], cwd=directory, env=environment, check=True)
+        run("-c", PROBE)
+    report = {"wheel": wheel.name, "installed_package_probe_passed": True}
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 
 

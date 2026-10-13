@@ -60,7 +60,6 @@ def main():
     }
     assert len(fingerprints) == 1, "a stable fixture produced inconsistent responses"
     timings = sorted(ms for ms, _ in results)
-    source = Path(__file__)
     report = {
         "method": "One warm-up, then concurrent loopback HTTP reads of a twelve-flight demo. Includes transport and JSON parsing. No writer was active. This is not production capacity or provider validation.",
         "python": platform.python_version(),
@@ -74,11 +73,6 @@ def main():
         "failed_requests": 0,
         "query": body,
         "diagnostics": results[0][1]["diagnostics"],
-        "source_sha256": {
-            str(source.relative_to(Path(__file__).resolve().parents[1])): hashlib.sha256(
-                source.read_bytes()
-            ).hexdigest()
-        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

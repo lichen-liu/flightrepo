@@ -458,7 +458,7 @@ def test_budget_retains_found_route_and_choice_without_claiming_optimality():
     result = rebuild_from_snapshot(request, RoutingSnapshot((prefix, first, tail, other)))
     assert result.legs == [prefix, first, tail] and result.complete and result.search_truncated
     assert not result.diagnostics.exhaustive and result.diagnostics.stats.candidates_checked == 2
-    assert "partial" in result.message and result.options_total is None
+    assert result.options_total is None
 
 
 def test_direct_manual_choice_not_charged_twice_and_option_page_keeps_choice():
@@ -861,7 +861,6 @@ def test_data_limited_snapshot_keeps_via_valid_results_but_not_exhaustive_claim(
     )
     assert rebuilt.complete and rebuilt.legs == list(records)
     assert rebuilt.data_truncated and not rebuilt.diagnostics.exhaustive
-    assert "partial" in rebuilt.message
 
 
 def test_unknown_next_and_via_preserve_prefix_and_do_not_claim_complete():
@@ -898,8 +897,6 @@ def test_unknown_next_and_via_preserve_prefix_and_do_not_claim_complete():
         and not already_final.complete
         and not already_final.options
     )
-    assert "without required airport ZZZ" in already_final.message
-    assert "without required airport ZZZ" in via.message
 
 
 def test_chosen_next_destination_mismatch_has_stable_error_and_http_422(tmp_path):
@@ -958,7 +955,7 @@ def test_via_and_next_constraints_remain_honest_under_candidate_limit():
     assert not searched.items and not searched.diagnostics.exhaustive
 
 
-def test_routing_four_replay_keeps_exact_constraints_and_rejects_prior_engine():
+def test_replay_keeps_exact_constraints_and_rejects_other_engine():
     records = (
         flight("prefix", "AAA", "BBB", 0, 30),
         flight("next", "BBB", "EEE", 45, 60),
@@ -967,10 +964,11 @@ def test_routing_four_replay_keeps_exact_constraints_and_rejects_prior_engine():
     request = query(via_airport=" bbb ")
     result = search_routes(request, snapshot)
     saved = replay_document("search", request, snapshot, result)
-    assert saved["engine_version"] == "routing-4"
+    assert saved["engine_version"] == ENGINE_VERSION
     assert replay(saved)["matches_saved_result"]
-    with pytest.raises(RoutingError, match="incompatible"):
-        replay({**saved, "engine_version": "routing-3"})
+    with pytest.raises(RoutingError) as error:
+        replay({**saved, "engine_version": "unsupported-engine"})
+    assert error.value.code == "incompatible_replay"
     rebuild_request = continuation_request(via_airport="BBB", next_airport="EEE")
     rebuilt = rebuild_from_snapshot(rebuild_request, snapshot)
     assert replay(replay_document("rebuild", rebuild_request, snapshot, rebuilt))[

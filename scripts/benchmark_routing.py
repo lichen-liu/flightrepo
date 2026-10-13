@@ -1,7 +1,6 @@
 """Repeatable synthetic CPU/SQLite benchmarks. No network, no normal DB changes."""
 
 import argparse
-import hashlib
 import json
 import platform
 import sqlite3
@@ -12,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.config import LOCAL_DATA_DIR, PROJECT_ROOT
+from core.config import LOCAL_DATA_DIR
 from core.connections import RebuildRequest
 from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
@@ -189,17 +188,6 @@ def main():
                     ),
                 )
             ]
-    files = sorted((PROJECT_ROOT / "src/core/routing").glob("*.py")) + [
-        PROJECT_ROOT / p
-        for p in [
-            "src/core/models.py",
-            "src/core/planning.py",
-            "src/core/connections.py",
-            "src/server/reader.py",
-            "src/core/storage.py",
-            "scripts/benchmark_routing.py",
-        ]
-    ]
     report = {
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "engine_version": ENGINE_VERSION,
@@ -210,10 +198,6 @@ def main():
             "machine": platform.machine(),
         },
         "method": "One warm-up, timed full core/reader call plus JSON serialization; setup/import excluded. Memory is a separate tracemalloc run. Local synthetic single-request measurements, not production latency guarantees.",
-        "source_sha256": {
-            str(p.relative_to(PROJECT_ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in files
-        },
         "sqlite_query_plan": query_plan,
         "cases": cases,
     }

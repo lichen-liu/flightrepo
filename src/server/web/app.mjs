@@ -1,7 +1,6 @@
 import {
   escapeHTML as e,
   ref,
-  sameRef,
   duration,
   stamp,
   localDate,
@@ -684,7 +683,7 @@ $("next-options").addEventListener("click", (event) => {
 $("close-editor").addEventListener("click", () => {
   const index = state.editing;
   closeEditor();
-  $(`legs`).querySelector(`[data-edit="${index}"]`)?.focus();
+  $("legs").querySelector(`[data-edit="${index}"]`)?.focus();
 });
 $("undo").addEventListener("click", () => {
   if (!state.history.length) return;

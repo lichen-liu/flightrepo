@@ -10,8 +10,6 @@ export const ref = (flight) => ({
   provider: flight.provider,
   provider_id: flight.provider_id,
 });
-export const sameRef = (a, b) =>
-  a?.provider === b?.provider && a?.provider_id === b?.provider_id;
 export function duration(minutes) {
   const m = Math.max(0, Math.floor(minutes)),
     days = Math.floor(m / 1440),

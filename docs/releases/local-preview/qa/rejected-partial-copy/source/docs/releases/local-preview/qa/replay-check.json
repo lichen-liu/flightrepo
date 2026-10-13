@@ -1,9 +1,0 @@
-{
-  "passed": true,
-  "engine_version": "routing-4",
-  "via_airport": "AMS",
-  "matches_saved_result": true,
-  "route_count": 5,
-  "method": "Admin constrained search to saved snapshot, then exact replay with FLIGHT_DATABASE_PATH set to a missing file; no database was created or accessed.",
-  "snapshot_sha256": "f76f52e00886574f0a236fd5c95f3a640365beb4ffb95737253f88ad106e0955"
-}

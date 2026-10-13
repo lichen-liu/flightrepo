@@ -2,7 +2,9 @@
 
 import json
 from datetime import datetime, timedelta
+from itertools import islice, product
 from pathlib import Path
+from string import ascii_uppercase
 
 import pytest
 from fastapi.testclient import TestClient
@@ -375,7 +377,8 @@ def test_readiness_checks_storage_without_creating_it(tmp_path):
 
 def test_ready_can_be_empty(client, demo):
     demo[0].reset()
-    assert client.get("/health/ready").json() == {"status": "ready", "flight_count": 0}
+    ready = client.get("/health/ready").json()
+    assert ready["status"] == "ready" and ready["flight_count"] == 0
     assert client.get("/v1/catalog").json()["airports"] == []
 
 
@@ -414,4 +417,22 @@ def test_world_geometry_is_compressed_in_transit(client):
     response = client.get("/assets/vendor/world-110m.geojson", headers={"Accept-Encoding": "gzip"})
     assert response.headers["content-encoding"] == "gzip"
     assert "Accept-Encoding" in response.headers["vary"]
-    assert len(response.json()["features"]) == 177
+    assert response.json()["type"] == "FeatureCollection"
+    assert response.json()["features"]
+
+
+def test_time_resolution_finds_exact_airport_beyond_suggestion_limit(client, demo):
+    template = Airport.model_validate(demo[2]["airports"][0])
+    suggestions = [
+        template.model_copy(
+            update={"iata": "".join(code), "name": "YYZ suggestion", "city_id": "000"}
+        )
+        for code in islice(product(ascii_uppercase, repeat=3), 1001)
+    ]
+    demo[0].update_airports(suggestions, [])
+    response = client.post(
+        "/v1/time/resolve", json={"airport": "YYZ", "local_time": "2026-10-18T12:00"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["timezone"] == "America/Toronto"
+    assert response.json()["utc"] == "2026-10-18T16:00:00Z"

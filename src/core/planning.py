@@ -99,7 +99,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
             return ((), ()) if session.via_satisfied(seen) else None
         if remaining == 0 or not session.reachable(previous.destination_iata, remaining):
             return None
-        key = (flight_key(previous), remaining, tuple(sorted(seen)), session.via_satisfied(seen))
+        key = (flight_key(previous), remaining, tuple(sorted(seen)))
         if key in memo:
             session.stats.memo_hits += 1
             return memo[key]

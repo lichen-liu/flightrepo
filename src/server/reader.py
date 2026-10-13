@@ -205,8 +205,9 @@ class FlightReader(SQLiteConnection):
         fold: int | None = None,
         expected_timezone: str | None = None,
     ) -> dict:
-        matches = self.airports(query=airport, limit=1000)
-        exact = next((a for a in matches if a.iata == airport), None)
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM airports WHERE iata=?", (airport,)).fetchone()
+        exact = Airport.model_validate(dict(row)) if row is not None else None
         if exact is None:
             raise RoutingError(
                 "airport_metadata_missing",
