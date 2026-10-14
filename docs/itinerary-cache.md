@@ -130,7 +130,6 @@ available. Searching again downloaded the required itinerary chunks and returned
 the same six itineraries with aircraft type B738. No payload files remained
 after that zero-retention search; the protected database occupied 122,880 bytes.
 
-ADSB.lol still does not provide the normalized itinerary catalogue this contract
-requires. A real itinerary feed URL, or a validated archive-to-flight-leg builder,
-is needed before connecting real 2025 data. The [ADSB.lol findings](adsblol.md)
-describe that separate data-collection work.
+The [offline ingestion pipeline](ingestion.md) extracts observed ADSB.lol legs
+separately. It needs an observed-time serving contract before it can feed search;
+these records cannot be inserted into this scheduled catalogue format as-is.

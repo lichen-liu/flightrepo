@@ -1,6 +1,6 @@
 from test_adsblol import rules
 
-from ingestion.adsblol.legs import flight_candidates
+from ingestion.adsblol.movements import AirportLookup, reduce_movement
 
 
 def leg_trace():
@@ -23,8 +23,15 @@ def leg_trace():
 AIRPORTS = [("AAA", 40, -70), ("BBB", 41, -71)]
 
 
+def candidates(data, airports, selected):
+    start = 1735689600000000
+    return reduce_movement(
+        data, None, AirportLookup(airports), selected, start, start + 86400000000
+    )[0]
+
+
 def test_complete_leg_keeps_type_and_inferred_time_bounds_separate_from_schedule():
-    (candidate,) = flight_candidates(leg_trace(), AIRPORTS, rules())
+    (candidate,) = candidates(leg_trace(), AIRPORTS, rules())
     assert candidate.origin_iata == "AAA" and candidate.destination_iata == "BBB"
     assert candidate.aircraft_type_code == "A320"
     assert candidate.callsign == "UAL123"
@@ -38,24 +45,24 @@ def test_partial_and_ambiguous_legs_are_excluded():
     for removed in (0, -1):
         data = leg_trace()
         del data["trace"][removed]
-        assert flight_candidates(data, AIRPORTS, rules()) == []
-    assert flight_candidates(leg_trace(), AIRPORTS + [("CCC", 40.001, -70.001)], rules()) == []
+        assert candidates(data, AIRPORTS, rules()) == []
+    assert candidates(leg_trace(), AIRPORTS + [("CCC", 40.001, -70.001)], rules()) == []
 
 
 def test_coverage_gaps_and_stale_points_cannot_complete_a_leg():
     data = leg_trace()
     data["trace"][3][6] = 1
-    assert flight_candidates(data, AIRPORTS, rules()) == []
+    assert candidates(data, AIRPORTS, rules()) == []
     data = leg_trace()
     del data["trace"][3:5]
-    assert flight_candidates(data, AIRPORTS, rules()) == []
+    assert candidates(data, AIRPORTS, rules()) == []
 
 
 def test_no_type_no_airports_and_military_data_do_not_create_candidates():
     data = leg_trace()
     data["t"] = None
-    assert flight_candidates(data, AIRPORTS, rules()) == []
+    assert candidates(data, AIRPORTS, rules()) == []
     data = leg_trace()
     data["dbFlags"] = 1
-    assert flight_candidates(data, AIRPORTS, rules()) == []
-    assert flight_candidates(leg_trace(), [], rules()) == []
+    assert candidates(data, AIRPORTS, rules()) == []
+    assert candidates(leg_trace(), [], rules()) == []

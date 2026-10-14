@@ -1,1 +1,1 @@
-"""ADSB.lol archive acquisition and research probes; no scheduled-flight ingestion."""
+"""Daily ADSB.lol acquisition and compact observed-itinerary extraction."""

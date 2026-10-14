@@ -10,11 +10,45 @@ from pathlib import Path
 
 from core.file_lock import file_mutex
 from core.itinerary_cache import cache_directory, database_bytes, file_bytes, policy
-from ingestion.adsblol.archive import MAX_BUDGET_BYTES, download_manifest, validate_asset, verified
+from ingestion.adsblol.archive import (
+    MAX_BUDGET_BYTES,
+    archive_traces,
+    download_manifest,
+    validate_asset,
+    verified,
+)
 from ingestion.adsblol.movements import AirportLookup, MovementState, reduce_movement
-from ingestion.adsblol.observations import archive_traces
 
-SCHEMA = """
+SOURCE_ROWS = [
+    (
+        "adsblol",
+        "ADSB.lol",
+        "https://www.adsb.lol/docs/open-data/historical/",
+        "ODbL-1.0",
+        "https://opendatacommons.org/licenses/odbl/1-0/",
+    ),
+    (
+        "ourairports",
+        "OurAirports",
+        "https://ourairports.com/data/",
+        "Public Domain",
+        "https://ourairports.com/data/",
+    ),
+]
+
+SOURCE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS extraction_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    license TEXT NOT NULL,
+    license_url TEXT NOT NULL
+);
+"""
+
+SCHEMA = (
+    SOURCE_SCHEMA
+    + """
 CREATE TABLE IF NOT EXISTS itinerary_legs (
     key TEXT PRIMARY KEY,
     departure_date TEXT NOT NULL,
@@ -34,6 +68,14 @@ CREATE TABLE IF NOT EXISTS extraction_config (
     data TEXT NOT NULL
 );
 """
+)
+
+
+def record_sources(connection):
+    connection.execute(SOURCE_SCHEMA)
+    connection.executemany(
+        "INSERT OR REPLACE INTO extraction_sources VALUES (?,?,?,?,?)", SOURCE_ROWS
+    )
 
 
 def canonical(value):
@@ -108,7 +150,8 @@ def _extract_day(
             "filter": {
                 "fixed_wing_types": sorted(rules.fixed_wing_types),
                 "callsign_prefixes": sorted(rules.callsign_prefixes),
-                "owner_operators": sorted(rules.owner_operators),
+                # Preserve the existing v1 config shape; owner names never select legs.
+                "owner_operators": [],
             },
         }
     )
@@ -135,11 +178,20 @@ def _extract_day(
                 if "extraction_days" in tables
                 else None
             )
+            sources = (
+                reader.execute("SELECT * FROM extraction_sources ORDER BY id").fetchall()
+                if "extraction_sources" in tables
+                else []
+            )
         if row is not None:
             if row[0] != selection:
                 raise ValueError("Committed day's archive selection changed")
             receipt = json.loads(row[1])
             cleanup_raw(root, receipt)
+            if sources != SOURCE_ROWS:
+                budget.check(16384)
+                with closing(sqlite3.connect(database)) as writer, writer:
+                    record_sources(writer)
             budget.check()
             return {
                 **receipt,
@@ -185,6 +237,7 @@ def _extract_day(
         counters, seen = Counter(), set()
         with connection:
             connection.execute("BEGIN IMMEDIATE")
+            record_sources(connection)
             connection.execute("INSERT OR IGNORE INTO extraction_config VALUES (1,?)", (config,))
             for data, compressed_bytes in archive_traces(paths):
                 counters["aircraft_members"] += 1

@@ -67,6 +67,9 @@ def test_daily_extraction_keeps_only_itinerary_data_then_removes_raw_and_resumes
     assert data["aircraft_type_code"] == "A320" and data["callsign"] == "UAL123"
     assert {"trace", "icao_hex", "lat", "lon", "departure_scheduled"}.isdisjoint(data)
     assert data["status"] == "inferred_candidate"
+    sources = {row[0]: row for row in rows(tmp_path, "extraction_sources")}
+    assert sources["adsblol"][3] == "ODbL-1.0"
+    assert sources["ourairports"][3] == "Public Domain"
     assert not (tmp_path / "raw" / "2025-01-01" / item["name"]).exists()
     assert not (tmp_path.parent / "outside").exists()
     resumed = extract_day(tmp_path, "2025-01-01", [item], AIRPORTS, rules())
@@ -152,6 +155,16 @@ def test_partial_schema_initialization_can_be_repaired_on_restart(tmp_path):
         )
     receipt, _ = run(tmp_path, date(2025, 1, 1), [leg_trace()])
     assert receipt["counts"]["legs_completed"] == 1
+
+
+def test_existing_dataset_gains_license_metadata_without_redownloading(tmp_path):
+    _, item = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        connection.execute("DROP TABLE extraction_sources")
+    receipt = extract_day(tmp_path, "2025-01-01", [item], AIRPORTS, rules())
+    assert receipt["result"] == "already_committed"
+    assert rows(tmp_path, "extraction_sources") == extraction.SOURCE_ROWS
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
 
 
 def test_cleanup_of_committed_raw_precedes_lowered_budget_check(tmp_path, monkeypatch):

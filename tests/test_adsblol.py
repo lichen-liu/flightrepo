@@ -2,13 +2,17 @@ import gzip
 import io
 import json
 import tarfile
-from datetime import date
 
 import httpx
 import pytest
 
-from ingestion.adsblol.archive import days_in_year, download_manifest, validate_asset
-from ingestion.adsblol.observations import CommercialFilter, summarize_archives, summarize_trace
+from ingestion.adsblol.archive import (
+    archive_traces,
+    days_in_year,
+    download_manifest,
+    validate_asset,
+)
+from ingestion.adsblol.filters import CommercialFilter
 
 
 def rules():
@@ -44,37 +48,6 @@ def trace(**changes):
     }
 
 
-def test_summary_preserves_metadata_but_does_not_invent_a_flight():
-    observation, reason = summarize_trace(trace(), date(2025, 1, 1), rules())
-    assert reason == "retained"
-    assert observation.positions == 2
-    assert observation.aircraft_type_code == "A320"
-    assert observation.callsigns == ["UAL123"]
-    assert observation.classification_evidence == ["callsign_prefix:UAL"]
-    assert "departure_scheduled" not in observation.model_dump()
-
-
-@pytest.mark.parametrize(
-    "changes,reason",
-    [
-        ({"icao": "~a5ea5c"}, "unidentified_address"),
-        ({"t": "R44"}, "type_excluded_or_unknown"),
-        ({"t": None}, "type_excluded_or_unknown"),
-        ({"dbFlags": 1}, "military"),
-        ({"timestamp": 1735862400}, "no_positions_in_day"),
-    ],
-)
-def test_excludes_unneeded_or_unidentified_traces(changes, reason):
-    assert summarize_trace(trace(**changes), date(2025, 1, 1), rules()) == (None, reason)
-
-
-def test_airliner_type_alone_is_not_commercial_evidence():
-    data = trace()
-    for row in data["trace"]:
-        row[8]["flight"] = "N480UA"
-    assert summarize_trace(data, date(2025, 1, 1), rules()) == (None, "commercial_evidence_missing")
-
-
 def test_trace_catalogue_reads_split_archives_without_extracting_members(tmp_path):
     stream = io.BytesIO()
     raw = gzip.compress(json.dumps(trace()).encode())
@@ -89,8 +62,8 @@ def test_trace_catalogue_reads_split_archives_without_extracting_members(tmp_pat
     a, b = tmp_path / "part.aa", tmp_path / "part.ab"
     a.write_bytes(data[:600])
     b.write_bytes(data[600:])
-    observations, stats = summarize_archives([a, b], date(2025, 1, 1), rules())
-    assert len(observations) == 1 and stats["retained"] == 1
+    members = list(archive_traces([a, b]))
+    assert members == [(trace(), len(raw))]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["part.aa", "part.ab"]
 
 

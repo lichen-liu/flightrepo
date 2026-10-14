@@ -40,7 +40,9 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
                               └── internal admin ─┘
 ```
 
-`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns read-only queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, recoverable itinerary downloads, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+
+The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Offline observed itinerary candidates remain separate from the scheduled serving database.
 
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 

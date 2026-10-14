@@ -7,8 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from ingestion.adsblol.extraction import extract_day
+from ingestion.adsblol.filters import CommercialFilter
 from ingestion.adsblol.legs import airport_points
-from ingestion.adsblol.observations import CommercialFilter
 
 
 def main():

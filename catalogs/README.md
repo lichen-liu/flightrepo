@@ -19,7 +19,8 @@ published length and available SHA-256. This file inventory cannot power itinera
 search: the local database must first contain accepted individual flight legs.
 
 `adsblol-extraction-pilot.json` records the complete December 30 offline extraction
-check: 2,138 conservative itinerary-leg candidates in a 2.33 MiB SQLite file,
+check: 2,138 conservative itinerary-leg candidates in a 2.34 MiB SQLite file,
 about 504 bytes per leg including its identity index. All raw daily parts were
 removed after commit. This measures storage; it does not establish complete
 airline coverage, verified schedules or serving integration.
+See the [ingestion reference](../docs/ingestion.md) for sources, licences and usage.

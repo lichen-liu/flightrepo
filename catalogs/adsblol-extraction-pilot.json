@@ -26,7 +26,7 @@
     "processed": 22898,
     "raw_member_bytes": 2386756356
   },
-  "database_bytes": 2445312,
+  "database_bytes": 2453504,
   "itinerary_rows": 2138,
   "itinerary_table_and_identity_index_bytes": 1077248,
   "bytes_per_itinerary_leg_including_identity_index": 503.8578110383536,
@@ -78,12 +78,37 @@
   "table_bytes": {
     "extraction_config": 122880,
     "extraction_days": 4096,
+    "extraction_sources": 4096,
     "itinerary_legs": 978944,
     "pending_movements": 1150976,
     "sqlite_autoindex_extraction_days_1": 4096,
+    "sqlite_autoindex_extraction_sources_1": 4096,
     "sqlite_autoindex_itinerary_legs_1": 98304,
     "sqlite_autoindex_pending_movements_1": 81920,
     "sqlite_schema": 4096
   },
-  "serving_connected": false
+  "serving_connected": false,
+  "data_sources": [
+    {
+      "id": "adsblol",
+      "name": "ADSB.lol",
+      "source_url": "https://www.adsb.lol/docs/open-data/historical/",
+      "license": "ODbL-1.0",
+      "license_url": "https://opendatacommons.org/licenses/odbl/1-0/"
+    },
+    {
+      "id": "ourairports",
+      "name": "OurAirports",
+      "source_url": "https://ourairports.com/data/",
+      "license": "Public Domain",
+      "license_url": "https://ourairports.com/data/"
+    }
+  ],
+  "earlier_aircraft_day_filter_probe": {
+    "note": "Historical research measurement, separate from the current itinerary extractor; aircraft-days are not flight legs",
+    "aircraft_days": 13241,
+    "compressed_trace_bytes": 1042062536,
+    "position_samples": 36796571,
+    "compact_summary_bytes": 9394416
+  }
 }

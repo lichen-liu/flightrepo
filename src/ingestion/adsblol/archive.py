@@ -1,17 +1,62 @@
 """Resumable downloads of the preferred full daily ADSB.lol archive copies."""
 
+import gzip
 import hashlib
+import io
 import json
 import re
 import shutil
+import tarfile
+from contextlib import ExitStack
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
-RESERVE_BYTES = 10 * 2**30
+RESERVE_BYTES = 2**30
 MAX_BUDGET_BYTES = 20 * 2**30
+MAX_TRACE_BYTES = 32 * 1024**2
+
+
+class JoinedFiles:
+    """Read split tar parts as one byte stream without extracting to disk."""
+
+    def __init__(self, files):
+        self.files = iter(files)
+        self.current = next(self.files, None)
+
+    def read(self, size):
+        chunks = []
+        while size and self.current is not None:
+            chunk = self.current.read(size)
+            if not chunk:
+                self.current = next(self.files, None)
+                continue
+            chunks.append(chunk)
+            size -= len(chunk)
+        return b"".join(chunks)
+
+
+def archive_traces(paths):
+    """Yield one bounded aircraft member at a time; never extract tar paths to disk."""
+    with ExitStack() as stack:
+        files = [stack.enter_context(path.open("rb")) for path in paths]
+        archive = stack.enter_context(tarfile.open(fileobj=JoinedFiles(files), mode="r|"))
+        for member in archive:
+            if not member.isfile() or not re.fullmatch(
+                r"(?:\./)?traces/[0-9a-f]{2}/trace_full_[~0-9a-f]+\.json", member.name
+            ):
+                continue
+            if member.size > MAX_TRACE_BYTES:
+                raise ValueError("Trace exceeds compressed size limit; day not committed")
+            with archive.extractfile(member) as source:
+                compressed = source.read()
+            with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
+                raw = source.read(MAX_TRACE_BYTES + 1)
+            if len(raw) > MAX_TRACE_BYTES:
+                raise ValueError("Trace exceeds decompressed size limit; day not committed")
+            yield json.loads(raw), len(compressed)
 
 
 def days_in_year(year):
@@ -138,7 +183,7 @@ def download_asset(client, item, output, *, before_write=None):
                         raise ValueError("Download exceeds published asset size")
                     if shutil.disk_usage(output).free < len(chunk) + RESERVE_BYTES:
                         raise OSError(
-                            "Download stopped to preserve 10 GiB free; partial file is resumable"
+                            "Download stopped to preserve 1 GiB free; partial file is resumable"
                         )
                     target.write(chunk)
                     offset += len(chunk)
@@ -223,7 +268,7 @@ def download_manifest(
     free = shutil.disk_usage(output).free
     if remaining + RESERVE_BYTES > free:
         raise OSError(
-            f"Archive needs {remaining / 2**30:.1f} GiB plus 10 GiB reserve; destination has {free / 2**30:.1f} GiB free"
+            f"Archive needs {remaining / 2**30:.1f} GiB plus 1 GiB reserve; destination has {free / 2**30:.1f} GiB free"
         )
     (output / "download-selection.json").write_text(json.dumps(manifest, indent=2) + "\n")
     owns = client is None
