@@ -264,7 +264,14 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
 
     def fetch(path, payload=None):
         body = json.dumps(payload).encode() if payload is not None else None
-        request = Request(base_url + path, data=body, headers={"Content-Type": "application/json"})
+        request = Request(
+            base_url + path,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Flyji-Deployment-Check/1.0",
+            },
+        )
         with opener.open(request, timeout=10) as response:
             if origin(response.geturl()) != expected_origin:
                 raise ValueError("The response is not from the configured Flyji origin.")
