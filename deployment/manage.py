@@ -27,7 +27,7 @@ LABELS = {"server": "fyi.boboji.flyji.server", "tunnel": "fyi.boboji.flyji.tunne
 
 
 def runtime_root() -> Path:
-    root = Path(os.environ.get("FLYJI_RUNTIME_DIR", "~/Library/Application Support/Flyji"))
+    root = Path(os.environ.get("FLYJI_RUNTIME_DIR", "~/Library/Application Support/fyi.boboji.fly"))
     root = root.expanduser()
     if not root.is_absolute():
         raise ValueError("FLYJI_RUNTIME_DIR must be an absolute path.")

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-RUNTIME_ROOT = Path.home() / "Library" / "Application Support" / "Flyji"
+RUNTIME_ROOT = Path.home() / "Library" / "Application Support" / "fyi.boboji.fly"
 MAX_REQUEST_BODY = 128_000
 
 
