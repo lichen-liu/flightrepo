@@ -13,7 +13,6 @@ from starlette.middleware.gzip import GZipMiddleware
 from core.config import get_settings
 from core.connections import Airport, RebuildRequest, RebuiltPlan
 from core.itineraries import build_itineraries
-from core.itinerary_cache import ItineraryCache, ItinerarySourceError
 from core.models import FlightRecord, Itinerary, RouteSummary
 from core.routing.models import (
     IncompleteSearchError,
@@ -77,27 +76,10 @@ async def storage_error(request: Request, error: sqlite3.Error):
     )
 
 
-@app.exception_handler(ItinerarySourceError)
-async def itinerary_source_error(request: Request, error: ItinerarySourceError):
-    logging.getLogger(__name__).warning("Itinerary source unavailable: %s", error)
-    return JSONResponse(
-        status_code=503,
-        content={
-            "detail": {
-                "code": "itinerary_source_unavailable",
-                "message": "Required itinerary data could not be loaded. Retry when the source is available.",
-            }
-        },
-    )
-
-
 @lru_cache
 def get_store() -> FlightReader:
     settings = get_settings()
-    return FlightReader(
-        settings.database_path,
-        cache=ItineraryCache(settings.database_path, source_url=settings.itinerary_catalog_url),
-    )
+    return FlightReader(settings.database_path)
 
 
 @app.get("/health")
@@ -111,7 +93,6 @@ def readiness(store: FlightReader = Depends(get_store)):
     return {
         "status": "ready",
         "flight_count": catalog.dataset.flight_count,
-        "catalogue_flight_count": catalog.dataset.catalogue_flight_count,
         "schema_contract": "flight-legs",
         "schema_version": 1,
         "time_basis": catalog.dataset.default_time_basis,

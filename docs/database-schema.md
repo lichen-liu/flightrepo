@@ -28,12 +28,13 @@ never synthesize a flight number, schedule, airport timezone or city membership.
 | `data_sources` | Provider codes, attribution and licence references |
 | `ingestion_batches` | Input window, pipeline/config identity, input URLs/hashes, commit counts and diagnostics per attempt |
 | `flight_tombstones` | Durable deletion intent across repeated imports/downloads |
-| `schema_metadata` | Versioned contract for startup and migration checks |
+| `schema_metadata` | Versioned contract for startup checks |
+| `database_policy` | Persisted live database disk quota |
+| `ingestion_profiles` | Configured source/input paths for repeatable admin jobs |
 | `searchable_legs` (view) | Common departure/arrival intervals, filtered by explicit time basis |
 
-The DDL covers the shared facts. The runtime also retains `ingestion_profiles`, extraction
-config/day receipts/boundary state, and cache policy/catalogue/LRU/locator tables
-for resumability and storage. Compatibility `flights` and `itinerary_legs`
+The DDL covers the shared facts, quota and admin profiles. The extractor also
+retains config/day receipts/boundary state for resumability. Compatibility `flights` and `itinerary_legs`
 views project the same typed facts; they are not separate flight stores. Boundary summaries contain compact airport/time evidence,
 not tracks; successful receipts remain available after raw deletion. A later
 cleanup can retire redundant metadata only after compatibility is demonstrated.
@@ -52,7 +53,7 @@ transaction and reports the conflict. `locally_modified_us` protects manual
 overrides from subsequent ingestion. Edits compare reviewed facts under an
 immediate transaction, and the stored revision tracks changes.
 Delete writes a tombstone in the same transaction as removing the leg. Only an
-explicit restore clears it. The view also hides any tombstoned cached row.
+explicit restore clears it. The shared flight view hides tombstoned identities.
 
 Deduplication is guaranteed **within a source identity**. Callsign plus airport
 pair plus day is insufficient to merge different providers or repeated daily
@@ -120,7 +121,7 @@ Overview separates stored leg count, searchable count by basis, completed input
 days, excluded/rejected units, unresolved boundaries, missing metadata and last
 successful ingestion. Refresh time is distinct from flight date. Coverage is
 partial/unknown unless measured against a trusted reference; receipts alone do
-not establish completeness. A no-data response differs from download failure.
+not establish completeness. A no-data response differs from a failed ingestion attempt.
 
 Use SQLite WAL and short read snapshots. Parsing/downloading takes place outside
 the write transaction; one day's leg upserts, airport stubs, boundary changes,
@@ -136,41 +137,24 @@ empty time fields cost only SQLite record-header space. Keep JSON for small
 variable diagnostics/configuration, not searchable leg payloads. Two partial
 indexes per time basis cover origin/time routing and global date windows; an
 observed-only dataset populates only two of those six indexes. The primary source
-identity index is needed for deduplication and lookup. These SQL indexes are
-distinct from a downloadable catalogue of URLs.
+identity index is needed for deduplication and lookup. They serve local queries;
+no downloadable itinerary catalogue is required.
 
-The [disposable validation report](database-schema-validation.json) copied
-**1,324 already extracted legs** without changing identity or time precision.
-Repeating their field distribution with fresh keys produced a 132,400-row size
-probe: **244 bytes/leg** for the proposed typed table, identity index and two
-observed-time query indexes, versus **497 bytes/leg** for the existing JSON table
-and identity index. Both databases were compacted before measurement. This is a
-storage experiment, not additional real flights or a complete ingestion budget;
-receipts, boundaries, airports, backups, WAL and daily working inputs cost extra.
-Scheduled/actual-rich records will also be larger.
+A compacted typed-fact size probe measured about 244 bytes/leg, including source
+identity and two observed-time indexes, versus 497 bytes/leg with per-leg JSON.
+This excludes receipts, boundary state, airports, diagnostics and WAL, so it is
+not a whole-database capacity claim. Scheduled/actual-rich records can be larger.
 
-Constraint probes rejected duplicate identities, invalid endpoints/types/time
-bounds and missing actual-event semantics. Query plans used the intended
-origin/window and global-window indexes; a two-connection WAL probe verified
-old-snapshot visibility during a write and new records after the read restarted.
-
-The 20 GiB quota is stored in SQLite (`itinerary_cache_policy.quota_bytes`) and
-includes database/WAL/SHM and cached itinerary chunks. Disposable daily raw inputs
-and staging use an independent `--budget-gib` working-space limit and are excluded
-from database quota accounting, including when stored in the same directory.
-Keep the existing live admin policy and next-IO LRU enforcement. Retire only
-recoverable downloads. Extracted legs, edits, tombstones, receipts and boundary
-state are durable; raw upstream archives are not a cheap per-leg fetch service.
-If protected facts exceed a lowered quota, expose the excess and refuse new
-downloads/writes that need space while continuing reads. Do not erase the only
-copy of itinerary data. Noncontiguous dates remain supported; no annual raw
-archive or per-flight position cache is needed.
-
-For an optional normalized HTTP source, cached chunks must implement this same
-versioned leg contract. Shared reader methods merge durable rows and downloaded
-rows, respecting local overrides and tombstones, for **every** consumer. Keep
-simple chunk URL/hash/window metadata; ADSB.lol raw archive URLs do not supply
-on-demand itineraries.
+The 20 GiB quota is stored in SQLite (`database_policy.quota_bytes`) and covers
+only the database and WAL/SHM. Raw daily inputs and staging have an independent
+`--budget-gib` working-space limit, even inside the same directory. Admin's
+`storage quota` changes policy live; ingestion checks it before downloading,
+during parsing and before committing pending page growth. Reads remain available
+if policy is lowered below usage, and new ingestion pauses. Extracted legs,
+manual edits, tombstones, receipts and boundary state are protected: no LRU or
+background deletion can erase the sole copy. SQLite WAL/readers can cause a
+transient physical overage; later IO rechecks it. Noncontiguous ingestion remains
+supported without retaining annual raw archives or per-flight position files.
 
 ## Initialization and serving
 
@@ -186,8 +170,8 @@ replacing the target with a freshly initialized database. Do not copy old flight
 facts, tombstones, batches, day receipts, configuration or boundary summaries:
 receipts would otherwise skip days and boundary state could join old evidence.
 Initialize the shared runtime and extraction schema, persist the chosen quota,
-disable any normalized HTTP source, and verify integrity/foreign keys and zero
-data counts before restarting. The archive manifest, airport CSV and filter are
+verify integrity/foreign keys and zero data counts before restarting. The archive
+manifest, airport CSV and filter are
 inputs, not database state, and may be reused. Point every consumer at the same
 target. Clear aborted raw/staging files, then restart the requested range from
 its first day; each day's fresh commit becomes visible immediately.
@@ -205,8 +189,6 @@ use the same preference. Lookup and JSON export retain every available kind of
 evidence, including partial facts that cannot yet participate in routing. The
 frontend offers the three modes, labels callsigns and inferred intervals, selects
 UTC explicitly when no timezone metadata exists, and shows source/licence notices.
-Version-1 normalized HTTP catalogues remain valid for schedules; version 2 also
-supports observed/actual chunks using the same typed serving contract.
 
 Raw parsing writes disposable daily staging outside the main database's write
 transaction. Admin quota changes can commit while this parser runs. Only the
@@ -217,7 +199,7 @@ legs. Lowering quota during parsing is rechecked before committing the day.
 
 `tests/test_shared_flight_database.py` exercises the complete daily handoff,
 API/calendar/routing/rebuild/replay/export/admin, edit/delete protection, failed-day
-receipts, partial records, normalized observed downloads, interval connection
+receipts, partial records, interval connection
 limits and a separate admin writer changing quota during parsing. Scheduled
 routing, interactive admin, package and browser regression suites cover the
 existing workflows.

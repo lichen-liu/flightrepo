@@ -10,14 +10,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.disk_quota import database_bytes, file_bytes, policy
 from core.file_lock import file_mutex
-from core.itinerary_cache import (
-    cache_directory,
-    enforce_quota,
-    file_bytes,
-    policy,
-    usage_bytes,
-)
 from core.models import FlightRecord
 from core.storage import SCHEMA as SERVING_SCHEMA
 from core.storage import store_flight, utc_us
@@ -276,7 +270,7 @@ class ExtractionBudget:
         return self.limit
 
     def database_ceiling(self):
-        state = policy(self.policy_db or self.database, include_catalog=False)
+        state = policy(self.policy_db or self.database)
         if self.policy_db and state is None:
             raise ValueError("Initialize the admin policy database before using --policy-db")
         return state["quota_bytes"] if state else None
@@ -291,18 +285,13 @@ class ExtractionBudget:
             for path in databases
             for item in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"))
         }
-        caches = [cache_directory(path) for path in databases]
-        return sum(
-            file_bytes(path)
-            for path in self.root.rglob("*")
-            if path not in excluded and not any(path.is_relative_to(cache) for cache in caches)
-        )
+        return sum(file_bytes(path) for path in self.root.rglob("*") if path not in excluded)
 
     def check_database(self, connection=None):
         limit = self.database_ceiling()
         if limit is None:
             return
-        used = sum(usage_bytes(self.database))
+        used = database_bytes(self.database)
         if connection is not None:
             # Pending pages may still be in SQLite's memory cache. Include logical
             # growth before commit so an oversized day rolls back, rather than
@@ -527,7 +516,6 @@ def _extract_day(
             receipt = None
     else:
         receipt = None
-    enforce_quota(database)
     budget.check(1024**2)
     database.parent.mkdir(parents=True, exist_ok=True)
     with (
@@ -621,7 +609,6 @@ def _extract_day(
         counters["candidate_records"] = counters["records_inserted"]
         counters["records_inserted"] = counters["records_already_present"] = 0
         diagnostics.phase = "prepare_commit"
-        enforce_quota(database)
         budget.check(1024**2)
         with connection:
             connection.execute("BEGIN IMMEDIATE")

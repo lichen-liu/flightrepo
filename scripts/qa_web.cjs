@@ -638,14 +638,14 @@ check(
     await page
       .getByRole("button", { name: "Fit journey", exact: true })
       .click();
-    await page.getByLabel("Schedule time", { exact: false }).fill("500");
+    await page.getByRole("slider", { name: /^Journey time/ }).fill("500");
     const cursor = await page
-      .getByLabel("Schedule time", { exact: false })
+      .getByRole("slider", { name: /^Journey time/ })
       .inputValue();
     await page.getByLabel("Leg times").selectOption("UTC");
     assert.deepEqual(identity((await exported(page)).selection.legs), before);
     assert.equal(
-      await page.getByLabel("Schedule time", { exact: false }).inputValue(),
+      await page.getByRole("slider", { name: /^Journey time/ }).inputValue(),
       cursor,
     );
   },

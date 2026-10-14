@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FLIGHT_", env_file=".env", extra="ignore")
 
     database_path: Path = LOCAL_DATA_DIR / "flights.db"
-    itinerary_catalog_url: str | None = None
     provider_api_key: str = ""
     provider_base_url: str = "https://aerodatabox.p.rapidapi.com"
     provider_host: str = "aerodatabox.p.rapidapi.com"

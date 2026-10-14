@@ -8,7 +8,7 @@ from pathlib import Path
 
 from admin.management import ask
 from core.config import PROJECT_ROOT
-from core.itinerary_cache import control
+from core.disk_quota import control
 from core.models import IngestRequest
 from ingestion.adsblol.filters import CommercialFilter
 from ingestion.adsblol.legs import airport_points
@@ -111,7 +111,6 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             "manifest",
             args.manifest,
             "Archive manifest JSON",
-            PROJECT_ROOT / "catalogs/adsblol-2025.json",
         )
         field("airport_catalog", args.airport_catalog, "Airport CSV snapshot")
         field(

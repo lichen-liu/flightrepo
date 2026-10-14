@@ -10,13 +10,12 @@ from test_adsblol_legs import leg_trace
 
 from admin import client as admin
 from core.connections import RebuildRequest
-from core.itinerary_cache import ItineraryCache, set_quota, set_source
+from core.disk_quota import set_quota
 from core.models import FlightRecord
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot
-from ingestion.catalog import write_itinerary_catalog
 from ingestion.updater import FlightUpdater
 from server.api import app, get_store
 from server.reader import FlightReader
@@ -185,28 +184,6 @@ def test_failed_day_has_durable_diagnostics_without_partial_facts(tmp_path):
         ).fetchone()
         assert state == "failed" and applied == 0 and error
         assert json.loads(raw)["version"] == 1
-
-
-def test_observed_catalogue_downloads_and_searches_same_intervals(tmp_path):
-    import httpx
-
-    record = observed("one", "AAA", "BBB", 60, 120)
-    directory = tmp_path / "source"
-    catalog = write_itinerary_catalog([record], [], [], directory, "https://itineraries.test")
-    assert catalog.format_version == 2 and catalog.chunks[0].time_basis == "observed"
-
-    def respond(request):
-        return httpx.Response(
-            200, content=(directory / request.url.path.removeprefix("/")).read_bytes()
-        )
-
-    updater = FlightUpdater(tmp_path / "remote.db")
-    updater.initialize()
-    set_source(updater.path, "https://itineraries.test/catalog.json")
-    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
-        reader = FlightReader(updater.path, cache=ItineraryCache(updater.path, client=transport))
-        assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
-        assert reader.search_itineraries(query(time_basis="observed")).items[0].legs == [record]
 
 
 @pytest.mark.parametrize("quota,committed", [(100 * 1024**2, True), (0, False)])

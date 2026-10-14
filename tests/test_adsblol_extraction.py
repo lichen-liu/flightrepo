@@ -12,7 +12,7 @@ import pytest
 from test_adsblol import asset, rules
 from test_adsblol_legs import AIRPORTS, leg_trace
 
-from core.itinerary_cache import database_bytes, set_quota
+from core.disk_quota import database_bytes, set_quota
 from ingestion.adsblol import extraction
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.movements import AirportLookup, reduce_movement

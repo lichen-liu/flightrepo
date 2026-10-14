@@ -178,7 +178,6 @@ class DatasetEvidence(BaseModel):
     oldest_fact_refresh: datetime | None
     newest_fact_refresh: datetime | None
     providers: list[str]
-    catalogue_flight_count: int = 0
     coverage: Literal["unknown"] = "unknown"
     time_bases: dict[str, int] = Field(default_factory=dict)
     default_time_basis: TimeBasis = "scheduled"

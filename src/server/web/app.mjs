@@ -505,8 +505,6 @@ function renderEvidence() {
         : "None",
     ],
   ];
-  if (data.catalogue_flight_count)
-    entries.push(["Catalogue records", String(data.catalogue_flight_count)]);
   if (d)
     entries.push(
       ["Engine", d.engine_version],
@@ -979,11 +977,9 @@ async function loadCatalog() {
       const demo =
         catalog.dataset.providers.length === 1 &&
         catalog.dataset.providers[0] === "demo";
-      const hasFlights = catalog.dataset.flight_count || catalog.dataset.catalogue_flight_count;
+      const hasFlights = catalog.dataset.flight_count;
       $("dataset-tag").textContent =
-        catalog.dataset.catalogue_flight_count
-          ? `Catalogue schedules · ${catalog.dataset.catalogue_flight_count} records · ${catalog.dataset.flight_count} local`
-          : `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} records`;
+        `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} records`;
       $("status").textContent = hasFlights
         ? catalog.dataset.default_time_basis === "observed" ? "Historical observations with inferred time bounds; coverage is partial." : "Dates are based on the imported flight records."
         : "No flight records loaded. Import data with the internal client to begin.";

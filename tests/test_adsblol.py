@@ -8,6 +8,7 @@ import pytest
 
 from ingestion.adsblol.archive import (
     archive_traces,
+    build_manifest,
     days_in_year,
     download_manifest,
     validate_asset,
@@ -48,7 +49,7 @@ def trace(**changes):
     }
 
 
-def test_trace_catalogue_reads_split_archives_without_extracting_members(tmp_path):
+def test_reads_split_archives_without_extracting_members(tmp_path):
     stream = io.BytesIO()
     raw = gzip.compress(json.dumps(trace()).encode())
     with tarfile.open(fileobj=stream, mode="w") as archive:
@@ -103,18 +104,23 @@ def test_budget_refuses_full_year_before_any_network_or_disk_writes(tmp_path):
         download_manifest({"assets": []}, tmp_path / "raw", budget_bytes=21 * 2**30)
 
 
-def test_published_year_inventory_covers_all_days_and_handles_year_boundary():
-    from pathlib import Path
-
-    manifest = json.loads((Path(__file__).parents[1] / "catalogs/adsblol-2025.json").read_text())
-    assert {item["date"] for item in manifest["assets"]} == {str(day) for day in days_in_year(2025)}
+def test_manifest_covers_selected_year_and_next_repository_boundary():
+    urls, releases = [], []
+    for day in days_in_year(2023):
+        repository_year = 2024 if str(day) == "2023-12-31" else 2023
+        name = f"v{day:%Y.%m.%d}-planes-readsb-prod-0.tar"
+        url = f"https://github.com/adsblol/globe_history_{repository_year}/releases/download/v{day:%Y.%m.%d}-planes-readsb-prod-0/{name}"
+        urls.append(url)
+        releases.append({"assets": [{"browser_download_url": url, "name": name, "size": 100}]})
+    manifest = build_manifest(2023, ["\n".join(urls)], releases)
+    assert {item["date"] for item in manifest["assets"]} == {str(day) for day in days_in_year(2023)}
     assert manifest["bytes"] == sum(item["bytes"] for item in manifest["assets"])
     for item in manifest["assets"]:
         validate_asset(item)
     assert all(
-        "globe_history_2026/" in item["url"]
+        "globe_history_2024/" in item["url"]
         for item in manifest["assets"]
-        if item["date"] == "2025-12-31"
+        if item["date"] == "2023-12-31"
     )
 
 

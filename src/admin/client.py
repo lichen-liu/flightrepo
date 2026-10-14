@@ -26,7 +26,7 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
-from core.itinerary_cache import cache_status, policy, set_quota, set_source
+from core.disk_quota import policy, set_quota, storage_status
 from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
@@ -166,10 +166,6 @@ def print_overview(summary):
         f"Transfer rules: {summary['transfers']:,}"
     )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
-    if summary.get("catalogue_chunks"):
-        print(
-            f"Catalogue flight records: {summary['catalogue_flights']:,}   Chunks: {summary['catalogue_chunks']:,} (downloaded on demand)"
-        )
     for label, first, last in (
         ("Departures (UTC)", "first_departure", "last_departure"),
         ("Fetched (UTC)", "oldest_fetch", "latest_fetch"),
@@ -223,21 +219,13 @@ def parser():
     overview.add_argument("--json", action="store_true", help="print structured JSON")
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
     commands.add_parser("create-airport", help="enter airport metadata, preview and save")
-    cache = commands.add_parser(
-        "cache", help="itinerary download source, disk usage and live quota"
-    )
-    cache_actions = cache.add_subparsers(dest="cache_action", required=True)
-    cache_actions.add_parser("status", help="check quota and show local/cached disk usage")
-    quota = cache_actions.add_parser(
-        "quota", help="show or change quota; cleanup waits for next data IO"
+    storage = commands.add_parser("storage", help="database disk usage and live quota")
+    actions = storage.add_subparsers(dest="storage_action", required=True)
+    actions.add_parser("status", help="show database/WAL/SHM disk usage and quota")
+    quota = actions.add_parser(
+        "quota", help="show or change database quota; applied on next ingestion IO"
     )
     quota.add_argument("size", nargs="?", type=disk_quota, default=argparse.SUPPRESS)
-    source = cache_actions.add_parser(
-        "source", help="show or select a normalized itinerary catalogue URL"
-    )
-    source.add_argument("url", nargs="?")
-    source.add_argument("--off", action="store_true", help="disable on-demand downloading")
-    cache_actions.add_parser("refresh", help="reload source catalogue on next data access")
 
     flights = commands.add_parser("flights", help="browse flight records with optional filters")
     flights.add_argument("--origin", type=airport_code)
@@ -332,7 +320,7 @@ def parser():
 
     maintenance = commands.add_parser("maintenance", help="initialize schema or clear local data")
     operations = maintenance.add_subparsers(dest="maintenance_action", required=True)
-    operations.add_parser("init", help="explicitly initialize or upgrade the Flyji schema")
+    operations.add_parser("init", help="explicitly initialize the Flyji schema")
     clear = operations.add_parser(
         "clear-data", help="delete all flights, airports and transfers; keep schema"
     )
@@ -375,7 +363,7 @@ def parser():
     ingest.add_argument(
         "--budget-gib",
         type=float,
-        help="daily raw/staging working-space budget; separate from cache quota",
+        help="daily raw/staging working-space budget; separate from storage quota",
     )
     ingest.add_argument(
         "--refresh-diagnostics",
@@ -447,39 +435,17 @@ def run(arguments, *, database_path=None, interactive=False):
         create_route(path)
     elif args.command == "create-airport":
         create_airport(path, output)
-    elif args.command == "cache":
-        if args.cache_action == "status":
-            output(cache_status(path))
-        elif args.cache_action == "quota":
-            if hasattr(args, "size"):
-                set_quota(path, args.size)
-                output({"quota_bytes": args.size, "retirement": "next database IO"})
-            else:
-                state = policy(path)
-                if state is None:
-                    raise ValueError("Initialize with maintenance init first")
-                output({"quota_bytes": state["quota_bytes"]})
-        elif args.cache_action == "source":
-            if args.off and args.url:
-                raise ValueError("Use a URL or --off")
-            if args.off or args.url:
-                set_source(path, "" if args.off else args.url)
-            state = policy(path)
-            if state is None:
-                raise ValueError("Initialize with maintenance init first")
-            output(
-                {
-                    "source_url": state["source_url"]
-                    if state["source_url"] is not None
-                    else get_settings().itinerary_catalog_url or state["catalog_url"]
-                }
-            )
+    elif args.command == "storage":
+        if args.storage_action == "status":
+            output(storage_status(path))
+        elif hasattr(args, "size"):
+            set_quota(path, args.size)
+            output({"quota_bytes": args.size, "applies": "next ingestion IO"})
         else:
             state = policy(path)
             if state is None:
                 raise ValueError("Initialize with maintenance init first")
-            set_source(path, state["source_url"])
-            output({"catalogue_refresh": "next database access"})
+            output({"quota_bytes": state["quota_bytes"]})
     elif args.command == "overview":
         summary = FlightReader(path).overview()
         output(summary) if args.json else print_overview(summary)

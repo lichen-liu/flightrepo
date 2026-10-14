@@ -321,7 +321,7 @@ export function drawTimeline(container, legs, cursor) {
     .attr("role", "img")
     .attr(
       "aria-label",
-      `UTC schedule from ${stamp(start)} to ${stamp(end)}, including flight and connection durations.`,
+      `UTC itinerary times from ${stamp(start)} to ${stamp(end)}, including flight and connection durations.`,
     );
   for (let i = 0; i < legs.length; i++) {
     const f = legs[i],

@@ -28,7 +28,7 @@ switching; failure keeps the old selection. `db PATH --create` explicitly
 initializes the Flyji schema and selects it. A command inside the shell can use
 `--db PATH COMMAND` to target another file without changing the shell selection.
 
-`maintenance init` explicitly initializes or upgrades the schema at the selected
+`maintenance init` explicitly initializes the schema at the selected
 path, including parent directories. It leaves existing records intact. Reads,
 exports, and `overview` never create a missing file or modify a schema. Flight
 management and routing require the Flyji schema; `inspect` works with any SQLite
@@ -36,11 +36,12 @@ schema.
 
 ## Inspect stored facts
 
-`cache source URL` configures normalized itinerary downloads inside the backend.
-`cache quota 20GiB` changes the on-disk quota live, including from another shell;
-retirement waits until the next database IO. `cache status` checks usage and LRU
-retirement. `cache quota off` removes the ceiling; `cache source --off` disables
-downloads. See [on-demand itinerary storage](itinerary-cache.md) for details.
+`storage quota 20GiB` changes the database-owned quota live, including from
+another shell. `storage quota` displays it; `storage quota off` disables the
+ceiling. `storage status` shows database/WAL/SHM bytes and any excess. Raw archives
+and daily staging have a separate working-space budget. Ingestion rechecks policy
+on its next storage boundary; lowering it preserves completed facts and pauses
+further ingestion when over quota. There is no serving-side download cache.
 
 ```text
 flyji> overview
@@ -151,8 +152,8 @@ admin database. Settings persist in that database. `ingest`
 without date flags prompts for a range, suggesting three days; each job is limited
 to `FLIGHT_MAX_QUERY_DAYS` (31 by default) and returns to the shell when finished.
 Use `help ingest` for equivalent flags. `--budget-gib` (at most 20 GiB) limits
-daily raw/staging working space only. The persisted live `cache quota` separately
-limits the database, WAL/SHM and normalized itinerary cache; it excludes raw inputs
+daily raw/staging working space only. The persisted live `storage quota` separately
+limits the database and WAL/SHM; it excludes raw inputs
 and staging. Total disk space needs room for both limits. Extraction rechecks
 database policy before committing a day, so another admin shell can adjust it
 during parsing. No reset or restart is required for a quota change.
