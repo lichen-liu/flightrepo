@@ -13,6 +13,7 @@ import {
   airportListSuggestions,
 } from "./format.mjs";
 import { RouteMap, drawTimeline } from "./map.mjs";
+import { DataCalendar } from "./calendar.mjs";
 
 const $ = (id) => document.getElementById(id);
 const form = $("search-form"),
@@ -21,7 +22,11 @@ const field = (name) => form.elements.namedItem(name),
   editField = (name) => editorForm.elements.namedItem(name);
 const searchLane = new RequestLane(),
   catalogLane = new RequestLane(),
+  datesLane = new RequestLane(),
   editLane = new RequestLane();
+const firstCalendar = new DataCalendar(field("date")),
+  lastCalendar = new DataCalendar(field("last-date"), { optional: true });
+let datesKey = null, availableDates = new Set();
 const map = new RouteMap($("route-map"), $("map-info"));
 const state = {
   catalog: null,
@@ -202,6 +207,40 @@ function updateZones() {
     $("date-zones").textContent +=
       ` · timezone details not loaded for ${origin}; choose UTC or load airport data`;
 }
+function updateLastDates() {
+  const first = field("date").value;
+  lastCalendar.setDates([...availableDates].filter((date) => date >= first && date <= addDate(first, 30)));
+}
+async function loadDates() {
+  const origin = airportCode(field("origin").value), clock = field("input-clock").value,
+    key = `${origin}/${clock}`;
+  if (key === datesKey) return;
+  datesKey = key;
+  datesLane.cancel();
+  availableDates = new Set();
+  // Preserve the selection while loading, then check it against the new data.
+  firstCalendar.close();
+  lastCalendar.close();
+  field("date").disabled = field("last-date").disabled = true;
+  $("search-button").disabled = true;
+  if (!/^[A-Z]{3}$/.test(origin)) {
+    $("date-availability").textContent = "Enter an origin to load available dates.";
+    return;
+  }
+  $("date-availability").textContent = "Loading departure dates…";
+  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}`, undefined, (result) => {
+    availableDates = new Set(result.dates);
+    firstCalendar.setDates(result.dates);
+    updateLastDates();
+    $("date-availability").textContent = result.dates.length
+      ? `${result.dates.length} departure dates with data · ${result.timezone}. Unavailable days are disabled.`
+      : `No departures loaded for ${origin}.`;
+    $("search-button").disabled = !availableDates.size || !!searchLane.controller;
+  }, (error) => {
+    datesKey = null;
+    $("date-availability").textContent = `${errorMessage(error)} Change the origin or clock to retry.`;
+  });
+}
 function commonQuery() {
   const via = airportList(field("via").value);
   return {
@@ -226,6 +265,9 @@ function searchRequest() {
     first = field("date").value,
     last = field("last-date").value || first;
   if (!first) throw Error("Choose a departure date.");
+  if (datesKey !== `${query.origin}/${field("input-clock").value}` ||
+      !availableDates.has(first) || !availableDates.has(last))
+    throw Error("Choose departure dates with data for this origin and clock.");
   if (last < first)
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
@@ -319,7 +361,7 @@ async function search() {
         : "Search failed. Adjust the input or retry.";
     },
     () => {
-      $("search-button").disabled = false;
+      $("search-button").disabled = !availableDates.size;
       $("results").setAttribute("aria-busy", "false");
     },
   );
@@ -380,6 +422,7 @@ function renderJourney({ preserveView = false } = {}) {
           : "";
       return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(f.flight_number)} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
       <div class="leg-time"><div><strong>${e(stamp(f.departure_scheduled, zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(stamp(f.arrival_scheduled, zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
+      ${f.aircraft ? `<div class="leg-source">Aircraft: ${e([f.aircraft.type_code, f.aircraft.registration, f.aircraft.description].filter(Boolean).join(" · ") || f.aircraft.icao_hex || "Details unavailable")} · ${e(f.aircraft.source)}</div>` : ""}
       <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
     .join("");
@@ -658,6 +701,7 @@ form.addEventListener("input", (event) => {
   if (!event.target.hasAttribute("data-airport-code")) return;
   normalizeAirportInput(event.target);
   updateZones();
+  if (event.target === field("origin")) loadDates();
   if (event.target.hasAttribute("data-airport-list")) updateViaSuggestions(true);
   closeEditor();
   if (state.result)
@@ -666,6 +710,8 @@ form.addEventListener("input", (event) => {
 });
 form.addEventListener("change", (event) => {
   updateZones();
+  if (event.target === field("date")) updateLastDates();
+  loadDates();
   closeEditor();
   if (state.result)
     $("status").textContent =
@@ -888,7 +934,7 @@ async function loadCatalog() {
   await catalogLane.run(
     "/v1/catalog",
     undefined,
-    (catalog) => {
+    async (catalog) => {
       state.catalog = catalog;
       state.airports = new Map(catalog.airports.map((a) => [a.iata, a]));
       map.setAirports(catalog.airports);
@@ -919,10 +965,12 @@ async function loadCatalog() {
       if (catalog.airports_truncated)
         $("status").textContent +=
           " Suggestions limited to 1,000 airports; enter any exact code.";
-      $("search-button").disabled = false;
+      datesKey = null;
+      await loadDates();
       renderEvidence();
       if (
         catalog.dataset.flight_count &&
+        availableDates.size &&
         field("origin").value &&
         field("destination").value
       )

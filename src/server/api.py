@@ -1,10 +1,11 @@
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from core.config import get_settings
 from core.connections import Airport, RebuildRequest, RebuiltPlan
 from core.itineraries import build_itineraries
-from core.models import FlightRecord, Itinerary, RouteSummary
+from core.models import AircraftObservation, FlightRecord, Itinerary, RouteSummary
 from core.routing.models import (
     IncompleteSearchError,
     RouteSearchRequest,
@@ -22,7 +23,9 @@ from core.routing.models import (
 )
 from core.routing.results import RouteSearchResult
 from server.reader import FlightReader
+from server.trace_cache import cached_trace
 from server.web_models import (
+    AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
     ResolvedTime,
@@ -95,12 +98,50 @@ def catalog(store: FlightReader = Depends(get_store)) -> WebCatalog:
     return store.web_catalog()
 
 
+@app.get("/v1/dates", response_model=AvailableDates)
+def available_dates(
+    origin: str, clock: Literal["local", "UTC"] = "local", store: FlightReader = Depends(get_store)
+):
+    try:
+        return store.available_dates(origin, clock)
+    except ValueError as error:
+        raise routing_http_error(error) from error
+
+
 @app.post("/v1/itineraries/search/local", response_model=LocalRouteSearchResult)
 def local_search(request: LocalRouteSearchRequest, store: FlightReader = Depends(get_store)):
     try:
         return store.search_local(request)
     except ValueError as error:
         raise routing_http_error(error) from error
+
+
+@app.get("/v1/observations", response_model=list[AircraftObservation])
+def observations(
+    day: date,
+    type_code: str | None = Query(default=None, max_length=8),
+    limit: int = Query(default=100, ge=1, le=1000),
+    store: FlightReader = Depends(get_store),
+):
+    """Aircraft-day observations, separate from scheduled, routable flights."""
+    return store.observations(day, type_code=type_code, limit=limit)
+
+
+@app.get("/v1/observations/{day}/{icao_hex}/trace")
+def observation_trace(day: date, icao_hex: str, store: FlightReader = Depends(get_store)):
+    if len(icao_hex) != 6 or any(c not in "0123456789abcdef" for c in icao_hex):
+        raise HTTPException(status_code=422, detail="Use a six-character lowercase ICAO address")
+    try:
+        observation, assets = store.observation_trace(day, icao_hex)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    try:
+        data, hit = cached_trace(observation, assets, get_settings().adsblol_data_root)
+        return {"source": "adsb.lol", "license": "ODbL-1.0", "cache_hit": hit, "trace": data}
+    except (httpx.HTTPError, ValueError, OSError, EOFError) as error:
+        raise HTTPException(
+            status_code=502, detail="Historical trace source unavailable or invalid; retry later"
+        ) from error
 
 
 @app.post("/v1/time/resolve", response_model=ResolvedTime)

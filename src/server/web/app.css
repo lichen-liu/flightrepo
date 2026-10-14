@@ -1107,3 +1107,56 @@ footer {
     font-size: 16px !important;
   }
 }
+/* Dataset-aware calendar: only dates backed by departure records are selectable. */
+.calendar-field {
+  position: relative;
+}
+.calendar-field input[readonly] {
+  cursor: pointer;
+}
+.data-calendar {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  width: min(300px, calc(100vw - 48px));
+  padding: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 8px 30px #142d3b30;
+}
+.calendar-heading,
+.calendar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  margin: 10px 0;
+  text-align: center;
+}
+.calendar-grid span {
+  font-size: 12px;
+  padding: 4px 0;
+}
+.calendar-grid button {
+  padding: 5px;
+  min-width: 0;
+}
+.calendar-grid button:disabled {
+  opacity: .3;
+  cursor: default;
+}
+.calendar-grid button[aria-pressed="true"] {
+  background: var(--lime);
+  color: #151816;
+}
+.calendar-footer button {
+  font-size: 12px;
+}

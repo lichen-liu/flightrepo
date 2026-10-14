@@ -180,3 +180,9 @@ class WebCatalog(BaseModel):
     airports: list[CatalogAirport]
     airports_truncated: bool
     dataset: DatasetEvidence
+
+
+class AvailableDates(BaseModel):
+    origin: str
+    timezone: str
+    dates: list[date]

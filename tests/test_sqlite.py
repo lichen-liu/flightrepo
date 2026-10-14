@@ -77,6 +77,21 @@ def test_reader_cannot_write_or_create_database(tmp_path):
             connection.execute("DELETE FROM flights")
 
 
+def test_old_flight_database_migration_preserves_records_and_reader_compatibility(tmp_path):
+    from core.storage import SCHEMA
+
+    updater = FlightUpdater(tmp_path / "old.db")
+    with updater.connect() as connection:
+        connection.executescript(SCHEMA.replace("    aircraft TEXT,\n", ""))
+    record = flight("1", "AC1", "YYZ", "YUL", "2026-10-10T10:00:00Z", "2026-10-10T11:00:00Z")
+    # Old read-only data files remain readable before an explicit writer migration.
+    assert FlightReader(updater.path).all_records() == []
+    updater.initialize()
+    updater.upsert([record])
+    updater.initialize()
+    assert FlightReader(updater.path).all_records() == [record]
+
+
 def test_serving_api_only_exposes_reads(tmp_path):
     from fastapi.testclient import TestClient
 
