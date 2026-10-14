@@ -9,8 +9,8 @@ SQLite 3.38 or newer is required (STRICT tables and built-in JSON).
 
 Ingestion, backend, calendar, routing and admin must share one flight-leg
 contract. A committed leg must be browseable and searchable without a separate
-export or pretending that an observation is a schedule. The current split between
-`flights` and `itinerary_legs` fails this requirement, even in the same file.
+export or pretending that an observation is a schedule. The previous split between
+`flights` and `itinerary_legs` failed this requirement, even in the same file.
 
 Store one leg per source identity. Build connecting journeys at query time.
 Keep aircraft type, airport pair, identifiers, time evidence, status and source
@@ -180,6 +180,17 @@ remains an explicit override. Scratch directories hold temporary inputs/staging,
 not a second serving database. Noncontiguous jobs and overlapping days retain
 stable keys and boundary state. Legacy schemas require a new initialized file;
 there is no automatic destructive conversion or reseeding.
+
+For a clean reingest, stop the ingestion worker and serving processes before
+replacing the target with a freshly initialized database. Do not copy old flight
+facts, tombstones, batches, day receipts, configuration or boundary summaries:
+receipts would otherwise skip days and boundary state could join old evidence.
+Initialize the shared runtime and extraction schema, persist the chosen quota,
+disable any normalized HTTP source, and verify integrity/foreign keys and zero
+data counts before restarting. The archive manifest, airport CSV and filter are
+inputs, not database state, and may be reused. Point every consumer at the same
+target. Clear aborted raw/staging files, then restart the requested range from
+its first day; each day's fresh commit becomes visible immediately.
 
 Hosted settings accept `data_mode: real`. This validates the shared schema and
 rejects demo flight records, allows an initialized empty dataset, and never seeds

@@ -206,7 +206,8 @@ cost and extraction accuracy are separate from final storage size.
 
 The shared typed schema's [size probe](database-schema.md#space-and-quota) measured
 244 bytes/leg including the identity and two observed-time indexes, excluding
-extraction state. A live snapshot on 2026-10-14 held 3,783 accepted legs across
+extraction state. A live snapshot on 2026-10-14, before the requested clean reset,
+held 3,783 accepted legs across
 69 completed archive days: the flight table and its three indexes occupied
 0.93 MiB, while overnight boundary summaries and their index occupied 58.3 MiB.
 These conservative yields are not total airline flight counts. Keeping fields
