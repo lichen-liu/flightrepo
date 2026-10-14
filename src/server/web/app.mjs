@@ -151,7 +151,6 @@ function values() {
       "destination",
       "via",
       "date",
-      "arrival",
       "last-date",
       "stops",
       "ranking",
@@ -159,7 +158,6 @@ function values() {
       "maximum",
       "avoid",
       "input-clock",
-      "arrival-fold",
     ]
       .map((name) => [
         name,
@@ -191,20 +189,18 @@ function restore(values) {
 function updateZones() {
   updateAirportNames();
   const origin = airportCode(field("origin").value),
-    destination = airportCode(field("destination").value),
     local = field("input-clock").value === "local",
     clock = (code) =>
       local
         ? state.airports.get(code)?.timezone || "timezone not loaded"
         : "UTC";
   $("date-zones").textContent =
-    `Departure: ${clock(origin)} · arrival deadline: ${clock(destination)}`;
-  const missing = [...new Set([origin, destination])].filter(
-    (code) => /^[A-Z]{3}$/.test(code) && !state.airports.get(code)?.timezone,
-  );
-  if (missing.length && local)
+    `Departure dates: ${clock(origin)} · Routes searched up to 7 days after the departure window.`;
+  const missing =
+    /^[A-Z]{3}$/.test(origin) && !state.airports.get(origin)?.timezone;
+  if (missing && local)
     $("date-zones").textContent +=
-      ` · timezone details not loaded for ${missing.join(", ")}; choose UTC or load airport data`;
+      ` · timezone details not loaded for ${origin}; choose UTC or load airport data`;
 }
 function commonQuery() {
   const via = airportList(field("via").value);
@@ -229,8 +225,7 @@ function searchRequest() {
   const query = commonQuery(),
     first = field("date").value,
     last = field("last-date").value || first;
-  if (!first || !field("arrival").value)
-    throw Error("Choose a departure date and arrival deadline.");
+  if (!first) throw Error("Choose a departure date.");
   if (last < first)
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
@@ -259,14 +254,7 @@ function searchRequest() {
         ...query,
         departure_date: first,
         departure_last_date: last,
-        arrival_by_local: field("arrival").value,
-        arrival_fold:
-          field("arrival-fold").value === ""
-            ? null
-            : Number(field("arrival-fold").value),
         departure_timezone: state.airports.get(query.origin)?.timezone || null,
-        arrival_timezone:
-          state.airports.get(query.destination)?.timezone || null,
       },
     };
   return {
@@ -275,14 +263,9 @@ function searchRequest() {
       ...query,
       departure_start: `${first}T00:00:00Z`,
       departure_end: `${addDate(last, 1)}T00:00:00Z`,
-      horizon_end: `${field("arrival").value}:00Z`,
+      horizon_end: `${addDate(last, 8)}T00:00:00Z`,
     },
   };
-}
-function defaultArrival() {
-  if (!field("date").value) return;
-  field("arrival").value =
-    `${addDate(field("last-date").value || field("date").value, 3)}T23:59`;
 }
 async function search() {
   let request;
@@ -379,7 +362,7 @@ function renderOptions() {
     </button>`;
         })
         .join("")
-    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider date range, fewer filters, or a longer arrival deadline." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -510,7 +493,7 @@ function updateEditorZone() {
   if (state.editing === null) return;
   const f = state.selection.legs[state.editing];
   $("editor-zone").textContent =
-    `Not-before time uses ${inputZone(f.destination_iata)}. Arrival deadline remains ${stamp(state.result.query.horizon_end, inputZone(state.result.query.destination))}.`;
+    `Not-before time uses ${inputZone(f.destination_iata)}. Connections searched until ${stamp(state.result.query.horizon_end, inputZone(state.result.query.destination))}.`;
 }
 function openEditor(index) {
   closeEditor();
@@ -682,7 +665,6 @@ form.addEventListener("input", (event) => {
       "Inputs changed. Search to apply them; previous results remain visible.";
 });
 form.addEventListener("change", (event) => {
-  if (["date", "last-date"].includes(event.target.name)) defaultArrival();
   updateZones();
   closeEditor();
   if (state.result)
@@ -923,7 +905,6 @@ async function loadCatalog() {
         : codes.find((c) => c !== field("origin").value) || "";
       const first = catalog.dataset.first_departure || new Date().toISOString();
       field("date").value = localDate(first, inputZone(field("origin").value));
-      defaultArrival();
       const fromURL = Object.fromEntries(new URLSearchParams(location.search));
       restore(fromURL);
       updateZones();

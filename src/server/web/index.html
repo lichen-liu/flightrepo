@@ -91,13 +91,6 @@
             <label
               >Departure date<input name="date" id="date" type="date" required
             /></label>
-            <label
-              >Arrive by<input
-                name="arrival"
-                id="arrival"
-                type="datetime-local"
-                required
-            /></label>
             <button id="search-button" class="primary" type="submit" disabled>
               Search flights
             </button>
@@ -182,7 +175,7 @@
                   <option value="360" selected>6 hours</option>
                   <option value="720">12 hours</option>
                   <option value="1440">24 hours</option>
-                  <option value="any">Any time before arrival deadline</option>
+                  <option value="any">Any time in the search window</option>
                 </select></label
               >
               <label
@@ -195,13 +188,6 @@
               <label class="check"
                 ><input type="checkbox" name="airport-change" />Allow
                 connections between airports in the same city</label
-              >
-              <label
-                >Repeated arrival time<select name="arrival-fold">
-                  <option value="">Ask if clock repeats</option>
-                  <option value="0">Earlier occurrence</option>
-                  <option value="1">Later occurrence</option>
-                </select></label
               >
             </div>
           </details>
@@ -381,7 +367,7 @@
                       <option value="soon">Within 6 hours</option>
                       <option value="day">Within 24 hours</option>
                       <option value="any">
-                        Any time before arrival deadline
+                        Any time in the search window
                       </option>
                       <option value="after">After a date and time</option>
                     </select></label

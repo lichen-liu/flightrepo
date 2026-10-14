@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 ENGINE_VERSION = "routing-5"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 ViaAirports = str | list[str] | None
+MAX_DEPARTURE_DAYS = 31
+MAX_ONWARD_DAYS = 31
 
 
 def airport_code(value: str) -> str:
@@ -108,9 +110,9 @@ class RouteSearchRequest(BaseModel):
             raise ValueError("origin and destination must differ")
         if not self.departure_start < self.departure_end <= self.horizon_end:
             raise ValueError("require departure_start < departure_end <= horizon_end")
-        if self.departure_end - self.departure_start > timedelta(days=31):
+        if self.departure_end - self.departure_start > timedelta(days=MAX_DEPARTURE_DAYS):
             raise ValueError("departure window must be at most 31 days")
-        if self.horizon_end - self.departure_end > timedelta(days=31):
+        if self.horizon_end - self.departure_end > timedelta(days=MAX_ONWARD_DAYS):
             raise ValueError("arrival horizon must be within 31 days of departure_end")
         if (
             self.maximum_connection_minutes is not None

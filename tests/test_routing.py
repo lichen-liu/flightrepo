@@ -862,6 +862,31 @@ def test_rebuild_rejects_origin_as_via_once_prefix_is_resolved():
     assert error.value.code == "invalid_via_airport"
 
 
+@pytest.mark.parametrize("days", [38, 62])
+def test_valid_search_horizon_remains_valid_for_rebuild(days):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("tail", "BBB", "EEE", 45, 60),
+    )
+    horizon = BASE + timedelta(days=days)
+    snapshot = RoutingSnapshot(records)
+    searched = search_routes(
+        query(departure_end=BASE + timedelta(days=31), horizon_end=horizon), snapshot
+    )
+    rebuilt = rebuild_from_snapshot(continuation_request(horizon_end=horizon), snapshot)
+    assert rebuilt.complete and rebuilt.legs == searched.items[0].legs
+
+
+def test_rebuild_horizon_beyond_maximum_search_span_is_rejected():
+    prefix = flight("prefix", "AAA", "BBB", 0, 30)
+    with pytest.raises(RoutingError) as error:
+        rebuild_from_snapshot(
+            continuation_request(horizon_end=BASE + timedelta(days=62, minutes=1)),
+            RoutingSnapshot((prefix,)),
+        )
+    assert error.value.code == "invalid_horizon"
+
+
 def test_rebuild_outstanding_via_overrides_faster_tail_and_prefix_satisfaction():
     records = (
         flight("prefix", "AAA", "BBB", 0, 30),

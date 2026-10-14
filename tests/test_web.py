@@ -55,6 +55,91 @@ def request(**changes):
     }
 
 
+def departure_request(**changes):
+    payload = request(**changes)
+    payload.pop("arrival_by_local")
+    return payload
+
+
+def test_departure_search_needs_no_arrival_input(client):
+    response = client.post("/v1/itineraries/search/local", json=departure_request())
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["items"]
+    query = result["query"]
+    assert query["departure_end"] == "2026-10-18T04:00:00Z"
+    assert query["horizon_end"] == "2026-10-25T04:00:00Z"
+
+
+@pytest.mark.parametrize("date,hours", [("2026-03-08", 23), ("2026-11-01", 25)])
+def test_default_horizon_follows_resolved_departure_window_across_dst(client, date, hours):
+    response = client.post(
+        "/v1/itineraries/search/local", json=departure_request(departure_date=date)
+    )
+    assert response.status_code == 200, response.text
+    query = response.json()["query"]
+    start, end, horizon = (
+        datetime.fromisoformat(query[field])
+        for field in ("departure_start", "departure_end", "horizon_end")
+    )
+    assert end - start == timedelta(hours=hours)
+    assert horizon - end == timedelta(days=7)
+
+
+def test_default_horizon_does_not_require_destination_timezone(client, demo):
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={"provider_id": "unknown-destination", "destination_iata": "XYZ"}
+    )
+    demo[0].upsert([record])
+    response = client.post(
+        "/v1/itineraries/search/local",
+        json=departure_request(destination="XYZ", arrival_timezone="Europe/Paris", arrival_fold=1),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["items"] and result["arrival_timezone"] is None
+    assert result["query"]["horizon_end"] == "2026-10-25T04:00:00Z"
+
+
+@pytest.mark.parametrize("date", ["9999-12-28", "9999-12-31"])
+def test_default_horizon_overflow_is_a_readable_422(client, date):
+    response = client.post(
+        "/v1/itineraries/search/local", json=departure_request(departure_date=date)
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_local_dates"
+
+
+def test_wide_departure_range_remains_editable(client):
+    response = client.post(
+        "/v1/itineraries/search/local",
+        json=departure_request(departure_last_date="2026-11-15", via_airport=["LHR", "AMS"]),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    legs = result["items"][0]["legs"]
+    plan = client.post(
+        "/v1/plans/rebuild",
+        json={
+            "prefix": [{"provider": legs[0]["provider"], "provider_id": legs[0]["provider_id"]}],
+            "destination": "CDG",
+            "horizon_end": result["query"]["horizon_end"],
+            "max_legs": 3,
+            "via_airport": ["LHR", "AMS"],
+        },
+    )
+    assert plan.status_code == 200, plan.text
+    assert plan.json()["complete"] and plan.json()["legs"] == legs
+
+
+def test_departure_range_still_respects_elapsed_day_bound(client):
+    response = client.post(
+        "/v1/itineraries/search/local",
+        json=departure_request(departure_date="2026-10-10", departure_last_date="2026-11-09"),
+    )
+    assert response.status_code == 422, response.text
+
+
 @pytest.mark.parametrize(
     "zone,clock",
     [

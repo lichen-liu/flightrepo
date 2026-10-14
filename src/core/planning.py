@@ -14,7 +14,12 @@ from core.connections import (
 )
 from core.models import FlightRecord
 from core.routing.index import departure_key
-from core.routing.models import RoutingError, required_via_airports
+from core.routing.models import (
+    MAX_DEPARTURE_DAYS,
+    MAX_ONWARD_DAYS,
+    RoutingError,
+    required_via_airports,
+)
 from core.routing.policy import Assessment, ConnectionPolicy
 from core.routing.session import RoutingSession, SearchBudgetReached
 from core.routing.snapshot import RoutingSnapshot, flight_key
@@ -52,10 +57,12 @@ def validate_prefix(
         and prefix[-1].destination_iata != request.destination
     ):
         raise RoutingError("invalid_horizon", "horizon_end must follow the selected arrival")
-    if request.horizon_end - prefix[0].departure_scheduled > timedelta(days=31):
+    # A retained first flight may lie at the start of a full search window.
+    maximum_span = MAX_DEPARTURE_DAYS + MAX_ONWARD_DAYS
+    if request.horizon_end - prefix[0].departure_scheduled > timedelta(days=maximum_span):
         raise RoutingError(
             "invalid_horizon",
-            "prototype horizon must be within 31 days of first departure",
+            f"horizon must be within {maximum_span} days of first departure",
         )
     policy = ConnectionPolicy(
         snapshot.airports,

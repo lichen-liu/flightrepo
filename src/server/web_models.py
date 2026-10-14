@@ -26,7 +26,7 @@ class LocalRouteSearchRequest(BaseModel):
     via_airport: ViaAirports = None
     departure_date: date
     departure_last_date: date | None = None
-    arrival_by_local: datetime
+    arrival_by_local: datetime | None = None
     arrival_fold: Literal[0, 1] | None = None
     departure_timezone: str | None = None
     arrival_timezone: str | None = None
@@ -49,7 +49,10 @@ class LocalRouteSearchRequest(BaseModel):
 
     def utc_request(self, airports: tuple[Airport, ...]) -> RouteSearchRequest:
         by_code = {a.iata: a for a in airports}
-        for field in ("origin", "destination"):
+        required = ["origin"]
+        if self.arrival_by_local is not None:
+            required.append("destination")
+        for field in required:
             if getattr(self, field) not in by_code:
                 raise RoutingError(
                     "airport_metadata_missing",
@@ -61,8 +64,10 @@ class LocalRouteSearchRequest(BaseModel):
             ("arrival_timezone", self.destination),
         ):
             expected = getattr(self, field)
+            if expected is None or field == "arrival_timezone" and self.arrival_by_local is None:
+                continue
             actual = by_code[code].timezone
-            if expected is not None and expected != actual:
+            if expected != actual:
                 raise RoutingError(
                     "airport_timezone_changed",
                     "Airport timezone changed. Review the dates and retry.",
@@ -94,6 +99,24 @@ class LocalRouteSearchRequest(BaseModel):
                 "invalid_local_dates", "Departure date is outside the supported range."
             ) from error
         zone = by_code[self.origin].timezone
+        departure_end = resolve_local(
+            datetime.combine(end, time.min), zone, field="departure_last_date"
+        )
+        try:
+            horizon = (
+                departure_end + timedelta(days=7)
+                if self.arrival_by_local is None
+                else resolve_local(
+                    self.arrival_by_local,
+                    by_code[self.destination].timezone,
+                    fold=self.arrival_fold,
+                    field="arrival_by_local",
+                )
+            )
+        except OverflowError as error:
+            raise RoutingError(
+                "invalid_local_dates", "Departure dates are outside the supported search range."
+            ) from error
         values = self.model_dump(
             exclude={
                 "departure_date",
@@ -109,21 +132,14 @@ class LocalRouteSearchRequest(BaseModel):
             departure_start=resolve_local(
                 datetime.combine(first, time.min), zone, field="departure_date"
             ),
-            departure_end=resolve_local(
-                datetime.combine(end, time.min), zone, field="departure_last_date"
-            ),
-            horizon_end=resolve_local(
-                self.arrival_by_local,
-                by_code[self.destination].timezone,
-                fold=self.arrival_fold,
-                field="arrival_by_local",
-            ),
+            departure_end=departure_end,
+            horizon_end=horizon,
         )
 
 
 class LocalRouteSearchResult(RouteSearchResult):
     departure_timezone: str
-    arrival_timezone: str
+    arrival_timezone: str | None
 
 
 class ResolveTimeRequest(BaseModel):

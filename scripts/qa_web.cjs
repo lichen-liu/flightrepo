@@ -142,6 +142,91 @@ async function viaSearch(page, input = "ams", expected = ["AMS"]) {
 }
 
 check(
+  "departure dates set the search window and discard old arrival inputs",
+  async (page) => {
+    const submitted = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST")
+        submitted.push({
+          path: new URL(request.url()).pathname,
+          body: request.postDataJSON(),
+        });
+    });
+    const oldLink = new URL(base);
+    oldLink.search = new URLSearchParams({
+      origin: "YYZ",
+      destination: "CDG",
+      via: "AMS",
+      date: "2026-10-17",
+      arrival: "2026-10-17T00:00",
+      "arrival-fold": "1",
+    });
+    const initial = await result(page, searchPath, () => page.goto(oldLink.href));
+    await expect(page.locator("[data-option]").first()).toBeVisible();
+    await expect(page.getByLabel("Arrive by", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByLabel("Repeated arrival time", { exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator("#date-zones")).toContainText("7 days");
+    assert.equal(initial.query.departure_start, "2026-10-17T04:00:00Z");
+    const checkWindow = (query) =>
+      assert.equal(
+        Date.parse(query.horizon_end) - Date.parse(query.departure_end),
+        7 * 24 * 60 * 60 * 1000,
+      );
+    checkWindow(initial.query);
+    assert.equal(new URL(page.url()).searchParams.has("arrival"), false);
+    assert.equal(new URL(page.url()).searchParams.has("arrival-fold"), false);
+
+    await page.locator("#search-details > summary").click();
+    await page
+      .getByLabel("Last departure date", { exact: true })
+      .fill("2026-10-19");
+    const ranged = await search(page);
+    assert.equal(ranged.query.departure_end, "2026-10-20T04:00:00Z");
+    checkWindow(ranged.query);
+    const saved = await exported(page);
+    assert.equal(saved.query_inputs["last-date"], "2026-10-19");
+    assert.equal(Object.hasOwn(saved.query_inputs, "arrival"), false);
+    assert.equal(Object.hasOwn(saved.query_inputs, "arrival-fold"), false);
+    assert.equal(saved.query.horizon_end, ranged.query.horizon_end);
+    await page
+      .getByRole("button", { name: "Copy search link", exact: true })
+      .click();
+    await expect(page.locator("#status")).toContainText("Search link copied");
+    const copied = new URL(
+      await page.evaluate(() => navigator.clipboard.readText()),
+    );
+    assert.equal(copied.searchParams.get("last-date"), "2026-10-19");
+    assert.equal(copied.searchParams.has("arrival"), false);
+    assert.equal(copied.searchParams.has("arrival-fold"), false);
+
+    await edit(page);
+    await page.getByLabel("Next departure").selectOption("any");
+    const plan = await next(page);
+    assert.ok(plan.options.length);
+    assert.equal(submitted.at(-1).body.horizon_end, ranged.query.horizon_end);
+    await result(page, /\/v1\/plans\/rebuild$/, () =>
+      page.locator("[data-next]").first().click(),
+    );
+    assert.equal(submitted.at(-1).body.horizon_end, ranged.query.horizon_end);
+
+    await page.getByLabel("Input clock").selectOption("UTC");
+    const utc = await search(page);
+    assert.equal(utc.query.departure_start, "2026-10-17T00:00:00Z");
+    assert.equal(utc.query.departure_end, "2026-10-20T00:00:00Z");
+    checkWindow(utc.query);
+    for (const { path, body } of submitted.filter(({ path }) => searchPath.test(path))) {
+      assert.ok(
+        !Object.keys(body).some((key) => key.startsWith("arrival_")),
+        path,
+      );
+    }
+  },
+  { permissions: ["clipboard-read", "clipboard-write"] },
+);
+
+check(
   "typed constraints survive search links and exports",
   async (page, context) => {
     const data = await viaSearch(page),

@@ -25,7 +25,7 @@ To host the installed preview at **fly.boboji.fyi**, follow [installation](insta
 
 | Capability | Current behavior |
 |---|---|
-| Search | Typed airport codes with suggestions, ordered via airports, local or UTC dates, arrival deadline, connection bounds, avoided airports and deterministic ranking |
+| Search | Typed airport codes with suggestions, ordered via airports, local or UTC departure dates, connection bounds, avoided airports and deterministic ranking |
 | Explore | Linked route list, globe/flat map, leg details, local clocks and a schedule cursor |
 | Edit | Keep a selected prefix, type the next airport, choose a later flight, rebuild subsequent legs, show dead ends and undo |
 | Airport changes | Opt-in, same-city changes with an explicit directed allowance in SQLite |
