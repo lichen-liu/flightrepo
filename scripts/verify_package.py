@@ -24,9 +24,12 @@ import sys
 from pathlib import Path
 import admin.client, core.config, ingestion.updater, server.api
 from fastapi.testclient import TestClient
+from ingestion.adsblol.filters import DEFAULT_FILTER_PATH, CommercialFilter
 
 for module in (admin.client, core.config, ingestion.updater, server.api):
     assert Path(module.__file__).is_relative_to(Path(sys.prefix)), module.__file__
+assert DEFAULT_FILTER_PATH.is_relative_to(Path(sys.prefix)) and DEFAULT_FILTER_PATH.is_file()
+CommercialFilter.model_validate_json(DEFAULT_FILTER_PATH.read_text())
 with TestClient(server.api.app) as client:
     assert client.get('/').status_code == 200
     for asset in Path(server.api.WEB_ROOT).rglob('*'):
@@ -86,8 +89,8 @@ def probe_ingestion(executable, directory, environment):
     prefix = [str(executable), "-m", "admin", "--db", str(root / "admin.db")]
     arguments = [
         "ingest",
-        "--source",
         "adsblol",
+        "run",
         "--manifest",
         str(manifest),
         "--airport-catalog",
@@ -126,7 +129,7 @@ def probe_ingestion(executable, directory, environment):
     assert not archive.exists()
     repeat = finished(invoke(arguments))
     assert repeat["counts_historical"] and repeat["records_applied"] == 0
-    status = json.loads(invoke(["ingest", "status"]).stdout)
+    status = json.loads(invoke(["ingest", "adsblol", "status"]).stdout)
     assert status["records"] == 1 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
 

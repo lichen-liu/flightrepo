@@ -24,8 +24,8 @@ ADSB times into schedules.
 An **archive manifest** lists preferred daily raw archive parts: UTC date, URL,
 filename, byte length and optional SHA-256. It is an ingestion input, not a
 searchable itinerary catalogue. Keep generated manifests under ignored `var/`;
-there is no checked-in annual inventory. `ingestion.adsblol.archive.build_manifest`
-builds the format from preferred-release URLs and GitHub release metadata. Adjacent
+there is no checked-in annual inventory. `ingest adsblol prepare`
+builds it from preferred-release URLs and GitHub release metadata. Adjacent
 year repositories can host year-end days. Download one preferred copy, not replicas.
 
 Tar members `traces/xx/trace_full_<icao>.json` contain gzip-compressed JSON:
@@ -52,7 +52,7 @@ manifest → download/verify one day → stream aircraft members → filter/reco
 
 - Resume partial downloads and verify lengths/checksums. Stream tar members;
   do not extract arbitrary archive paths or retain position files.
-- Apply the [fixed-wing/type/callsign filter](../fixtures/adsblol-commercial-filter.json),
+- Apply the [fixed-wing/type/callsign filter](../src/ingestion/adsblol/commercial-filter.json),
   excluding military metadata. The commercial callsign list includes cargo.
 - Require ground observations at both ends, an unambiguous airport within 5 km,
   continuous transition brackets/gaps of at most 120 seconds and at least 300
@@ -78,29 +78,35 @@ python -m admin --db var/hosted/flights.db
 ```
 
 ```text
-flyji> ingest configure --source adsblol
-flyji> ingest --start 2023-07-01 --end 2023-07-03
-flyji> ingest --start 2023-08-10 --end 2023-08-12
-flyji> ingest status
+flyji> ingest sources
+flyji> ingest adsblol prepare --start 2023-07-01 --end 2023-12-31 --finish-year
+flyji> ingest adsblol run --start 2023-07-01 --end 2023-07-03
+flyji> ingest adsblol run --start 2023-08-10 --end 2023-08-12
+flyji> ingest adsblol status
 flyji> storage quota 20GiB
 flyji> storage status
 ```
 
-Configure the manifest for **your chosen year**, saved airport CSV, filter and
-working directory. Output defaults to the selected admin database. Jobs may have
-gaps, overlap or run out of order; the suggested range is three days and the
-default maximum is 31 days. Every day commits separately. Repeating completed
-days skips downloading; cancelling retains prior commits. Keep the airport CSV
-and filter unchanged for a dataset. `--boundary-manifest` supplies adjacent-year
-January 1 observations to finish December 31 departures.
+Preparation downloads metadata and the airport CSV, saving a profile; it does not
+fetch raw flight archives. Existing snapshots/filters remain immutable. Alternatively,
+`ingest adsblol configure` accepts existing inputs. The filter is bundled with
+admin, so installed commands work outside the checkout. Output defaults to the
+selected database. Separate, overlapping and out-of-order ranges remain supported.
+Every day commits independently; guided jobs suggest three days, while explicit
+ADSB ranges can span a year. CSV/API jobs retain the 31-day default limit.
 
-The offline entry point uses the same pipeline:
+`--offline` restricts processing to verified raw inputs already present.
+`--departure-year` filters departures by UTC year. For December 31,
+`--finish-year` adds January 1 arrival evidence and excludes next-year departures;
+prepare that extra day first. `--boundary-manifest` can supply existing adjacent
+inputs. The same admin commands work interactively and in a terminal; there is
+no standalone ingestion script.
 
 ```sh
-PYTHONPATH=src python scripts/extract_adsblol_itineraries.py var/manifest-2023.json \
-  --airports var/airports.csv --filter fixtures/adsblol-commercial-filter.json \
-  --data-root var/adsblol-2023 --output-db var/hosted/flights.db \
-  --start 2023-07-01 --end 2023-07-03 --download
+python -m admin --db var/hosted/flights.db ingest adsblol run \
+  --start 2023-07-01 --end 2023-12-31 --finish-year
+python -m admin --db var/hosted/flights.db ingest csv run \
+  --csv var/licensed.csv --airports YYZ YUL --start 2023-07-01 --end 2023-07-03
 ```
 
 Stop ingestion before `maintenance clear-data --yes`; reset clears records,
@@ -122,7 +128,7 @@ retirement: accepted legs are the sole retained copy. WAL/checkpointing or activ
 readers can cause temporary physical overage, rechecked on later ingestion IO.
 
 JSON stderr events report `day_started`, provisional `day_progress`, `day_finished`
-and `day_failed`. Receipts and `ingest status` report aircraft/type exclusions,
+and `day_failed`. Receipts and `ingest adsblol status` report aircraft/type exclusions,
 invalid/ignored samples, gap/stale interruptions, endpoint/callsign/duration
 rejections, midnight deferrals and boundary joins. Failed batches retain diagnostics
 without advancing coverage. `--refresh-diagnostics` explicitly reprocesses selected

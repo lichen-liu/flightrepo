@@ -137,63 +137,61 @@ Keep working files under `var/`.
 
 ## Ingest in separate sessions
 
+`ingest sources` explains the three pipelines and shows configured state. Source
+names are explicit; flags for one source cannot be used with another. Bare
+`ingest` in the interactive shell starts guided ingestion. Every command also
+works through `python -m admin --db FILE` or the installed `flyji` command.
+
+| Command | Purpose |
+| --- | --- |
+| `ingest adsblol prepare` | Fetch preferred archive metadata and an immutable airport CSV; no raw flight downloads |
+| `ingest adsblol configure` | Save existing manifest, airport CSV, filter and working-directory paths |
+| `ingest adsblol run` | Extract historical observed legs one UTC day at a time |
+| `ingest adsblol status` | Completed periods, accepted legs, current batch and rejection diagnostics |
+| `ingest csv configure/run/status` | Import a licensed CSV with schedules and optional actual times/type |
+| `ingest aerodatabox configure/run/status` | Fetch airport schedules/status using configured API credentials |
+| `import-json FILE` | Import already normalized FlightRecord JSON |
+| `airports import FILE` | Import airport and directed-transfer metadata |
+
 ```text
-flyji> ingest configure --source adsblol
-flyji> ingest --start 2025-01-01 --end 2025-01-03
-flyji> ingest --start 2025-03-10 --end 2025-03-12
-flyji> ingest --start 2025-01-02 --end 2025-01-05
-flyji> ingest status
+flyji> ingest sources
+flyji> ingest adsblol prepare --start 2023-07-01 --end 2023-12-31 --finish-year
+flyji> ingest adsblol run --start 2023-07-01 --end 2023-07-03
+flyji> ingest adsblol run --start 2023-08-10 --end 2023-08-12
+flyji> ingest adsblol status
+flyji> storage quota 20GiB
+flyji> storage status
 ```
 
-Configure prompts for the archive manifest, saved airport CSV, commercial filter
-and working directory/output database. `--output-db var/hosted/flights.db` writes
-the observed facts to that exact file; without it, output defaults to the selected
-admin database. Settings persist in that database. `ingest`
-without date flags prompts for a range, suggesting three days; each job is limited
-to `FLIGHT_MAX_QUERY_DAYS` (31 by default) and returns to the shell when finished.
-Use `help ingest` for equivalent flags. `--budget-gib` (at most 20 GiB) limits
-daily raw/staging working space only. The persisted live `storage quota` separately
-limits the database and WAL/SHM; it excludes raw inputs
-and staging. Total disk space needs room for both limits. Extraction rechecks
-database policy before committing a day, so another admin shell can adjust it
-during parsing. No reset or restart is required for a quota change.
+Preparation saves generated paths in the selected database and bundles the
+commercial filter in the installed package. It reuses an existing airport CSV and
+custom filter unchanged. Missing archive periods fail without configuring the
+pipeline. `configure` is useful when you already have inputs. Output defaults to
+the selected admin database; `--output-db` is an explicit override. `--data-root`
+is working space, not a second serving database.
 
-Periods can overlap, have gaps, or be ingested in any order. Completed archive days
-are skipped without downloading again. Stable leg keys and SQLite primary keys
-prevent duplicates; conflicting evidence for an existing key fails the current
-day instead of overwriting it. Compact boundary summaries connect overnight
-flights when adjacent days are backfilled, without retaining raw tracks or
-redownloading the neighboring day. Unobserved gaps are never bridged. Keep the
-airport snapshot and filter unchanged for one output directory.
+ADSB jobs may overlap, have gaps or run out of order. Every day commits separately;
+completed days skip downloads and stable keys deduplicate repeats. Default guided
+jobs suggest three days; explicit ranges can be longer, including a year. Ctrl-C
+preserves prior commits. `--offline` processes only verified local raw inputs.
+`--refresh-diagnostics` deliberately reprocesses selected days. `--departure-year`
+limits retained departures to that UTC year. For a range ending December 31,
+`--finish-year` processes January 1 arrival evidence and excludes next-year
+departures; prepare that boundary input first. `--boundary-manifest` also accepts
+an existing adjacent-year manifest. Keep the airport snapshot/filter unchanged
+for an existing dataset.
 
-Ctrl+C stops a job: the current uncommitted day rolls back, previous daily commits
-remain, and partial downloads can resume. `ingest status` lists committed ranges,
-record counts, aggregate extraction diagnostics, the latest daily report, and
-older days needing a boundary-summary/diagnostics refresh.
-ADSB output contains observed itinerary candidates in `itinerary_legs`, including
-when the output shares the admin database. It is not yet used by scheduled
-journey search. See [ingestion](ingestion.md).
+The live `storage quota` covers database/WAL/SHM only; `--budget-gib` independently
+limits raw/staging working space. JSON stderr events and saved receipts distinguish
+committed facts from provisional progress, rejected segments and invalid samples.
+These counts do not establish complete airline coverage. See the compact
+[ingestion reference](ingestion.md) for source licences, extraction and statistics.
 
-Daily receipts show exclusion/rejection reasons, quality interruptions, ignored
-observations and overnight deferrals. Structured JSON logs on stderr report start,
-progress every 1,000 aircraft members, completion and failures. Failure logs include
-phase, aircraft ID/row index when available, and whether output was committed.
-Provisional counts on a rolled-back day do not represent saved records. These are
-aircraft/sample/segment events, not a measured count of missing real flights.
-`ingest --start DATE --end DATE --refresh-diagnostics` explicitly reprocesses
-selected days, downloading deleted raw inputs again while deduplicating legs.
-Older receipts without diagnostics are reported as unknown; normal repeats skip
-the day and do not inflate aggregates. Reports are historical processing snapshots;
-an overnight deferral can later resolve without changing the earlier snapshot.
-
-`ingest --source csv` prompts for a licensed CSV, airport codes and dates;
-`ingest --source aerodatabox` prompts for airports and dates and uses the configured
-API credentials. Both persist settings for later jobs. Records are deduplicated
-within each job and upserted by `(provider, provider_id)` across sessions, including
-when the same flight is returned for both airports. Different provider IDs and
-codeshares are retained separately. Prefer stable `provider_id` values in CSV;
-without them, identity depends on the supplied flight number, origin and departure
-timestamp. These imports write scheduled facts to the selected serving database.
+CSV/API jobs use explicit airport codes and an inclusive date range, limited to
+`FLIGHT_MAX_QUERY_DAYS` (31 by default). Both upsert source identities and protect
+local edits/deletes. AeroDataBox needs `FLIGHT_PROVIDER_API_KEY`; its adapter does
+not currently extract aircraft type. CSV can provide `aircraft_type_code`.
+There is no serving-side network ingestion.
 
 ## Search journeys
 

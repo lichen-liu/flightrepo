@@ -40,13 +40,13 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
                               └── internal admin ─┘
 ```
 
-`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, recoverable itinerary downloads, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
 
 The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Accepted observed legs, scheduled flights and reported actual events share the [typed serving schema](docs/database-schema.md). Each completed ingestion day feeds counts, calendars, routing and admin immediately.
 
 The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) supports
-separate short jobs: `ingest configure --source adsblol`, then
-`ingest --start 2025-01-01 --end 2025-01-03`. Later jobs can overlap or backfill
+explicit source commands: `ingest sources`, `ingest adsblol prepare`, then
+`ingest adsblol run --start 2023-07-01 --end 2023-07-03`. Later jobs can overlap or backfill
 other periods; completed days are skipped and stable keys prevent duplicates.
 Configure `--output-db var/hosted/<name>.db` to select an exact hosted destination.
 
@@ -66,14 +66,14 @@ Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
 Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
 
-Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize or upgrade a database explicitly.
+Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize a database explicitly.
 
 ```sh
 python -m admin import-json var/flights.json
 python -m admin airports import var/airports.json
 python -m admin export-json var/flights-export.json
 python -m admin airports export var/airport-catalog.json
-python -m admin ingest --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
+python -m admin ingest csv run --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
 python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
 

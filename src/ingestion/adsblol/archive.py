@@ -9,7 +9,7 @@ import shutil
 import tarfile
 import zlib
 from contextlib import ExitStack
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -77,83 +77,6 @@ def archive_traces(paths, *, diagnostics=None):
                 count(diagnostics, "invalid_records", "invalid_member_shape")
                 raise ValueError("Aircraft member must be a JSON object")
             yield data, len(compressed)
-
-
-def days_in_year(year):
-    current = date(year, 1, 1)
-    while current.year == year:
-        yield current
-        current += timedelta(days=1)
-
-
-def build_manifest(year, preferred_texts, releases):
-    assets = {
-        asset["browser_download_url"]: asset for release in releases for asset in release["assets"]
-    }
-    choices = {}
-    for content in preferred_texts:
-        for line in content.splitlines():
-            urls = [url.strip() for url in line.split(",") if url.strip()]
-            if not urls:
-                continue
-            match = re.search(r"/v(\d{4})\.(\d{2})\.(\d{2})-", urls[0])
-            if match is None:
-                continue
-            day = date(*map(int, match.groups()))
-            if day.year != year:
-                continue
-            items = []
-            for url in urls:
-                asset = assets.get(url)
-                if asset is None:
-                    raise ValueError(f"Release metadata missing for {url}")
-                name = asset["name"]
-                if not re.fullmatch(
-                    r"v\d{4}\.\d{2}\.\d{2}-planes-readsb-(prod|staging)-\d+(?:tmp)?\.tar(?:\.[a-z]{2})?",
-                    name,
-                ):
-                    raise ValueError(f"Unexpected archive name: {name}")
-                digest = asset.get("digest")
-                if digest and not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
-                    raise ValueError(f"Unexpected digest: {digest}")
-                if (
-                    urlsplit(url).hostname != "github.com"
-                    or f"/adsblol/globe_history_{day.year}" not in url
-                ):
-                    # A boundary day can be published in the next year's repository.
-                    if not url.startswith(
-                        f"https://github.com/adsblol/globe_history_{year + 1}/releases/download/"
-                    ):
-                        raise ValueError(f"Unexpected download URL: {url}")
-                items.append(
-                    {
-                        "date": day.isoformat(),
-                        "name": name,
-                        "url": url,
-                        "bytes": asset["size"],
-                        "sha256": digest.split(":", 1)[1] if digest else None,
-                    }
-                )
-            items.sort(key=lambda item: item["name"])
-            suffixes = [item["name"].rsplit(".", 1)[1] for item in items]
-            if suffixes != ["tar"] and suffixes != [
-                "a" + chr(ord("a") + n) for n in range(len(items))
-            ]:
-                raise ValueError(f"Archive parts missing or out of order for {day}")
-            choices[day] = items
-    missing = sorted(set(days_in_year(year)) - choices.keys())
-    if missing:
-        raise ValueError("Missing archive days: " + ", ".join(map(str, missing)))
-    items = [item for day in sorted(choices) for item in choices[day]]
-    return {
-        "format_version": 1,
-        "source": "adsb.lol",
-        "year": year,
-        "selection": "provider preferred daily copies; replica duplicates omitted",
-        "days": len(choices),
-        "bytes": sum(item["bytes"] for item in items),
-        "assets": items,
-    }
 
 
 def sha256_file(path):
@@ -237,13 +160,17 @@ def validate_asset(item):
     ):
         raise ValueError(f"Unexpected archive name: {name}")
     url = urlsplit(item["url"])
+    # January 1 observations can be published in the preceding year's repository.
+    repository_years = f"{day.year}|{day.year + 1}"
+    if day.month == day.day == 1:
+        repository_years += f"|{day.year - 1}"
     if (
         url.scheme != "https"
         or url.netloc != "github.com"
         or url.query
         or url.fragment
         or not re.fullmatch(
-            rf"/adsblol/globe_history_({day.year}|{day.year + 1})/releases/download/[^/]+/{re.escape(name)}",
+            rf"/adsblol/globe_history_({repository_years})/releases/download/[^/]+/{re.escape(name)}",
             url.path,
         )
     ):

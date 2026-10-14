@@ -1,4 +1,4 @@
-"""Bounded date-range jobs shared by the admin console and offline extractor."""
+"""Daily date-range jobs invoked by the admin console."""
 
 import json
 import sqlite3
@@ -88,14 +88,22 @@ def extraction_status(root, output_db=None):
         "records": 0,
         "days": [],
         "ranges": [],
+        "active_batches": [],
     }
     if not database.is_file():
         return empty
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
         if not connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name='extraction_days'"
         ).fetchone():
             return empty
+        active = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT b.id,date(b.input_start_us/1000000,'unixepoch') AS day,b.started_us FROM ingestion_batches b JOIN data_sources s ON s.id=b.source_id WHERE s.code='adsblol' AND b.state='running'"
+            )
+        ]
         days = [
             row[0] for row in connection.execute("SELECT day FROM extraction_days ORDER BY day")
         ]
@@ -135,6 +143,7 @@ def extraction_status(root, output_db=None):
         "records": records,
         "days": days,
         "ranges": ranges,
+        "active_batches": active,
         "legacy_days_needing_boundary_refresh": sorted(legacy),
         "diagnostics": {
             "days_reported": len(reports) - len(missing),

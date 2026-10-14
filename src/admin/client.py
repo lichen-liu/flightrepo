@@ -6,7 +6,7 @@ import json
 import shlex
 import sqlite3
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import httpx
 
-from admin.ingestion import run_ingestion
+from admin.ingestion import add_ingestion_commands, run_ingestion
 from admin.management import (
     ask,
     create_airport,
@@ -50,7 +50,7 @@ def write_json(path, value):
 
 
 def write_flight_export(path, records):
-    """Keep the previous export intact if a remote chunk fails halfway through."""
+    """Keep the previous export intact if reading or writing fails halfway through."""
     temporary = None
     try:
         with NamedTemporaryFile(
@@ -341,35 +341,7 @@ def parser():
     continuation.add_argument("path", type=Path, help="RebuildRequest JSON")
     continuation.add_argument("--snapshot-out", type=Path)
 
-    ingest = commands.add_parser("ingest", help="configure, run or inspect bounded ingestion jobs")
-    ingest.add_argument(
-        "ingest_action", nargs="?", choices=("run", "configure", "status"), default="run"
-    )
-    ingest.add_argument("--source", "--pipeline", choices=("adsblol", "csv", "aerodatabox"))
-    ingest.add_argument("--airports", nargs="+")
-    ingest.add_argument("--start", type=date.fromisoformat)
-    ingest.add_argument("--end", type=date.fromisoformat)
-    ingest.add_argument("--csv", type=Path)
-    ingest.add_argument("--manifest", type=Path)
-    ingest.add_argument("--airport-catalog", type=Path)
-    ingest.add_argument("--filter", dest="filter_path", type=Path)
-    ingest.add_argument("--data-root", type=Path)
-    ingest.add_argument(
-        "--output-db",
-        type=Path,
-        help="ADSB itinerary SQLite destination; defaults to the selected admin database",
-    )
-    ingest.add_argument("--boundary-manifest", type=Path)
-    ingest.add_argument(
-        "--budget-gib",
-        type=float,
-        help="daily raw/staging working-space budget; separate from storage quota",
-    )
-    ingest.add_argument(
-        "--refresh-diagnostics",
-        action="store_true",
-        help="reprocess selected ADSB days to refresh diagnostic receipts; may download raw inputs again",
-    )
+    add_ingestion_commands(commands)
     return root
 
 
@@ -590,6 +562,9 @@ def main(arguments=None):
     configure_logging()
     try:
         run(sys.argv[1:] if arguments is None else arguments)
+    except (EOFError, KeyboardInterrupt):
+        print("\nCommand cancelled; completed ingestion days are preserved.", file=sys.stderr)
+        raise SystemExit(130)
     except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1)
