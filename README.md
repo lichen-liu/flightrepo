@@ -56,6 +56,10 @@ The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the
 
 Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
+Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for `list-flights`, `show`, interactive `edit`, confirmed `delete`, read-only SQL `query`, and advanced routing with `search-route` prompts or `search` flags. Reads leave the database unchanged.
+
+Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `stats` to initialize a new empty database.
+
 ```sh
 python -m admin import-json var/flights.json
 python -m admin import-airports var/airports.json
@@ -66,6 +70,8 @@ python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-
 ```
 
 Use `help` in the shell or `COMMAND --help` for options. JSON flight imports are arrays of `FlightRecord` objects; matching `(provider, provider_id)` records are updated and omitted records retained. Airport catalogs contain `airports` and optional directed `transfers`. Imports validate the entire batch before writing. CSV date bounds use UTC departure dates; timestamps require offsets. Keep working files under `var/`.
+
+To enter an entire route by hand, start `FLIGHT_DATABASE_PATH=/absolute/path/to/flights.db python -m admin` and type `create-route`. Enter the origin, then each leg's destination, flight number, departure and arrival timestamps (with `Z` or a timezone offset). Choose whether to add another leg; its origin is the previous destination. The command previews the complete route in UTC and asks before saving all legs together. Type `cancel` at any prompt or press Ctrl+C to discard it. Each saved flight receives a unique ID under provider `manual`. Routes are derived from the saved flights, rather than stored as named journeys; search connection limits still apply. You can also launch the wizard directly with `python -m admin create-route`.
 
 AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, caching and redistribution rights must be checked for your account. Automatic refresh is not implemented; run `ingest` separately to update the same database while readers remain connected.
 

@@ -47,11 +47,82 @@ class FlightReader(SQLiteConnection):
         data["codeshares"] = json.loads(data["codeshares"])
         return FlightRecord.model_validate(data)
 
+    def overview(self) -> dict:
+        """Aggregate database coverage in one read snapshot without loading flights."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            totals = dict(
+                connection.execute("""SELECT COUNT(*) AS flights,
+                COUNT(DISTINCT airline_iata) AS airlines,
+                MIN(departure_scheduled) AS first_departure,
+                MAX(departure_scheduled) AS last_departure,
+                MIN(fetched_at) AS oldest_fetch, MAX(fetched_at) AS latest_fetch
+                FROM flights""").fetchone()
+            )
+            for key, query in {
+                "routes": "SELECT COUNT(*) FROM (SELECT DISTINCT origin_iata, destination_iata FROM flights)",
+                "flight_airports": "SELECT COUNT(*) FROM (SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)",
+                "catalog_airports": "SELECT COUNT(*) FROM airports",
+                "transfers": "SELECT COUNT(*) FROM airport_transfers",
+                "missing_airports": "SELECT COUNT(*) FROM (SELECT origin_iata AS iata FROM flights UNION SELECT destination_iata FROM flights) WHERE iata NOT IN (SELECT iata FROM airports)",
+            }.items():
+                totals[key] = connection.execute(query).fetchone()[0]
+            for key, column in (("providers", "provider"), ("statuses", "status")):
+                totals[key] = dict(
+                    connection.execute(
+                        f"SELECT {column}, COUNT(*) FROM flights GROUP BY {column} ORDER BY {column}"
+                    ).fetchall()
+                )
+            totals["top_routes"] = [
+                dict(row)
+                for row in connection.execute("""
+                SELECT origin_iata, destination_iata, COUNT(*) AS flights
+                FROM flights GROUP BY origin_iata, destination_iata
+                ORDER BY flights DESC, origin_iata, destination_iata LIMIT 5
+            """)
+            ]
+        return {"data_file": str(self.path.resolve()), **totals}
+
     def all_records(self) -> list[FlightRecord]:
         with self.connect() as connection:
             return [
                 self._record(row)
                 for row in connection.execute("SELECT * FROM flights ORDER BY departure_scheduled")
+            ]
+
+    def flight(self, provider: str, provider_id: str) -> FlightRecord:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM flights WHERE provider=? AND provider_id=?",
+                (provider, provider_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"Flight not found: {provider}/{provider_id}")
+        return self._record(row)
+
+    def list_flights(self, *, origin=None, destination=None, provider=None, status=None, limit=20):
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        clauses, values = [], []
+        for column, value in (
+            ("origin_iata", origin),
+            ("destination_iata", destination),
+            ("provider", provider),
+            ("status", status),
+        ):
+            if value is not None:
+                clauses.append(f"{column}=?")
+                values.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connect() as connection:
+            return [
+                self._record(row)
+                for row in connection.execute(
+                    "SELECT * FROM flights"
+                    + where
+                    + " ORDER BY departure_scheduled, provider, provider_id LIMIT ?",
+                    [*values, limit],
+                )
             ]
 
     @staticmethod
