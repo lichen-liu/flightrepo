@@ -228,6 +228,8 @@ def process_name(pid: int) -> str:
 
 
 def status(root: Path):
+    settings = read_settings(root)
+    print(f"Local app: http://127.0.0.1:{settings['port']}/ (configured port: {settings['port']})")
     for job in LABELS:
         result = launchctl("print", target(job))
         if result.returncode:
