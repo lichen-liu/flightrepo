@@ -13,7 +13,15 @@ from uuid import uuid4
 
 import httpx
 
-from admin.management import ask, delete_flight, edit_flight, query_database, route_request, yes_no
+from admin.management import (
+    ask,
+    create_airport,
+    delete_flight,
+    edit_flight,
+    query_database,
+    route_request,
+    yes_no,
+)
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
 from core.models import FlightRecord, FlightStatus, IngestRequest
@@ -161,6 +169,7 @@ def parser():
     )
     overview.add_argument("--json", action="store_true", help="print structured JSON")
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
+    commands.add_parser("create-airport", help="enter airport metadata, preview and save")
 
     flights = commands.add_parser("flights", help="browse flight records with optional filters")
     flights.add_argument("--origin", type=airport_code)
@@ -367,6 +376,8 @@ def run(arguments, *, database_path=None):
             output(clear_database(path))
     elif args.command == "create-route":
         create_route(path)
+    elif args.command == "create-airport":
+        create_airport(path, output)
     elif args.command == "overview":
         summary = FlightReader(path).overview()
         output(summary) if args.json else print_overview(summary)

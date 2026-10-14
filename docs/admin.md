@@ -92,6 +92,27 @@ must match. Both modes refuse to overwrite a record changed during review.
 Save/delete prompts default to no. Cancelling route creation does not create a
 new database file.
 
+## Create an airport
+
+Run `create-airport` in the shell, or target a database directly:
+
+```sh
+python -m admin --db var/flights.db create-airport
+```
+
+Enter the three-letter IATA code, airport name, city ID, IANA timezone (such as
+`America/Toronto`), latitude and longitude in decimal degrees. Codes are converted
+to uppercase. Reuse an existing city ID to group airports in the same city;
+transfer allowances are still configured separately through the catalog import.
+
+The command validates and previews the airport before saving. On invalid input,
+correct the fields or press Enter to keep an entered value. Save defaults to no;
+`cancel`, Ctrl+C and EOF discard the entry without creating a database. Confirming
+creates the Flyji schema if needed and saves the airport in the selected file.
+An existing code is refused, including when another writer inserts it during the
+prompts. Use `airports import` to update existing metadata. The airport is then
+available to `airports` and the server catalog, even without stored flights.
+
 ## Batch and catalog files
 
 ```text
