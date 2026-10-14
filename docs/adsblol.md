@@ -1,9 +1,10 @@
 # ADSB.lol: flight-leg ingestion and aircraft type
 
 Updated October 14, 2026. The serving requirement is a flight's aircraft type
-code. Aircraft traces, aircraft-day summaries and trace caches are not part of
-the serving application. The proposed dataset must store compact, searchable
-flight-leg rows locally, including the type code.
+code. Aircraft traces and aircraft-day summaries are not part of serving.
+The backend now supports [normalized itinerary downloads with a live disk quota](itinerary-cache.md).
+That storage mechanism requires flight-leg records, including the type code;
+ADSB.lol observations still need a validated conversion before they can feed it.
 
 ## What the pilot proved
 
@@ -53,6 +54,33 @@ and [data loader](https://github.com/adsblol/api/blob/main/src/adsb_api/utils/pr
 have no historical date argument. A current callsign-route result cannot verify
 where that callsign flew on a particular day in 2025.
 
+Direct endpoint probes on October 14 confirmed the distinction:
+
+- `GET /v2/callsign/ACA107` returned a live aircraft with `t: B789`,
+  registration `C-FVLU` and ICAO address `c038a7`.
+- [Standing route JSON for ACA107](https://vrs-standing-data.adsb.lol/routes/AC/ACA107.json)
+  returned `YYZ-YVR`, flight number `107` and airline code `ACA`, plus airport
+  metadata. It contained no date, departure/arrival times or aircraft assignment.
+- `GET /api/0/route/ACA107/{lat}/{lng}` returned HTTP 500; the documented
+  `POST /api/0/routeset` returned HTTP 201 with an empty body in this probe.
+  Neither probe established a reliable live route response. The route source
+  implementation independently shows callsign/position inputs, with no date filter.
+- [Standing routes CSV](https://vrs-standing-data.adsb.lol/routes.csv.gz) was
+  4,500,164 compressed bytes (18,957,159 uncompressed), containing 620,700
+  data rows. Its five columns are `Callsign, Code, Number, AirlineCode,
+  AirportCodes`. It is a compact route-hint catalogue, not dated flight instances.
+
+The API rejected a generic HTTP client's User-Agent with HTTP 403, asking for
+contact information. The live callsign request succeeded using this repository's
+public GitHub URL in a descriptive User-Agent. That does not establish permission
+or availability guarantees for production load.
+
+Combining the live `B789` observation and standing `YYZ-YVR` route produces a
+current route/type hint. It does not prove that this route applied to that aircraft
+on a requested historical date, and cannot establish a connection itinerary.
+Origin/date search requires actual dated leg records with departure and arrival
+times; airport metadata and callsign routes alone cannot supply those records.
+
 Aircraft type is the field `t` in readsb data; `type` describes the message
 source, such as ADS-B or MLAT. The observed callsign is in `flight`. These
 fields are documented in the [readsb format](https://github.com/wiedehopf/readsb/blob/dev/README-json.md).
@@ -96,7 +124,8 @@ connection semantics—for example, arrival's upper bound plus minimum connectio
 time must precede departure's lower bound. Filling the scheduled fields with
 inferred takeoff and landing times would misrepresent the evidence.
 
-The full ADSB-to-search pipeline is not implemented or validated in this PR.
+The normalized itinerary-to-search path is implemented and tested. The full
+ADSB-to-normalized-itinerary pipeline is not implemented or validated in this PR.
 Cross-midnight continuity, deduplication, callsign assignment, endpoint validation,
 coverage measurement and observed-time search remain required work. These
 observations supply historical movements, not future schedules or availability.

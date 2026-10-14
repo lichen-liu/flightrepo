@@ -4,11 +4,38 @@ import json
 from collections.abc import Iterable
 
 from core.connections import Airport, AirportTransfer
+from core.itinerary_cache import ItineraryCache
 from core.models import FlightRecord
 from core.storage import SCHEMA, SQLiteConnection, utc_text
 
 
 class FlightUpdater(SQLiteConnection):
+    def __init__(self, path, *, cache=None):
+        super().__init__(path)
+        self.cache = cache or ItineraryCache(path)
+
+    def _remote_original(self, provider, provider_id):
+        with self.connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM flights WHERE provider=? AND provider_id=?", (provider, provider_id)
+            ).fetchone()
+        if exists:
+            return None, None
+        catalog = self.cache.catalog()
+        if catalog is None:
+            return None, None
+        remote = self.cache.flight(provider, provider_id, catalog=catalog)
+        return remote, catalog.model_dump_json() if remote else None
+
+    @staticmethod
+    def _cache_schema(connection):
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='itinerary_cache_deleted'"
+            ).fetchone()
+            is not None
+        )
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -17,6 +44,17 @@ class FlightUpdater(SQLiteConnection):
                 raise RuntimeError("SQLite WAL mode could not be enabled")
             connection.executescript(SCHEMA)
             connection.execute("BEGIN IMMEDIATE")
+            old_policy = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(itinerary_cache_policy)")
+            }
+            if "catalog_json" in old_policy:
+                connection.execute(
+                    "UPDATE itinerary_catalog_state SET url=(SELECT catalog_url FROM itinerary_cache_policy WHERE id=1), data=(SELECT catalog_json FROM itinerary_cache_policy WHERE id=1) WHERE id=1 AND data IS NULL"
+                )
+                connection.execute(
+                    "UPDATE itinerary_cache_policy SET catalog_json=NULL, catalog_url=NULL WHERE id=1"
+                )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(flights)")}
             if "aircraft_type_code" not in columns:
                 connection.execute("ALTER TABLE flights ADD COLUMN aircraft_type_code TEXT")
@@ -50,6 +88,11 @@ class FlightUpdater(SQLiteConnection):
         )
         with self.connect() as connection:
             connection.executemany(sql, rows)
+            if self._cache_schema(connection):
+                connection.executemany(
+                    "DELETE FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",
+                    [(record["provider"], record["provider_id"]) for record in rows],
+                )
         return len(rows)
 
     def reset(self) -> None:
@@ -59,6 +102,11 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM flights")
             connection.execute("DELETE FROM airport_transfers")
             connection.execute("DELETE FROM airports")
+            connection.execute("DELETE FROM itinerary_cache_entries")
+            connection.execute("DELETE FROM itinerary_cache_refs")
+            connection.execute("DELETE FROM itinerary_cache_deleted")
+            connection.execute("UPDATE itinerary_cache_policy SET source_url='' WHERE id=1")
+            connection.execute("UPDATE itinerary_catalog_state SET url=NULL, data=NULL WHERE id=1")
 
     def create_airport(self, airport: Airport) -> None:
         """Insert one validated airport without replacing existing metadata."""
@@ -111,17 +159,32 @@ class FlightUpdater(SQLiteConnection):
     def delete(
         self, provider: str, provider_id: str, *, expected: FlightRecord | None = None
     ) -> int:
+        remote, version = (
+            self._remote_original(provider, provider_id) if expected is not None else (None, None)
+        )
         with self.connect() as connection:
             if expected is not None:
                 connection.execute("BEGIN IMMEDIATE")
-                self._require_unchanged(connection, expected)
-            return connection.execute(
+                self._require_unchanged(connection, expected, remote=remote, version=version)
+            changed = connection.execute(
                 "DELETE FROM flights WHERE provider=? AND provider_id=?",
                 (provider, provider_id),
             ).rowcount
+            if self._cache_schema(connection) and (
+                remote is not None
+                or connection.execute(
+                    "SELECT 1 FROM itinerary_cache_refs WHERE provider=? AND provider_id=?",
+                    (provider, provider_id),
+                ).fetchone()
+            ):
+                connection.execute(
+                    "INSERT OR IGNORE INTO itinerary_cache_deleted VALUES (?,?)",
+                    (provider, provider_id),
+                )
+            return changed or int(remote is not None)
 
     @staticmethod
-    def _require_unchanged(connection, original):
+    def _require_unchanged(connection, original, *, remote=None, version=None):
         row = connection.execute(
             "SELECT * FROM flights WHERE provider=? AND provider_id=?",
             (original.provider, original.provider_id),
@@ -129,6 +192,16 @@ class FlightUpdater(SQLiteConnection):
         current = dict(row) if row is not None else None
         if current is not None:
             current["codeshares"] = json.loads(current["codeshares"])
+        elif remote is not None:
+            state = connection.execute(
+                "SELECT data FROM itinerary_catalog_state WHERE id=1"
+            ).fetchone()
+            deleted = connection.execute(
+                "SELECT 1 FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",
+                (original.provider, original.provider_id),
+            ).fetchone()
+            if state is not None and state[0] == version and not deleted:
+                current = remote.model_dump()
         if current is None or FlightRecord.model_validate(current) != original:
             raise ValueError("Flight changed or was deleted; reload it before updating or deleting")
 
@@ -152,13 +225,25 @@ class FlightUpdater(SQLiteConnection):
             data[field] = utc_text(value) if value else None
         data["codeshares"] = json.dumps(data["codeshares"])
         data["aircraft_type_code"] = replacement.aircraft_type_code
+        remote, version = self._remote_original(original.provider, original.provider_id)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._require_unchanged(connection, original)
+            self._require_unchanged(connection, original, remote=remote, version=version)
             assignments = ", ".join(
                 f"{field}=:{field}" for field in data if field not in ("provider", "provider_id")
             )
-            return connection.execute(
+            count = connection.execute(
                 f"UPDATE flights SET {assignments} WHERE provider=:provider AND provider_id=:provider_id",
                 data,
             ).rowcount
+            if not count:
+                connection.execute(
+                    f"INSERT INTO flights ({','.join(data)}) VALUES ({','.join(':' + name for name in data)})",
+                    data,
+                )
+            if self._cache_schema(connection):
+                connection.execute(
+                    "DELETE FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",
+                    (original.provider, original.provider_id),
+                )
+            return 1

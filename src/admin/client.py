@@ -8,7 +8,9 @@ import shlex
 import sqlite3
 import sys
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 import httpx
@@ -24,6 +26,7 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
+from core.itinerary_cache import cache_status, policy, set_quota, set_source
 from core.models import FlightRecord, FlightStatus, IngestRequest
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
@@ -46,6 +49,33 @@ def read_json(path):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def write_flight_export(path, records):
+    """Keep the previous export intact if a remote chunk fails halfway through."""
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".partial",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            output.write("[\n")
+            first = True
+            for record in records:
+                if not first:
+                    output.write(",\n")
+                output.write(json.dumps(record.model_dump(mode="json")))
+                first = False
+            output.write("\n]\n")
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def query_limit(value):
@@ -138,6 +168,10 @@ def print_overview(summary):
         f"Transfer rules: {summary['transfers']:,}"
     )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
+    if summary.get("catalogue_chunks"):
+        print(
+            f"Catalogue flight records: {summary['catalogue_flights']:,}   Chunks: {summary['catalogue_chunks']:,} (downloaded on demand)"
+        )
     for label, first, last in (
         ("Departures (UTC)", "first_departure", "last_departure"),
         ("Fetched (UTC)", "oldest_fetch", "latest_fetch"),
@@ -151,6 +185,21 @@ def print_overview(summary):
         print(f"  {route['origin_iata']} -> {route['destination_iata']}: {route['flights']:,}")
     if not summary["flights"]:
         print("  No flights yet. Use create-route or import-json to add flights.")
+
+
+def disk_quota(value):
+    if value.lower() in {"off", "unlimited"}:
+        return None
+    units = {"b": 1, "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40}
+    import re
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(B|KiB|MiB|GiB|TiB)?", value, re.IGNORECASE)
+    if match:
+        try:
+            return int(Decimal(match[1]) * units[(match[2] or "B").lower()])
+        except InvalidOperation:
+            pass
+    raise argparse.ArgumentTypeError("Use a non-negative size such as 20GiB, 500MiB, bytes, or off")
 
 
 def parser():
@@ -170,6 +219,21 @@ def parser():
     overview.add_argument("--json", action="store_true", help="print structured JSON")
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
     commands.add_parser("create-airport", help="enter airport metadata, preview and save")
+    cache = commands.add_parser(
+        "cache", help="itinerary download source, disk usage and live quota"
+    )
+    cache_actions = cache.add_subparsers(dest="cache_action", required=True)
+    cache_actions.add_parser("status", help="check quota and show local/cached disk usage")
+    quota = cache_actions.add_parser(
+        "quota", help="show or change quota; cleanup waits for next data IO"
+    )
+    quota.add_argument("size", nargs="?", type=disk_quota, default=argparse.SUPPRESS)
+    source = cache_actions.add_parser(
+        "source", help="show or select a normalized itinerary catalogue URL"
+    )
+    source.add_argument("url", nargs="?")
+    source.add_argument("--off", action="store_true", help="disable on-demand downloading")
+    cache_actions.add_parser("refresh", help="reload source catalogue on next data access")
 
     flights = commands.add_parser("flights", help="browse flight records with optional filters")
     flights.add_argument("--origin", type=airport_code)
@@ -378,6 +442,39 @@ def run(arguments, *, database_path=None):
         create_route(path)
     elif args.command == "create-airport":
         create_airport(path, output)
+    elif args.command == "cache":
+        if args.cache_action == "status":
+            output(cache_status(path))
+        elif args.cache_action == "quota":
+            if hasattr(args, "size"):
+                set_quota(path, args.size)
+                output({"quota_bytes": args.size, "retirement": "next database IO"})
+            else:
+                state = policy(path)
+                if state is None:
+                    raise ValueError("Initialize with maintenance init first")
+                output({"quota_bytes": state["quota_bytes"]})
+        elif args.cache_action == "source":
+            if args.off and args.url:
+                raise ValueError("Use a URL or --off")
+            if args.off or args.url:
+                set_source(path, "" if args.off else args.url)
+            state = policy(path)
+            if state is None:
+                raise ValueError("Initialize with maintenance init first")
+            output(
+                {
+                    "source_url": state["source_url"]
+                    if state["source_url"] is not None
+                    else get_settings().itinerary_catalog_url or state["catalog_url"]
+                }
+            )
+        else:
+            state = policy(path)
+            if state is None:
+                raise ValueError("Initialize with maintenance init first")
+            set_source(path, state["source_url"])
+            output({"catalogue_refresh": "next database access"})
     elif args.command == "overview":
         summary = FlightReader(path).overview()
         output(summary) if args.json else print_overview(summary)
@@ -439,9 +536,7 @@ def run(arguments, *, database_path=None):
         updater.initialize()
         output({"upserted": updater.upsert(records)})
     elif args.command == "export-json":
-        write_json(
-            args.path, [row.model_dump(mode="json") for row in FlightReader(path).all_records()]
-        )
+        write_flight_export(args.path, FlightReader(path).iter_records())
         output({"exported_to": args.path})
     elif args.command == "airports":
         if args.airport_action == "import":

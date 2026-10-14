@@ -46,6 +46,36 @@ CREATE TABLE IF NOT EXISTS airport_transfers (
     PRIMARY KEY (arrival_iata, departure_iata),
     CHECK(arrival_iata != departure_iata)
 );
+CREATE TABLE IF NOT EXISTS itinerary_cache_policy (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    quota_bytes INTEGER CHECK(quota_bytes >= 0),
+    source_url TEXT,
+    access_sequence INTEGER NOT NULL DEFAULT 0,
+    evicted_chunks INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO itinerary_cache_policy(id, quota_bytes) VALUES (1, 21474836480);
+CREATE TABLE IF NOT EXISTS itinerary_catalog_state (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    url TEXT,
+    data TEXT
+);
+INSERT OR IGNORE INTO itinerary_catalog_state(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS itinerary_cache_entries (
+    sha256 TEXT PRIMARY KEY,
+    last_access INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_itinerary_cache_lru ON itinerary_cache_entries(last_access, sha256);
+CREATE TABLE IF NOT EXISTS itinerary_cache_deleted (
+    provider TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    PRIMARY KEY(provider, provider_id)
+);
+CREATE TABLE IF NOT EXISTS itinerary_cache_refs (
+    provider TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    PRIMARY KEY(provider, provider_id)
+);
 """
 
 
@@ -62,6 +92,11 @@ class SQLiteConnection:
 
     @contextmanager
     def connect(self):
+        # Cache policy is shared on disk, so live admin changes apply at the next IO.
+        # This never creates or migrates a database and never retires permanent facts.
+        from core.itinerary_cache import enforce_quota
+
+        enforce_quota(self.path)
         if self.read_only:
             connection = sqlite3.connect(
                 self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10

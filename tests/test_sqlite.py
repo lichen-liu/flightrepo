@@ -133,3 +133,19 @@ def test_serving_api_only_exposes_reads(tmp_path):
             assert client.post("/v1/admin/ingestions").status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_local_updates_work_before_cache_schema_upgrade(tmp_path):
+    from core.storage import SCHEMA
+
+    updater = FlightUpdater(tmp_path / "pre-cache.db")
+    with updater.connect() as connection:
+        connection.executescript(
+            SCHEMA.split("CREATE TABLE IF NOT EXISTS itinerary_cache_policy")[0]
+        )
+    record = flight("1", "AC1", "YYZ", "YUL", "2026-10-10T10:00:00Z", "2026-10-10T11:00:00Z")
+    updater.upsert([record])
+    changed = record.model_copy(update={"aircraft_type_code": "B738"})
+    assert updater.update(record, changed) == 1
+    assert FlightReader(updater.path).flight(record.provider, record.provider_id) == changed
+    assert updater.delete(record.provider, record.provider_id, expected=changed) == 1

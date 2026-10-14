@@ -36,6 +36,12 @@ schema.
 
 ## Inspect stored facts
 
+`cache source URL` configures normalized itinerary downloads inside the backend.
+`cache quota 20GiB` changes the on-disk quota live, including from another shell;
+retirement waits until the next database IO. `cache status` checks usage and LRU
+retirement. `cache quota off` removes the ceiling; `cache source --off` disables
+downloads. See [on-demand itinerary storage](itinerary-cache.md) for details.
+
 ```text
 flyji> overview
 flyji> overview --json

@@ -502,6 +502,8 @@ function renderEvidence() {
         : "None",
     ],
   ];
+  if (data.catalogue_flight_count)
+    entries.push(["Catalogue records", String(data.catalogue_flight_count)]);
   if (d)
     entries.push(
       ["Engine", d.engine_version],
@@ -957,9 +959,12 @@ async function loadCatalog() {
       const demo =
         catalog.dataset.providers.length === 1 &&
         catalog.dataset.providers[0] === "demo";
+      const hasFlights = catalog.dataset.flight_count || catalog.dataset.catalogue_flight_count;
       $("dataset-tag").textContent =
-        `${demo ? "Demo schedules" : "Imported schedules"} · ${catalog.dataset.flight_count} records`;
-      $("status").textContent = catalog.dataset.flight_count
+        catalog.dataset.catalogue_flight_count
+          ? `Catalogue schedules · ${catalog.dataset.catalogue_flight_count} records · ${catalog.dataset.flight_count} local`
+          : `${demo ? "Demo schedules" : "Imported schedules"} · ${catalog.dataset.flight_count} records`;
+      $("status").textContent = hasFlights
         ? "Dates are based on the imported schedules."
         : "No flight records loaded. Import data with the internal client to begin.";
       if (catalog.airports_truncated)
@@ -969,7 +974,7 @@ async function loadCatalog() {
       await loadDates();
       renderEvidence();
       if (
-        catalog.dataset.flight_count &&
+        hasFlights &&
         availableDates.size &&
         field("origin").value &&
         field("destination").value
