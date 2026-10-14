@@ -15,4 +15,5 @@ See [the dataset licence](https://github.com/adsblol/globe_history_2025/blob/mai
 
 The inventory was checked against public GitHub release asset metadata on
 October 14, 2026. Archive URLs or availability can change; every retrieval checks
-published length and available SHA-256, and every indexed trace checks SHA-256.
+published length and available SHA-256. This file inventory cannot power itinerary
+search: the local database must first contain accepted individual flight legs.

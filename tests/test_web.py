@@ -94,27 +94,23 @@ def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
     assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
 
 
-def test_aircraft_metadata_survives_storage_edit_and_serving(client, demo):
-    from core.models import AircraftMetadata
-
+def test_aircraft_type_survives_storage_edit_and_serving(client, demo):
     record = FlightRecord.model_validate(demo[2]["flights"][0])
-    record.aircraft = AircraftMetadata(
-        type_code="A320", registration="C-TEST", source="test", observed_at=record.fetched_at
-    )
+    record.aircraft_type_code = "A320"
     demo[0].upsert([record])
     saved = demo[1].flight(record.provider, record.provider_id)
-    assert saved.aircraft == record.aircraft
+    assert saved.aircraft_type_code == record.aircraft_type_code
     changed = saved.model_copy(update={"flight_number": "AC123"})
     demo[0].update(saved, changed)
     assert demo[1].flight(record.provider, record.provider_id) == changed
     result = client.post("/v1/itineraries/search/local", json=departure_request()).json()
     legs = [f for item in result["items"] for f in item["legs"]]
-    assert any(f.get("aircraft", {}).get("type_code") == "A320" for f in legs if f.get("aircraft"))
+    assert any(f.get("aircraft_type_code") == "A320" for f in legs)
 
 
-def test_observation_endpoint_is_separate_and_bounded(client):
-    assert client.get("/v1/observations?day=2025-01-01").json() == []
-    assert client.get("/v1/observations?day=2025-01-01&limit=1001").status_code == 422
+def test_trace_serving_is_not_part_of_the_application(client):
+    assert client.get("/v1/observations?day=2025-01-01").status_code == 404
+    assert client.get("/v1/observations/2025-01-01/ad4584/trace").status_code == 404
 
 
 def test_departure_search_needs_no_arrival_input(client):

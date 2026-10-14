@@ -1,172 +1,167 @@
-# ADSB.lol ingestion and storage findings
+# ADSB.lol: flight-leg ingestion and aircraft type
 
-Measured October 14, 2026. The recommended design is a compact aircraft-day
-catalogue with byte offsets into the provider's archives, plus a bounded cache
-that retrieves individual traces using HTTP Range.
+Updated October 14, 2026. The serving requirement is a flight's aircraft type
+code. Aircraft traces, aircraft-day summaries and trace caches are not part of
+the serving application. The proposed dataset must store compact, searchable
+flight-leg rows locally, including the type code.
 
-## Why the archives are large
+## What the pilot proved
 
-The [2025 archive](https://github.com/adsblol/globe_history_2025) contains repeated
-position observations for many kinds of aircraft, plus heatmap replay data.
-These are not one-row-per-flight schedule records. Individual trace JSON files
-are gzip compressed inside a split, otherwise uncompressed tar archive.
+The earlier byte-range experiment proved retrieval of one known aircraft-day
+trace from a GitHub archive. It did not prove historical flight discovery,
+correct leg reconstruction, or itinerary search from a catalogue.
 
-The local inventory selects one preferred replica for every day, including
-December 31 from the next year's repository:
+The day-level inventory in `catalogs/adsblol-2025.json` lists archive files and
+sizes. The initial aircraft-day summaries list callsigns and observation ranges.
+Neither contains the origin, destination and per-flight times needed for search.
+The 13,241 retained aircraft-days must not be described as 13,241 flights.
 
-| Preferred archive volume | GiB |
-| --- | ---: |
-| Average daily | 2.837 |
-| Median daily | 2.977 |
-| Smallest day, January 1 | 1.567 |
-| Largest day, July 18 | 3.584 |
-| Entire 2025, 365 days | 1,035.564 |
+A subsequent conservative research probe used the real December 30 sample for
+aircraft `ad4584`, whose source type code is `B737`. It retained four complete
+ground-to-ground candidates after checking nearby airports:
 
-All published replicas in the 2025 repository total approximately 2,116 GiB.
-Choosing the preferred replica avoids storing those duplicate observations.
-Even preferred raw archives exhaust a 20 GiB budget in approximately seven days.
+| Observed callsign | Inferred airports | Type |
+| --- | --- | --- |
+| SWA2595 | SNA → OAK | B737 |
+| SWA3281 | LAS → SAN | B737 |
+| SWA1817 | PHX → SAN | B737 |
+| SWA1821 | SAN → SJC | B737 |
 
-## Measured filtering result
+For SWA1817, the observed departure transition is between
+20:44:26.290 and 20:44:27.100 UTC, and the arrival transition between
+21:30:41.930 and 21:30:44.310 UTC on December 30. These are inferred movement
+time bounds, not scheduled times or gate times. Callsigns are operating radio
+identifiers; converting them to marketing flight numbers needs a separate mapping.
 
-We downloaded and processed the complete preferred December 30 archive, then
-deleted its raw parts after the catalogue transaction committed.
+The probe requires ground observations at both ends, short transition brackets,
+continuous coverage, a listed fixed-wing type, an airline callsign and an
+unambiguous airport within 5 km. It rejects partial flights, stale positions,
+coverage gaps and ambiguous endpoints. The airport match uses the current
+[OurAirports public dataset](https://ourairports.com/data/); historical airport
+changes and these inferred identities have not been independently reconciled.
+The result proves candidate extraction on one aircraft, not production coverage.
 
-| December 30, 2025 | Measurement |
-| --- | ---: |
-| Complete raw archive | 2.977 GiB |
-| Aircraft traces examined | 61,215 |
-| Commercial fixed-wing candidates retained | 13,241 |
-| Position observations in retained candidates | 36,796,571 |
-| Compressed traces for those candidates | 0.971 GiB |
-| Summary JSON, before trace-location fields | 8.96 MiB |
-| SQLite catalogue, before trace-location fields | 11.21 MiB |
+## What can be fetched on demand
 
-At this day's rate, one year is approximately 4.83 million aircraft-day summaries
-and 4 GiB before trace-location metadata; budget roughly 5–6 GiB for the indexed
-catalogue. This is a one-day extrapolation, not a measured annual size. Retaining
-all filtered traces would still need approximately 354 GiB, so filtering alone
-does not solve the storage problem.
+The current [public API schema](https://api.adsb.lol/api/openapi.json) provides
+live aircraft lookups by ICAO address, callsign, registration, type and location.
+It does not provide a dated historical flight-leg list or itinerary search.
 
-At roughly 0.9–1.1 KiB per indexed aircraft-day, one million summaries use about
-0.9–1.1 GiB, and five million about 4.5–5.5 GiB. These estimates include the
-SQLite representation and indexes but exclude the trace cache. The 6 GiB
-catalogue ceiling is independent of the 8 GiB cache ceiling; room for one raw
-day and transaction files remains within the combined 20 GiB cap.
+The callsign route service loads standing route data and tests whether a
+position lies plausibly along that route. Its [implementation](https://github.com/adsblol/api/blob/main/src/adsb_api/utils/api_routes.py)
+and [data loader](https://github.com/adsblol/api/blob/main/src/adsb_api/utils/provider.py)
+have no historical date argument. A current callsign-route result cannot verify
+where that callsign flew on a particular day in 2025.
 
-An aircraft-day can contain several commercial flights. These counts must not
-be presented as counts of individual flight legs. A true flight-leg database
-needs a separate segmentation and airport-matching process with uncertainty
-and coverage information. Observations have no future schedules.
+Aircraft type is the field `t` in readsb data; `type` describes the message
+source, such as ADS-B or MLAT. The observed callsign is in `flight`. These
+fields are documented in the [readsb format](https://github.com/wiedehopf/readsb/blob/dev/README-json.md).
+Live lookup can supply type when a flight is observed now. It cannot be relied
+on to recover a finished 2025 flight and its historical aircraft assignment.
 
-The explicit filter in `fixtures/adsblol-commercial-filter.json` requires a
-listed fixed-wing type and a known airline callsign prefix, or an explicitly
-listed owner/operator. It rejects military flags, non-ICAO addresses and
-incompatible emitter categories. Unknown types and missing commercial evidence
-are excluded. The starter airline list is not exhaustive: airline charters,
-business aviation, smaller operators and some regional types will be missed.
-Classification is labelled `commercial_fixed_wing_candidate`; neither an A320
-type nor a registry owner proves a scheduled commercial operation.
+For this requirement, fetching type on demand offers little benefit: while
+processing a flight's observations, its aircraft type is already available.
+Store the few-character code on that flight leg and return it with search results.
 
-## On-demand retrieval
+## How the searchable dataset must be built
 
-The [public API](https://www.adsb.lol/docs/open-data/api/) has live lookups by
-aircraft type, ICAO address, registration, callsign and location. Its current
-[OpenAPI schema](https://api.adsb.lol/api/openapi.json) has no historical date
-search. The API source documents dynamic [rate limits](https://github.com/adsblol/api#rate-limits).
-The routes endpoint provides plausible routes, not verified historical schedules.
+1. Read one preferred daily archive at a time, skipping heatmap members.
+2. Apply the explicit commercial fixed-wing selection rules. The starter list
+   is conservative and incomplete; unknown types or missing commercial evidence
+   must not be silently described as comprehensive airline coverage.
+3. Reconstruct individual movements from ground/airborne transitions, track the
+   operating callsign within each movement, and preserve state across UTC days.
+4. Match terminal observations to airport metadata. Keep the timing bounds,
+   inference method and confidence; reject incomplete or ambiguous legs.
+5. Store one compact row per accepted leg: stable identity, date, callsign,
+   airports, departure/arrival evidence and `aircraft_type_code`. The type comes
+   from the same aircraft's observations for this movement, not an unrelated
+   aircraft with a reused callsign.
+6. Discard the position data after processing. Index origin and departure time
+   for search; also index route/date as required by actual queries.
 
-The map retrieves individual recent traces through the path defined in
-[tar1090's source](https://github.com/wiedehopf/tar1090/blob/master/html/script.js).
-A request for aircraft `a5ea5c` on October 13, 2026 succeeded; December 30, 2025
-returned 403. This does not establish a universal retention window, and that
-undocumented path is not used as the 2025 backend.
+A user search reads these local rows for the origin and departure window. The
+routing engine follows onward rows and checks airport continuity, connection
+times and the arrival horizon. Each resulting itinerary contains its legs and
+their stored aircraft type codes. No external lookup is needed for a result.
 
-GitHub release assets honored HTTP Range in the pilot. After indexing the tar
-member's offset, compressed length and SHA-256, we retrieved the December 30
-trace for `ad4584` without fetching the whole archive:
+Calling this compact flight database a catalogue is reasonable, but its contents
+must be the searchable flight facts. A catalogue containing only aircraft IDs,
+dates and external file URLs cannot power the search.
 
-| Request | Size transferred | Elapsed |
+The current engine expects scheduled departure and arrival timestamps. ADSB.lol
+does not supply them. Before accepting these inferred legs into the serving
+engine, we need an explicit historical/observed-time contract and conservative
+connection semantics—for example, arrival's upper bound plus minimum connection
+time must precede departure's lower bound. Filling the scheduled fields with
+inferred takeoff and landing times would misrepresent the evidence.
+
+The full ADSB-to-search pipeline is not implemented or validated in this PR.
+Cross-midnight continuity, deduplication, callsign assignment, endpoint validation,
+coverage measurement and observed-time search remain required work. These
+observations supply historical movements, not future schedules or availability.
+
+## Storage and download cost
+
+The [2025 source archive](https://github.com/adsblol/globe_history_2025) contains
+repeated positions across all aircraft categories and heatmap replay data.
+One preferred copy per UTC day totals **1,035.564 GiB** for 365 days; December 31
+is hosted in the next year's repository. Average daily volume is **2.837 GiB**,
+median **2.977 GiB**, and the range is **1.567–3.584 GiB**.
+
+The complete December 30 benchmark examined **61,215 aircraft traces** and retained
+**13,241 commercial fixed-wing candidate aircraft-days**. Those aircraft-days
+contained 36,796,571 positions. Their full compressed traces alone would take
+0.971 GiB for the day. All raw daily parts were deleted after that research scan.
+
+A new synthetic storage benchmark uses the current flight schema, all indexes,
+and an `aircraft_type_code` on every row:
+
+| Flight rows with type code | Scheduled profile | Completed profile |
 | --- | ---: | ---: |
-| First request, 6,911 positions | 176,048 bytes | 0.424 seconds |
-| Second request, local cache | 0 network bytes | 0.011 seconds |
+| 100,000, measured | 47.82 MiB | 53.82 MiB |
+| 1 million, extrapolated | 0.47 GiB | 0.53 GiB |
+| 10 million, extrapolated | 4.67 GiB | 5.26 GiB |
+| 20 million, extrapolated | 9.34 GiB | 10.51 GiB |
 
-These are local measurements, not an upstream latency guarantee. Split-boundary
-requests are supported. Unexpected HTTP 200, incorrect range, truncated response
-or hash mismatch fails the request instead of falling back to a multi-GiB fetch.
+These synthetic measurements support keeping compact flight records inside
+20 GiB while leaving room for one raw day and temporary files. They do not
+establish the number of usable 2025 legs or the size of an observed-time schema
+with confidence/timing bounds. Measure that schema on a validated full-day leg
+extraction before committing to a whole-year import.
 
-The archive index still requires a one-time download and scan of approximately
-1.01 TiB. A day-level inventory alone cannot tell us which aircraft were present
-or where their trace bytes live. Processing one day at a time keeps disk use small,
-but does not eliminate this initial network cost. Approximate transfer-only times
-are 25 hours at 100 Mbps, 5 hours at 500 Mbps or 2.5 hours at 1 Gbps; decoding and
-upstream throttling add time. No full-year scan is started automatically.
+A one-time archive scan still transfers about **1.01 TiB**, even when positions
+are discarded immediately. At 100 Mbps that is about 25 hours of transfer alone;
+decoding and upstream throttling add time. The full-year scan has not started.
 
-## Storage and metadata
+## What this PR supports
 
-The catalogue writer caps SQLite at 6 GiB. The trace cache caps compressed traces
-at 8 GiB and evicts the least recently used entries; it also checks a combined
-20 GiB ceiling over the configured ADSB.lol data root. Raw archive downloads use
-the remaining allowance and preserve an extra GiB for a catalogue transaction.
-Writers and cache workers coordinate through a process lock. Raw files should be
-discarded after every successful day; keeping them eventually stops the importer
-at the budget. Interrupted downloads resume from `.partial` files.
+Scheduled flight records now have an optional flat `aircraft_type_code` field.
+It survives SQLite storage, edits, JSON/CSV imports, snapshots, exports and API
+responses. The route detail card displays it. Missing codes remain unknown.
+The ingestion/admin writer migrates existing flight files; serving stays read-only.
 
-Available fields include ICAO address, registration, type code, description,
-owner/operator text, manufacture year, emitter category, callsigns, first/last
-observation, position count, squawks, emergency codes, data sources, maximum
-barometric altitude and ground speed. Missing fields remain unknown. Full traces
-can contain further measurements, such as vertical rate, selected altitude,
-airspeed, roll and weather, where present; see the [readsb format](https://github.com/wiedehopf/readsb/blob/dev/README-json.md).
+The route calendar enables only dates containing non-cancelled departures from
+the selected origin, in the chosen UTC or airport-local clock. Archive inventory
+dates and aircraft-day research summaries do not enable that calendar.
 
-ADSB.lol publishes these observations under [ODbL 1.0](https://www.adsb.lol/docs/open-data/historical/).
-API trace responses include attribution and licence identification. Publication
-of a derived database needs to preserve the applicable licence obligations.
-Data-link submission endpoints are a separate project and are not download APIs.
-
-## Commands and serving
-
-Run from an installed checkout (`pip install -e .`), or set `PYTHONPATH=src`:
+Research probes are separate from serving:
 
 ```sh
-python scripts/catalog_adsblol.py catalogs/adsblol-2025.json \
-  --filter fixtures/adsblol-commercial-filter.json \
-  --data-root var/adsblol --date 2025-12-30 --download --discard-raw
+# Research one complete archive day, with a 20 GiB allowance.
+PYTHONPATH=src python scripts/probe_adsblol.py catalogs/adsblol-2025.json \
+  --filter fixtures/adsblol-commercial-filter.json --date 2025-12-30 \
+  --data-root var/adsblol --download --discard-raw
+
+# Inspect inferred leg candidates from an existing local research sample.
+PYTHONPATH=src python scripts/probe_adsblol_legs.py sample.json.gz \
+  --airports airports.csv --filter fixtures/adsblol-commercial-filter.json
 ```
 
-To scan all 365 days, replace `--date 2025-12-30` with `--all-dates`.
-This performs the roughly 1 TiB initial transfer. Rerunning skips successfully
-completed days with the same filter/representation fingerprint. Changing the
-filter rebuilds days. A malformed or oversized trace aborts that day's import,
-leaving any existing catalogue for the day intact.
+Neither command inserts routable flight records. The production trace endpoints,
+cache, archive offsets and aircraft observation tables have been removed. The
+previous byte-range timing remains a research result only.
 
-To serve this observation catalogue:
-
-```sh
-FLIGHT_DATABASE_PATH=var/adsblol/observations.db \
-FLIGHT_ADSBLOL_DATA_ROOT=var/adsblol uvicorn server.api:app
-```
-
-`GET /v1/observations?day=2025-12-30&type_code=B738&limit=100`
-returns candidate summaries. `GET /v1/observations/2025-12-30/ad4584/trace`
-fetches/caches an indexed trace. The research pilot attached trace offsets to 43
-sample summaries; a normal complete catalogue import indexes every retained trace.
-
-Observation summaries do not populate the scheduled `flights` table. The route
-calendar therefore remains empty until routable records are loaded. For real
-scheduled records, optional `aircraft` metadata survives import, storage, edits,
-route snapshots, exports and serving; route detail cards show type and registration.
-Existing SQLite flight files are upgraded by the internal writer's `initialize`
-operation, never by the read-only server. CSV imports may supply the metadata as
-an optional JSON `aircraft` column; JSON imports use the nested object directly.
-
-The calendar calls `/v1/dates?origin=YYZ&clock=local` (or `clock=UTC`) and enables
-only dates with non-cancelled departures for that origin. Gaps, empty databases,
-timezone changes and date-loading failures cannot enable unrelated days. Available
-departure data does not guarantee a feasible route to the chosen destination.
-
-## Collected so far
-
-The year inventory covers all 365 days. Actual observations currently cover
-December 30 only: 13,241 aircraft-day summaries. The raw daily archive was deleted;
-research samples and catalogue use less than 0.1 GiB. The complete year's aircraft
-catalogue has not been collected, and no inferred flight routes have been created.
+Data source attribution: ADSB.lol, [ODbL 1.0](https://www.adsb.lol/docs/open-data/historical/).
+The archive inventory covers all 365 days. Actual research observation summaries
+cover December 30 only. No ADSB-derived flights are in the serving database yet.

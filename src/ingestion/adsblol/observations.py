@@ -1,19 +1,33 @@
 """Reduce daily readsb traces to explicitly filtered aircraft-day observations."""
 
 import gzip
-import hashlib
 import io
 import json
-import math
 import re
 import tarfile
 from collections import Counter
 from contextlib import ExitStack
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from core.models import AircraftMetadata, AircraftObservation
+from core.routing.models import utc_instant
+
+
+class AircraftDaySummary(BaseModel):
+    """Research counts and identity evidence, never a searchable flight leg."""
+
+    day: date
+    icao_hex: str = Field(pattern=r"^[a-f0-9]{6}$")
+    aircraft_type_code: str
+    first_seen: datetime
+    last_seen: datetime
+    positions: int = Field(ge=1)
+    callsigns: list[str]
+    classification_evidence: list[str]
+
+    _times = field_validator("first_seen", "last_seen")(utc_instant)
+
 
 MAX_TRACE_BYTES = 32 * 1024**2
 
@@ -61,42 +75,16 @@ def summarize_trace(data, day, rules):
     if categories & {"A7", "B1", "B2", "B3", "B4", "B6", "B7", "C1", "C2", "C3"}:
         return None, "non_fixed_wing_category"
 
-    def maximum(index):
-        values = [
-            row[index]
-            for row in points
-            if isinstance(row[index], (float, int)) and math.isfinite(row[index])
-        ]
-        return max(values) if values else None
-
     times = [data["timestamp"] + row[0] for row in points]
     observed = datetime.fromtimestamp(max(times), UTC)
-    aircraft = AircraftMetadata(
-        icao_hex=hex_id,
-        registration=data.get("r"),
-        type_code=data.get("t"),
-        description=data.get("desc"),
-        owner_operator=data.get("ownOp"),
-        manufacture_year=str(data["year"]) if data.get("year") is not None else None,
-        emitter_category=next(iter(sorted(categories)), None),
-        military=bool(flags & 1) if isinstance(flags, int) else None,
-        source="adsb.lol",
-        observed_at=observed,
-    )
-    return AircraftObservation(
+    return AircraftDaySummary(
         day=day,
-        aircraft=aircraft,
+        icao_hex=hex_id,
+        aircraft_type_code=data["t"],
         first_seen=datetime.fromtimestamp(min(times), UTC),
         last_seen=observed,
         positions=len(points),
         callsigns=callsigns,
-        data_sources=sorted({row[9] for row in points if len(row) > 9 and row[9]}),
-        squawks=sorted({extra["squawk"] for extra in extras if extra.get("squawk")}),
-        emergencies=sorted(
-            {extra["emergency"] for extra in extras if extra.get("emergency") not in (None, "none")}
-        ),
-        max_altitude_ft=maximum(3),
-        max_ground_speed_knots=maximum(4),
         classification_evidence=evidence,
     ), "retained"
 
@@ -144,9 +132,6 @@ def summarize_archives(paths, day, rules):
             observation, reason = summarize_trace(json.loads(raw), day, rules)
             stats[reason] += 1
             if observation is not None:
-                observation.trace_offset = member.offset_data
-                observation.trace_bytes = member.size
-                observation.trace_sha256 = hashlib.sha256(compressed).hexdigest()
                 stats["retained_compressed_trace_bytes"] += len(compressed)
                 stats["positions"] += observation.positions
                 observations.append(observation)

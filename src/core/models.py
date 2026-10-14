@@ -1,14 +1,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_serializer,
-    model_validator,
-)
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from core.routing.models import airport_code, airport_codes, utc_instant
 
@@ -19,25 +12,6 @@ class FlightStatus(StrEnum):
     LANDED = "landed"
     CANCELLED = "cancelled"
     UNKNOWN = "unknown"
-
-
-class AircraftMetadata(BaseModel):
-    """Aircraft identity, separate from a flight's schedule and route evidence."""
-
-    model_config = ConfigDict(extra="forbid")
-    icao_hex: str | None = Field(default=None, pattern=r"^[a-f0-9]{6}$")
-    registration: str | None = Field(default=None, max_length=32)
-    type_code: str | None = Field(default=None, max_length=8)
-    description: str | None = Field(default=None, max_length=256)
-    emitter_category: str | None = Field(default=None, pattern=r"^[A-D][0-7]$")
-    operator: str | None = Field(default=None, max_length=128)
-    owner_operator: str | None = Field(default=None, max_length=128)
-    manufacture_year: str | None = Field(default=None, max_length=8)
-    military: bool | None = None
-    source: str = Field(min_length=1, max_length=128)
-    observed_at: datetime
-
-    _observed = field_validator("observed_at")(utc_instant)
 
 
 class FlightRecord(BaseModel):
@@ -54,13 +28,13 @@ class FlightRecord(BaseModel):
     status: FlightStatus = FlightStatus.UNKNOWN
     codeshares: list[str] = Field(default_factory=list)
     fetched_at: datetime
-    aircraft: AircraftMetadata | None = None
+    aircraft_type_code: str | None = Field(default=None, pattern=r"^[A-Z0-9]{2,8}$")
 
     @model_serializer(mode="wrap")
     def preserve_legacy_shape(self, handler):
         data = handler(self)
-        if data.get("aircraft") is None:
-            data.pop("aircraft", None)
+        if data.get("aircraft_type_code") is None:
+            data.pop("aircraft_type_code", None)
         return data
 
     _codes = field_validator("origin_iata", "destination_iata", mode="before")(airport_code)
@@ -90,37 +64,6 @@ class FlightRecord(BaseModel):
             raise ValueError("origin and destination must differ")
         if self.arrival_scheduled <= self.departure_scheduled:
             raise ValueError("arrival must be after departure")
-        return self
-
-
-class AircraftObservation(BaseModel):
-    """One aircraft's observed UTC day; no inferred schedule or airport endpoints."""
-
-    day: date
-    aircraft: AircraftMetadata
-    first_seen: datetime
-    last_seen: datetime
-    positions: int = Field(ge=1)
-    callsigns: list[str]
-    data_sources: list[str]
-    squawks: list[str]
-    emergencies: list[str]
-    max_altitude_ft: float | None = None
-    max_ground_speed_knots: float | None = None
-    classification: str = "commercial_fixed_wing_candidate"
-    classification_evidence: list[str]
-    trace_offset: int | None = Field(default=None, ge=0)
-    trace_bytes: int | None = Field(default=None, ge=1, le=32 * 1024**2)
-    trace_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-
-    _times = field_validator("first_seen", "last_seen")(utc_instant)
-
-    @model_validator(mode="after")
-    def valid_day(self):
-        if self.first_seen.date() != self.day or self.last_seen.date() != self.day:
-            raise ValueError("observation timestamps must fall within the UTC day")
-        if self.last_seen < self.first_seen or self.aircraft.icao_hex is None:
-            raise ValueError("observations require an ICAO address and ordered timestamps")
         return self
 
 

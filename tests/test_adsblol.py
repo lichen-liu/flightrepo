@@ -9,8 +9,6 @@ import pytest
 
 from ingestion.adsblol.archive import days_in_year, download_manifest, validate_asset
 from ingestion.adsblol.observations import CommercialFilter, summarize_archives, summarize_trace
-from ingestion.updater import FlightUpdater
-from server.reader import FlightReader
 
 
 def rules():
@@ -50,13 +48,8 @@ def test_summary_preserves_metadata_but_does_not_invent_a_flight():
     observation, reason = summarize_trace(trace(), date(2025, 1, 1), rules())
     assert reason == "retained"
     assert observation.positions == 2
-    assert observation.aircraft.type_code == "A320"
-    assert observation.aircraft.owner_operator == "UNITED AIRLINES INC"
-    assert observation.aircraft.operator is None
+    assert observation.aircraft_type_code == "A320"
     assert observation.callsigns == ["UAL123"]
-    assert observation.data_sources == ["adsb_icao", "mlat"]
-    assert observation.max_ground_speed_knots == 400
-    assert observation.emergencies == []
     assert observation.classification_evidence == ["callsign_prefix:UAL"]
     assert "departure_scheduled" not in observation.model_dump()
 
@@ -99,15 +92,6 @@ def test_trace_catalogue_reads_split_archives_without_extracting_members(tmp_pat
     observations, stats = summarize_archives([a, b], date(2025, 1, 1), rules())
     assert len(observations) == 1 and stats["retained"] == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ["part.aa", "part.ab"]
-    updater = FlightUpdater(tmp_path / "observations.db")
-    updater.initialize()
-    updater.save_observation_day(date(2025, 1, 1), observations, filter_sha256="test", stats=stats)
-    reader = FlightReader(updater.path)
-    assert reader.observations(date(2025, 1, 1)) == observations
-    assert reader.observations(date(2025, 1, 1), type_code="B738") == []
-    assert reader.all_records() == []
-    updater.reset()
-    assert reader.observations(date(2025, 1, 1)) == []
 
 
 def asset(**changes):

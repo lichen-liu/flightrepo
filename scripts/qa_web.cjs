@@ -102,6 +102,16 @@ async function chooseDate(page, name, date) {
   await page.locator(`#${name}-calendar button[data-date="${date}"]`).click();
 }
 
+check("flight details show the flight's stored aircraft type code", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.items[0].legs[0].aircraft_type_code = "B738";
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
+});
+
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
   await page.route("**/v1/dates?*", async (route) => {
     const origin = new URL(route.request().url()).searchParams.get("origin");

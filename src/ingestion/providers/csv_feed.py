@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from core.models import AircraftMetadata, FlightRecord, FlightStatus
+from core.models import FlightRecord, FlightStatus
 from core.routing.models import utc_instant
 from ingestion.providers.base import FlightProvider
 
@@ -73,9 +73,7 @@ class CsvProvider(FlightProvider):
                         arrival_actual=optional_timestamp(row.get("arrival_actual")),
                         codeshares=json.loads(row["codeshares"]) if row.get("codeshares") else [],
                         status=FlightStatus(row.get("status") or "scheduled"),
-                        aircraft=AircraftMetadata.model_validate_json(row["aircraft"])
-                        if row.get("aircraft")
-                        else None,
+                        aircraft_type_code=row.get("aircraft_type_code") or None,
                         fetched_at=optional_timestamp(row.get("fetched_at"))
                         or datetime.now(timezone.utc),
                     )

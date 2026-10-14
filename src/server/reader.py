@@ -6,7 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
-from core.models import AircraftObservation, FlightRecord, RouteSummary
+from core.models import FlightRecord, RouteSummary
 from core.planning import rebuild_from_snapshot, validate_prefix
 from core.routing.models import RouteSearchRequest, RoutingError, airport_code
 from core.routing.policy import ConnectionPolicy
@@ -47,8 +47,6 @@ class FlightReader(SQLiteConnection):
     def _record(row):
         data = dict(row)
         data["codeshares"] = json.loads(data["codeshares"])
-        if data.get("aircraft") is not None:
-            data["aircraft"] = json.loads(data["aircraft"])
         return FlightRecord.model_validate(data)
 
     def overview(self) -> dict:
@@ -104,39 +102,6 @@ class FlightReader(SQLiteConnection):
         if row is None:
             raise ValueError(f"Flight not found: {provider}/{provider_id}")
         return self._record(row)
-
-    def observations(self, day, *, type_code=None, limit=100) -> list[AircraftObservation]:
-        clauses, params = ["day=?"], [day.isoformat()]
-        if type_code is not None:
-            clauses.append("type_code=?")
-            params.append(type_code)
-        with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT data FROM aircraft_observations WHERE "
-                + " AND ".join(clauses)
-                + " ORDER BY icao_hex LIMIT ?",
-                [*params, limit],
-            )
-            return [AircraftObservation.model_validate_json(row[0]) for row in rows]
-
-    def observation_trace(self, day, icao_hex):
-        with self.connect() as connection:
-            connection.execute("BEGIN")
-            row = connection.execute(
-                "SELECT data FROM aircraft_observations WHERE day=? AND icao_hex=?",
-                (day.isoformat(), icao_hex),
-            ).fetchone()
-            if row is None:
-                raise ValueError("Aircraft observation not found")
-            observation = AircraftObservation.model_validate_json(row[0])
-            assets = [
-                dict(row)
-                for row in connection.execute(
-                    "SELECT url, bytes FROM observation_archives WHERE day=? ORDER BY part",
-                    (day.isoformat(),),
-                )
-            ]
-        return observation, assets
 
     def list_flights(
         self,

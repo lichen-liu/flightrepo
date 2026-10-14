@@ -1,6 +1,5 @@
 """Embedded SQLite repository shared by independent local Python processes."""
 
-import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -21,7 +20,7 @@ CREATE TABLE IF NOT EXISTS flights (
     status TEXT NOT NULL,
     codeshares TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
-    aircraft TEXT,
+    aircraft_type_code TEXT,
     PRIMARY KEY (provider, provider_id)
 );
 CREATE INDEX IF NOT EXISTS idx_flights_route_departure
@@ -47,27 +46,6 @@ CREATE TABLE IF NOT EXISTS airport_transfers (
     PRIMARY KEY (arrival_iata, departure_iata),
     CHECK(arrival_iata != departure_iata)
 );
-CREATE TABLE IF NOT EXISTS aircraft_observations (
-    day TEXT NOT NULL,
-    icao_hex TEXT NOT NULL,
-    type_code TEXT,
-    data TEXT NOT NULL,
-    PRIMARY KEY (day, icao_hex)
-);
-CREATE INDEX IF NOT EXISTS idx_observations_type_day
-ON aircraft_observations(type_code, day, icao_hex);
-CREATE TABLE IF NOT EXISTS observation_imports (
-    day TEXT PRIMARY KEY,
-    filter_sha256 TEXT NOT NULL,
-    stats TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS observation_archives (
-    day TEXT NOT NULL,
-    part INTEGER NOT NULL,
-    url TEXT NOT NULL,
-    bytes INTEGER NOT NULL,
-    PRIMARY KEY (day, part)
-);
 """
 
 
@@ -75,30 +53,6 @@ def utc_text(value: datetime) -> str:
     if value.utcoffset() is None:
         raise ValueError("timestamps must include a UTC offset")
     return value.astimezone(UTC).isoformat(timespec="microseconds")
-
-
-@contextmanager
-def adsblol_budget_lock(root):
-    """Serialize archive writers and cache eviction under the shared storage cap."""
-    with (root / ".trace-cache.lock").open("a+b") as lock:
-        if os.name == "nt":
-            import msvcrt
-
-            if lock.tell() == 0:
-                lock.write(b"0")
-                lock.flush()
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            yield
 
 
 class SQLiteConnection:

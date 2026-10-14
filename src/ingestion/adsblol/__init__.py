@@ -1,1 +1,1 @@
-"""Public ADSB.lol raw archive acquisition and observation indexing."""
+"""ADSB.lol archive acquisition and research probes; no scheduled-flight ingestion."""

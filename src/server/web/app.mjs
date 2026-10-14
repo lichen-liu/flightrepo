@@ -422,7 +422,7 @@ function renderJourney({ preserveView = false } = {}) {
           : "";
       return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(f.flight_number)} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
       <div class="leg-time"><div><strong>${e(stamp(f.departure_scheduled, zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(stamp(f.arrival_scheduled, zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
-      ${f.aircraft ? `<div class="leg-source">Aircraft: ${e([f.aircraft.type_code, f.aircraft.registration, f.aircraft.description].filter(Boolean).join(" · ") || f.aircraft.icao_hex || "Details unavailable")} · ${e(f.aircraft.source)}</div>` : ""}
+      ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
       <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
     .join("");
