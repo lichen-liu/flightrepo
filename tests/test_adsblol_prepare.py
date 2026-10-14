@@ -93,6 +93,16 @@ def test_preparation_handles_previous_repository_january_first(tmp_path):
     assert not any("/releases/download/" in url for url in requests)
 
 
+def test_separate_january_first_job_discovers_preceding_repository(tmp_path):
+    day = date(2024, 1, 1)
+    requests = []
+    with httpx.Client(transport=transport_for([(day, 2023)], requests)) as http:
+        result = prepare_inputs(tmp_path, day, day, client=http)
+    assets = json.loads(Path(result["manifest"]).read_text())["assets"]
+    assert len(assets) == 1 and assets[0]["date"] == str(day)
+    assert "globe_history_2023/" in assets[0]["url"]
+
+
 def test_admin_prepare_saves_source_profile_without_ingesting_flights(
     tmp_path, monkeypatch, capsys
 ):

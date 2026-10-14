@@ -32,7 +32,10 @@ def _download(client, url, limit=32 * 1024**2):
 
 def _assets(client, start, end):
     choices = {}
-    for year in dict.fromkeys((start.year, end.year, end.year + 1)):
+    years = [start.year, end.year, end.year + 1]
+    if start.month == start.day == 1:
+        years.append(start.year - 1)
+    for year in dict.fromkeys(years):
         url = f"https://raw.githubusercontent.com/adsblol/globe_history_{year}/main/PREFERRED_RELEASES.txt"
         try:
             text = _download(client, url, 1024**2).decode()
