@@ -9,6 +9,8 @@ import {
   errorMessage,
   queryLink,
   RequestLane,
+  airportList,
+  airportListSuggestions,
 } from "./format.mjs";
 import { RouteMap, drawTimeline } from "./map.mjs";
 
@@ -67,9 +69,12 @@ function acceptTimeError(error) {
 
 const airportCode = (value) => value.trim().toUpperCase();
 function normalizeAirportInput(control) {
-  const value = airportCode(control.value);
+  const list = control.hasAttribute("data-airport-list"),
+    value = list ? control.value.toUpperCase() : airportCode(control.value);
   if (value === control.value) return;
-  const leading = control.value.length - control.value.trimStart().length,
+  const leading = list
+      ? 0
+      : control.value.length - control.value.trimStart().length,
     start = control.selectionStart,
     end = control.selectionEnd;
   control.value = value;
@@ -83,7 +88,6 @@ function updateAirportNames() {
   for (const [control, id, optional] of [
     [field("origin"), "origin-name", false],
     [field("destination"), "destination-name", false],
-    [field("via"), "via-name", true],
     [editField("next-airport"), "next-airport-name", true],
   ]) {
     const code = airportCode(control.value),
@@ -95,6 +99,50 @@ function updateAirportNames() {
         ? "Airport details not loaded"
         : "Three-letter airport code");
   }
+  const codes = field("via")
+    .value.toUpperCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+  $("via-name").hidden = !codes.length;
+  $("via-name").textContent = codes
+    .map(
+      (code) =>
+        `${code}: ${state.airports.get(code)?.name || "Airport details not loaded"}`,
+    )
+    .join(" → ");
+  updateViaSuggestions();
+}
+let viaOptions = [], viaActive = -1;
+function hideViaSuggestions() {
+  $("via-suggestions").hidden = true;
+  field("via").setAttribute("aria-expanded", "false");
+  field("via").removeAttribute("aria-activedescendant");
+  viaActive = -1;
+}
+function updateViaSuggestions(open = false) {
+  const control = field("via");
+  viaOptions = airportListSuggestions(
+    control.value,
+    control.selectionStart ?? control.value.length,
+    [...state.airports.keys()],
+  ).slice(0, 8);
+  hideViaSuggestions();
+  $("via-suggestions").innerHTML = viaOptions.map(({ code, value }, index) =>
+    `<span role="option" id="via-option-${index}" data-via-option="${index}" data-value="${e(value)}" aria-selected="false"><strong>${e(code)}</strong><span>${e(state.airports.get(code).name || code)}</span></span>`,
+  ).join("");
+  if (open && document.activeElement === control && viaOptions.length) {
+    $("via-suggestions").hidden = false;
+    control.setAttribute("aria-expanded", "true");
+  }
+}
+function chooseVia(index) {
+  const option = viaOptions[index];
+  if (!option) return;
+  const control = field("via");
+  control.value = option.value;
+  control.setSelectionRange(option.caret, option.caret);
+  control.dispatchEvent(new Event("input", { bubbles: true }));
+  hideViaSuggestions();
 }
 function values() {
   return Object.fromEntries(
@@ -103,7 +151,6 @@ function values() {
       "destination",
       "via",
       "date",
-      "arrival",
       "last-date",
       "stops",
       "ranking",
@@ -111,13 +158,18 @@ function values() {
       "maximum",
       "avoid",
       "input-clock",
-      "arrival-fold",
     ]
       .map((name) => [
         name,
-        field(name).hasAttribute("data-airport-code")
-          ? airportCode(field(name).value)
-          : field(name).value,
+        field(name).hasAttribute("data-airport-list")
+          ? field(name)
+              .value.toUpperCase()
+              .split(/[\s,]+/)
+              .filter(Boolean)
+              .join(", ")
+          : field(name).hasAttribute("data-airport-code")
+            ? airportCode(field(name).value)
+            : field(name).value,
       ])
       .concat([
         ["airport-change", field("airport-change").checked ? "1" : "0"],
@@ -137,26 +189,25 @@ function restore(values) {
 function updateZones() {
   updateAirportNames();
   const origin = airportCode(field("origin").value),
-    destination = airportCode(field("destination").value),
     local = field("input-clock").value === "local",
     clock = (code) =>
       local
         ? state.airports.get(code)?.timezone || "timezone not loaded"
         : "UTC";
   $("date-zones").textContent =
-    `Departure: ${clock(origin)} · arrival deadline: ${clock(destination)}`;
-  const missing = [...new Set([origin, destination])].filter(
-    (code) => /^[A-Z]{3}$/.test(code) && !state.airports.get(code)?.timezone,
-  );
-  if (missing.length && local)
+    `Departure dates: ${clock(origin)} · Routes searched up to 7 days after the departure window.`;
+  const missing =
+    /^[A-Z]{3}$/.test(origin) && !state.airports.get(origin)?.timezone;
+  if (missing && local)
     $("date-zones").textContent +=
-      ` · timezone details not loaded for ${missing.join(", ")}; choose UTC or load airport data`;
+      ` · timezone details not loaded for ${origin}; choose UTC or load airport data`;
 }
 function commonQuery() {
+  const via = airportList(field("via").value);
   return {
     origin: airportCode(field("origin").value),
     destination: airportCode(field("destination").value),
-    via_airport: airportCode(field("via").value) || null,
+    via_airport: via.length ? via : null,
     max_legs: Number(field("stops").value) + 1,
     ranking: field("ranking").value,
     minimum_connection_minutes: Number(field("minimum").value),
@@ -174,12 +225,28 @@ function searchRequest() {
   const query = commonQuery(),
     first = field("date").value,
     last = field("last-date").value || first;
-  if (!first || !field("arrival").value)
-    throw Error("Choose a departure date and arrival deadline.");
+  if (!first) throw Error("Choose a departure date.");
   if (last < first)
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
     throw Error("Choose different origin and destination airports.");
+  const capacity = (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
+  if ((query.via_airport?.length || 0) > capacity)
+    throw Error(
+      query.max_legs < 4
+        ? "Increase Maximum stops under Search filters to visit all via airports."
+        : "Too many via airports for three stops. Use fewer codes or allow permitted airport changes.",
+    );
+  for (const code of query.via_airport || []) {
+    if ([query.origin, query.destination].includes(code))
+      throw Error(
+        `${code} is an endpoint. Via airports must be intermediate airports.`,
+      );
+    if (query.avoid_airports.includes(code))
+      throw Error(
+        `${code} is both a via and an avoided airport. Remove one constraint.`,
+      );
+  }
   if (field("input-clock").value === "local")
     return {
       url: "/v1/itineraries/search/local",
@@ -187,14 +254,7 @@ function searchRequest() {
         ...query,
         departure_date: first,
         departure_last_date: last,
-        arrival_by_local: field("arrival").value,
-        arrival_fold:
-          field("arrival-fold").value === ""
-            ? null
-            : Number(field("arrival-fold").value),
         departure_timezone: state.airports.get(query.origin)?.timezone || null,
-        arrival_timezone:
-          state.airports.get(query.destination)?.timezone || null,
       },
     };
   return {
@@ -203,14 +263,9 @@ function searchRequest() {
       ...query,
       departure_start: `${first}T00:00:00Z`,
       departure_end: `${addDate(last, 1)}T00:00:00Z`,
-      horizon_end: `${field("arrival").value}:00Z`,
+      horizon_end: `${addDate(last, 8)}T00:00:00Z`,
     },
   };
-}
-function defaultArrival() {
-  if (!field("date").value) return;
-  field("arrival").value =
-    `${addDate(field("last-date").value || field("date").value, 3)}T23:59`;
 }
 async function search() {
   let request;
@@ -221,6 +276,8 @@ async function search() {
     return;
   }
   const submitted = values();
+  field("via").value = submitted.via;
+  updateAirportNames();
   closeEditor();
   showError("error", "");
   $("status").textContent = "Searching imported schedules…";
@@ -273,9 +330,11 @@ function renderOptions() {
   $("result-count").textContent = result.diagnostics.result_limit_reached
     ? `${result.items.length} of ${result.diagnostics.stats.routes_found}${result.diagnostics.exhaustive ? "" : " examined"}`
     : String(result.items.length);
-  const v = state.queryValues;
+  const v = state.queryValues,
+    via = result.query.via_airport,
+    viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${result.query.via_airport ? " via " + result.query.via_airport : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : state.airports.get(result.query.origin)?.timezone || "local"}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : state.airports.get(result.query.origin)?.timezone || "local"}`;
   const d = result.diagnostics;
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
@@ -303,7 +362,7 @@ function renderOptions() {
     </button>`;
         })
         .join("")
-    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider date range, fewer filters, or a longer arrival deadline." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -434,7 +493,7 @@ function updateEditorZone() {
   if (state.editing === null) return;
   const f = state.selection.legs[state.editing];
   $("editor-zone").textContent =
-    `Not-before time uses ${inputZone(f.destination_iata)}. Arrival deadline remains ${stamp(state.result.query.horizon_end, inputZone(state.result.query.destination))}.`;
+    `Not-before time uses ${inputZone(f.destination_iata)}. Connections searched until ${stamp(state.result.query.horizon_end, inputZone(state.result.query.destination))}.`;
 }
 function openEditor(index) {
   closeEditor();
@@ -599,18 +658,56 @@ form.addEventListener("input", (event) => {
   if (!event.target.hasAttribute("data-airport-code")) return;
   normalizeAirportInput(event.target);
   updateZones();
+  if (event.target.hasAttribute("data-airport-list")) updateViaSuggestions(true);
   closeEditor();
   if (state.result)
     $("status").textContent =
       "Inputs changed. Search to apply them; previous results remain visible.";
 });
 form.addEventListener("change", (event) => {
-  if (["date", "last-date"].includes(event.target.name)) defaultArrival();
   updateZones();
   closeEditor();
   if (state.result)
     $("status").textContent =
       "Inputs changed. Search to apply them; previous results remain visible.";
+});
+for (const event of ["focus", "click"])
+  field("via").addEventListener(event, () => updateViaSuggestions(true));
+field("via").addEventListener("blur", hideViaSuggestions);
+field("via").addEventListener("keyup", (event) => {
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+    updateViaSuggestions(true);
+});
+field("via").addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === "Escape" || event.key === "Tab") {
+    hideViaSuggestions();
+  } else if (event.key === "Enter" && viaActive >= 0) {
+    event.preventDefault();
+    chooseVia(viaActive);
+  } else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+    if ($("via-suggestions").hidden) updateViaSuggestions(true);
+    if (!viaOptions.length) return;
+    event.preventDefault();
+    const down = event.key === "ArrowDown";
+    viaActive = viaActive < 0
+      ? (down ? 0 : viaOptions.length - 1)
+      : (viaActive + (down ? 1 : viaOptions.length - 1)) % viaOptions.length;
+    const options = $("via-suggestions").children;
+    for (const [index, option] of [...options].entries())
+      option.setAttribute("aria-selected", String(index === viaActive));
+    const active = options[viaActive];
+    field("via").setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+});
+$("via-suggestions").addEventListener("mousedown", (event) => event.preventDefault());
+$("via-suggestions").addEventListener("click", (event) => {
+  const option = event.target.closest("[data-via-option]");
+  if (option) {
+    event.preventDefault();
+    chooseVia(Number(option.dataset.viaOption));
+  }
 });
 $("swap").addEventListener("click", () => {
   const origin = field("origin").value;
@@ -808,7 +905,6 @@ async function loadCatalog() {
         : codes.find((c) => c !== field("origin").value) || "";
       const first = catalog.dataset.first_departure || new Date().toISOString();
       field("date").value = localDate(first, inputZone(field("origin").value));
-      defaultArrival();
       const fromURL = Object.fromEntries(new URLSearchParams(location.search));
       restore(fromURL);
       updateZones();

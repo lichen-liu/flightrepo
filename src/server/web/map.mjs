@@ -346,7 +346,7 @@ export function drawTimeline(container, legs, cursor) {
       .attr("width", Math.max(1, b - a))
       .attr("height", 18)
       .attr("rx", 3)
-      .attr("fill", "var(--blue)");
+      .attr("fill", "var(--flight)");
   }
   const ticks = (w < 420 ? x.ticks(3) : x.ticks(5)).filter(
     (d) => x(d) > 26 && x(d) < w - 26,

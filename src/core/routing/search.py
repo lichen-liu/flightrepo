@@ -51,7 +51,7 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
     )
     best = []
 
-    def walk(legs, connections, seen):
+    def walk(legs, connections, seen, via_progress):
         session.stats.states_expanded += 1
         if legs:
             candidates = session.onward(legs[-1], window)
@@ -69,13 +69,16 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
                 legs[-1] if legs else None, flight, window, seen, request.horizon_end
             )
             next_seen = seen | {flight.origin_iata, flight.destination_iata}
+            next_via = session.advance_via(via_progress, flight)
+            if decision.reason == "accepted" and next_via is None:
+                decision = Assessment("required_via_out_of_order")
             if (
                 decision.reason == "accepted"
                 and (
                     flight.destination_iata == request.destination
                     or len(legs) + 1 == request.max_legs
                 )
-                and not session.via_satisfied(next_seen)
+                and not session.via_satisfied(next_via)
             ):
                 decision = Assessment("required_via_not_visited")
             if decision.reason == "accepted" and not session.reachable(
@@ -102,10 +105,11 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
                     next_legs,
                     links,
                     next_seen,
+                    next_via,
                 )
 
     try:
-        walk([], [], {request.origin})
+        walk([], [], {request.origin}, 0)
     except SearchBudgetReached:
         pass
     items = [

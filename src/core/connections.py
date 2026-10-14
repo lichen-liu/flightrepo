@@ -9,9 +9,12 @@ from core.models import FlightRecord
 from core.routing.models import (
     SearchDiagnostics,
     SearchLimits,
+    ViaAirports,
     airport_codes,
     optional_airport_code,
     utc_instant,
+    validate_via_constraints,
+    via_airports,
 )
 
 
@@ -76,9 +79,9 @@ class RebuildRequest(BaseModel):
     horizon_end: datetime
     window: ConnectionWindow = Field(default_factory=ConnectionWindow)
     allow_airport_change: bool = False
-    via_airport: str | None = Field(
+    via_airport: ViaAirports = Field(
         default=None,
-        description="Required intermediate IATA airport across the retained prefix and rebuilt suffix.",
+        description="Required IATA code or ordered list across the retained prefix and rebuilt suffix.",
     )
     next_airport: str | None = Field(
         default=None,
@@ -92,20 +95,19 @@ class RebuildRequest(BaseModel):
     limits: SearchLimits = Field(default_factory=SearchLimits)
 
     _avoided_codes = field_validator("avoid_airports", mode="before")(airport_codes)
-    _optional_codes = field_validator("via_airport", "next_airport", mode="before")(
-        optional_airport_code
-    )
+    _via_codes = field_validator("via_airport", mode="before")(via_airports)
+    _next_code = field_validator("next_airport", mode="before")(optional_airport_code)
     _horizon = field_validator("horizon_end")(utc_instant)
 
     @model_validator(mode="after")
     def sensible_via(self):
-        if self.via_airport is not None:
-            if self.via_airport == self.destination:
-                raise ValueError("via_airport must be an intermediate airport")
-            if self.via_airport in self.avoid_airports:
-                raise ValueError("cannot avoid the required via_airport")
-            if self.max_legs < 2:
-                raise ValueError("via_airport requires at least two flight legs")
+        validate_via_constraints(
+            self.via_airport,
+            (self.destination,),
+            self.avoid_airports,
+            self.max_legs,
+            self.allow_airport_change,
+        )
         return self
 
 

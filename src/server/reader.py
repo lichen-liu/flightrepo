@@ -195,7 +195,9 @@ class FlightReader(SQLiteConnection):
         return LocalRouteSearchResult(
             **result.model_dump(),
             departure_timezone=by_code[query.origin].timezone,
-            arrival_timezone=by_code[query.destination].timezone,
+            arrival_timezone=(
+                by_code[query.destination].timezone if query.destination in by_code else None
+            ),
         )
 
     def resolve_time(

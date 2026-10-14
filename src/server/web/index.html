@@ -4,26 +4,34 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#151816" />
+    <meta name="application-name" content="Flyji · boboji.fyi" />
     <meta
       name="description"
       content="Explore dated flight routes, compare schedules, and edit connections."
     />
-    <title>Flyji · Flight routes</title>
-    <link rel="icon" href="data:," />
+    <title>Flyji · boboji.fyi</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/vendor/d3-7.9.0.min.js" defer></script>
     <script type="module" src="/assets/app.mjs"></script>
   </head>
   <body>
     <a class="skip" href="#results">Skip to flight options</a>
+    <aside class="status-banner" aria-label="boboji.fyi tools">
+      <span>TRAVEL TOOLS</span>
+      <a class="boboji-lockup" href="https://boboji.fyi/" aria-label="boboji.fyi home"
+        ><b aria-hidden="true">b/</b><span>boboji.fyi</span></a
+      >
+    </aside>
     <header class="site-header">
       <a href="/" class="brand" aria-label="Flyji home"
-        >flyji<span>flight routes</span></a
+        ><span class="brand-mark" aria-hidden="true">b/</span><span>FLYJI</span></a
       >
-      <div class="header-actions">
+      <nav class="header-actions" aria-label="Flyji tools">
         <button id="copy-search" type="button">Copy search link</button
         ><a href="/docs">API</a>
-      </div>
+      </nav>
     </header>
     <main>
       <section class="search-section" aria-labelledby="page-title">
@@ -83,40 +91,42 @@
             <label
               >Departure date<input name="date" id="date" type="date" required
             /></label>
-            <label
-              >Arrive by<input
-                name="arrival"
-                id="arrival"
-                type="datetime-local"
-                required
-            /></label>
             <button id="search-button" class="primary" type="submit" disabled>
               Search flights
             </button>
           </div>
           <div class="route-filter">
             <label
-              >Via airport (optional)<input
+              >Via airports (optional)<span class="airport-list-input"><input
                 name="via"
                 id="via"
                 type="text"
-                list="airport-suggestions"
-                pattern="[A-Za-z]{3}"
-                title="Enter a three-letter airport code."
-                aria-label="Via airport"
-                placeholder="e.g. AMS"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="via-suggestions"
+                aria-expanded="false"
+                title="Enter airport codes separated by commas or spaces, in travel order."
+                aria-label="Via airports"
+                placeholder="e.g. LHR, AMS"
                 autocomplete="off"
                 autocapitalize="characters"
                 spellcheck="false"
                 data-airport-code
+                data-airport-list
                 aria-describedby="via-hint via-name" /><span
+                id="via-suggestions"
+                class="airport-suggestions"
+                role="listbox"
+                aria-label="Via airport suggestions"
+                hidden
+              ></span></span><span
                 id="via-name"
                 class="airport-name"
                 hidden
               ></span
             ></label>
             <span id="via-hint" class="small muted"
-              >Require this airport on the route.</span
+              >Visit each airport in this order. Separate codes with commas or spaces.</span
             >
           </div>
           <datalist id="airport-suggestions"></datalist>
@@ -165,7 +175,7 @@
                   <option value="360" selected>6 hours</option>
                   <option value="720">12 hours</option>
                   <option value="1440">24 hours</option>
-                  <option value="any">Any time before arrival deadline</option>
+                  <option value="any">Any time in the search window</option>
                 </select></label
               >
               <label
@@ -178,13 +188,6 @@
               <label class="check"
                 ><input type="checkbox" name="airport-change" />Allow
                 connections between airports in the same city</label
-              >
-              <label
-                >Repeated arrival time<select name="arrival-fold">
-                  <option value="">Ask if clock repeats</option>
-                  <option value="0">Earlier occurrence</option>
-                  <option value="1">Later occurrence</option>
-                </select></label
               >
             </div>
           </details>
@@ -364,7 +367,7 @@
                       <option value="soon">Within 6 hours</option>
                       <option value="day">Within 24 hours</option>
                       <option value="any">
-                        Any time before arrival deadline
+                        Any time in the search window
                       </option>
                       <option value="after">After a date and time</option>
                     </select></label

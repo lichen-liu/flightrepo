@@ -14,7 +14,12 @@ from core.connections import (
 )
 from core.models import FlightRecord
 from core.routing.index import departure_key
-from core.routing.models import RoutingError
+from core.routing.models import (
+    MAX_DEPARTURE_DAYS,
+    MAX_ONWARD_DAYS,
+    RoutingError,
+    required_via_airports,
+)
 from core.routing.policy import Assessment, ConnectionPolicy
 from core.routing.session import RoutingSession, SearchBudgetReached
 from core.routing.snapshot import RoutingSnapshot, flight_key
@@ -44,7 +49,7 @@ def validate_prefix(
         ) from error
     if len(prefix) > request.max_legs:
         raise RoutingError("prefix_too_long", "prefix exceeds max_legs")
-    if request.via_airport == prefix[0].origin_iata:
+    if prefix[0].origin_iata in required_via_airports(request.via_airport):
         raise RoutingError("invalid_via_airport", "via_airport must be an intermediate airport")
     if (
         request.horizon_end < prefix[-1].arrival_scheduled
@@ -52,10 +57,12 @@ def validate_prefix(
         and prefix[-1].destination_iata != request.destination
     ):
         raise RoutingError("invalid_horizon", "horizon_end must follow the selected arrival")
-    if request.horizon_end - prefix[0].departure_scheduled > timedelta(days=31):
+    # A retained first flight may lie at the start of a full search window.
+    maximum_span = MAX_DEPARTURE_DAYS + MAX_ONWARD_DAYS
+    if request.horizon_end - prefix[0].departure_scheduled > timedelta(days=maximum_span):
         raise RoutingError(
             "invalid_horizon",
-            "prototype horizon must be within 31 days of first departure",
+            f"horizon must be within {maximum_span} days of first departure",
         )
     policy = ConnectionPolicy(
         snapshot.airports,
@@ -92,14 +99,17 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         snapshot, request, policy, "next_departure_then_tail_arrival_legs_identity"
     )
     later_window = ConnectionWindow(minimum_minutes=request.window.minimum_minutes)
+    prefix_via = session.via_progress(prefix)
     memo, options, total, chosen = {}, [], 0, None
 
-    def best_tail(previous, remaining, seen, path):
+    def best_tail(previous, remaining, seen, path, via_progress):
+        if via_progress is None:
+            return None
         if previous.destination_iata == request.destination:
-            return ((), ()) if session.via_satisfied(seen) else None
+            return ((), ()) if session.via_satisfied(via_progress) else None
         if remaining == 0 or not session.reachable(previous.destination_iata, remaining):
             return None
-        key = (flight_key(previous), remaining, tuple(sorted(seen)))
+        key = (flight_key(previous), remaining, tuple(sorted(seen)), via_progress)
         if key in memo:
             session.stats.memo_hits += 1
             return memo[key]
@@ -112,10 +122,13 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
                     previous, flight, later_window, seen, request.horizon_end
                 )
                 next_seen = seen | {flight.origin_iata, flight.destination_iata}
+                next_via = session.advance_via(via_progress, flight)
+                if assessment.reason == "accepted" and next_via is None:
+                    assessment = Assessment("required_via_out_of_order")
                 if (
                     assessment.reason == "accepted"
                     and flight.destination_iata == request.destination
-                    and not session.via_satisfied(next_seen)
+                    and not session.via_satisfied(next_via)
                 ):
                     assessment = Assessment("required_via_not_visited")
                 session.record(path, flight, assessment)
@@ -126,6 +139,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
                     remaining - 1,
                     next_seen,
                     [*path, flight],
+                    next_via,
                 )
                 if tail is None:
                     continue
@@ -151,14 +165,17 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
             tail_connections=[],
             complete=(
                 flight.destination_iata == request.destination
-                and session.via_satisfied(visited | {flight.origin_iata, flight.destination_iata})
+                and session.via_satisfied(session.advance_via(prefix_via, flight))
             ),
         )
 
     def fill_tail(item):
         next_seen = visited | {item.flight.origin_iata, item.flight.destination_iata}
-        if item.flight.destination_iata == request.destination and not session.via_satisfied(
-            next_seen
+        next_via = session.advance_via(prefix_via, item.flight)
+        if next_via is None:
+            session.record(prefix, item.flight, Assessment("required_via_out_of_order"))
+        elif item.flight.destination_iata == request.destination and not session.via_satisfied(
+            next_via
         ):
             # A feasible explicit next leg can remain a dead-end option. It must
             # never be ranked as a complete route that satisfies the required via.
@@ -168,6 +185,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
             request.max_legs - len(prefix) - 1,
             next_seen,
             [*prefix, item.flight],
+            next_via,
         )
         if tail is not None:
             item.tail, item.tail_connections, item.complete = (
@@ -269,28 +287,28 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         *connections,
         *([chosen.connection, *chosen.tail_connections] if chosen else []),
     ]
-    final_visited = visited | {code for f in legs for code in (f.origin_iata, f.destination_iata)}
-    complete = legs[-1].destination_iata == request.destination and session.via_satisfied(
-        final_visited
-    )
+    final_via = session.via_progress(legs)
+    complete = legs[-1].destination_iata == request.destination and session.via_satisfied(final_via)
     diagnostics = session.diagnostics(result_limit_reached=total > request.option_limit)
     partial = not diagnostics.exhaustive
     message = (
         "Later legs updated" if complete else "No complete continuation in the loaded search window"
     )
-    if prefix[-1].destination_iata == request.destination:
+    if final_via is None:
+        message = "Selected flights visit via airports out of order; change an earlier connection"
+    elif prefix[-1].destination_iata == request.destination:
         message = (
             "Selected prefix already reaches destination"
             if complete
-            else f"Selected prefix reaches destination without required airport {request.via_airport}"
+            else "Selected prefix reaches destination without all required via airports"
         )
     elif legs[-1].destination_iata == request.destination and not complete:
-        message = (
-            f"Selected flights reach destination without required airport {request.via_airport}"
-        )
+        message = "Selected flights reach destination without all required via airports"
     elif len(prefix) == request.max_legs:
         message = "Maximum leg count reached; destination not reached"
-    if partial:
+    if partial and final_via is None:
+        message += ". Search is partial."
+    elif partial:
         message = (
             "Route reaches destination; search is partial"
             if complete

@@ -10,6 +10,31 @@ export const ref = (flight) => ({
   provider: flight.provider,
   provider_id: flight.provider_id,
 });
+export function airportList(value) {
+  const codes = value.toUpperCase().split(/[\s,]+/).filter(Boolean);
+  for (const code of codes)
+    if (!/^[A-Z]{3}$/.test(code))
+      throw Error(
+        `Invalid airport code: ${code}. Enter three-letter codes separated by commas or spaces.`,
+      );
+  if (new Set(codes).size !== codes.length)
+    throw Error("Via airports must not repeat.");
+  if (codes.length > 6) throw Error("Enter at most six via airports.");
+  return codes;
+}
+export function airportListSuggestions(value, position, codes) {
+  let start = position,
+    end = position;
+  while (start > 0 && !/[\s,]/.test(value[start - 1])) start--;
+  while (end < value.length && !/[\s,]/.test(value[end])) end++;
+  const before = value.slice(0, start),
+    after = value.slice(end),
+    token = value.slice(start, end).toUpperCase(),
+    otherCodes = new Set((before + " " + after).toUpperCase().split(/[\s,]+/));
+  return codes
+    .filter((code) => !otherCodes.has(code) && code.startsWith(token))
+    .map((code) => ({ code, value: before + code + after, caret: start + code.length }));
+}
 export function duration(minutes) {
   const m = Math.max(0, Math.floor(minutes)),
     days = Math.floor(m / 1440),
