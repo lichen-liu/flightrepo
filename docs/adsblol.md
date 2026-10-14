@@ -6,6 +6,11 @@ The backend now supports [normalized itinerary downloads with a live disk quota]
 That storage mechanism requires flight-leg records, including the type code;
 ADSB.lol observations still need a validated conversion before they can feed it.
 
+The preferred 2025 storage plan is now a **durable local database of compact
+flight legs**, built one day at a time. Raw archives are temporary processing
+inputs and are removed after validated output is committed. A remote itinerary
+source is not required when the extracted flight facts fit the local budget.
+
 ## What the pilot proved
 
 The earlier byte-range experiment proved retrieval of one known aircraft-day
@@ -132,6 +137,76 @@ observations supply historical movements, not future schedules or availability.
 
 ## Storage and download cost
 
+### Daily processing within the 20 GiB budget
+
+Download only one preferred day's archive parts into the working directory.
+Read their tar stream without extracting individual members to disk; inflate
+and process one aircraft member at a time. Keep aircraft type, callsign, matched
+airports and observed departure/arrival bounds, together with provenance and
+classification evidence. Discard position samples once their evidence has been
+reduced. Store partial cross-midnight flight state separately until its arrival
+can be resolved from the next day; a midnight boundary must not drop a flight.
+
+Commit validated, deduplicated flight legs and a day completion receipt
+atomically, then remove that day's verified archive parts and advance to the
+next day. Failures leave the day resumable rather than marked complete. Serving
+must continue to distinguish observed movement times from scheduled/gate times.
+This end-to-end daily leg processor is planned; the existing whole-day probe
+produces aircraft-day summaries and does not yet implement this pipeline.
+
+Reserve roughly **4 GiB for one raw day and 1 GiB for write/processing headroom**,
+leaving a starting target of **15 GiB for durable flight facts**. These are
+planning allowances, not measured peak WAL/transaction usage. The worker must
+account for all retained facts, raw/partial downloads and temporary files within
+the same 20 GiB total, and pause before exceeding it. Durable flight facts cannot
+be LRU-retired if they are their only copy; the backend cache's LRU policy applies
+only to recoverable payloads. Raw files are disposable after the daily commit.
+
+Store each flight leg once. Origin/departure and route/departure indexes serve
+search; itineraries are assembled from those legs at query time instead of
+storing every possible connection combination. Coverage/calendar metadata is a
+small derived index over committed legs. Extra gzip copies of the same local
+database are unnecessary when the indexed facts fit the budget.
+
+### Measured cost per flight leg
+
+The reproducible command below measures 100,000 synthetic legs against the
+current schema, including all five flight indexes (the identity index and four
+query indexes). It deletes its temporary benchmark databases afterward:
+
+```sh
+PYTHONPATH=src python scripts/benchmark_flight_storage.py --records 100000 \
+  --output var/adsblol/research/compact-flight-storage.json
+```
+
+| Profile | Measured bytes/leg including indexes | 1 million legs, extrapolated | 20 million legs, extrapolated |
+| --- | ---: | ---: | ---: |
+| Scheduled | 469 | 0.44 GiB | 8.74 GiB |
+| Completed, including actual times | 536 | 0.50 GiB | 9.98 GiB |
+| Completed plus proposed observed evidence | 593 | 0.55 GiB | 11.05 GiB |
+
+The last profile retains every current flight field and adds a hypothetical
+companion evidence table with ICAO address, callsign, four timing bounds stored
+as integer microseconds and a shared provenance method. That schema is a storage
+experiment, not an implemented observed-time serving contract. The benchmark's
+records are synthetic; marketing identities and scheduled times are not inferred
+from ADSB.lol. Actual string lengths, indexes, codeshares, source receipts and
+deduplication rules affect the final size.
+
+The four real December 30 candidate records average **380 bytes each as compact
+JSON**, excluding database indexes; all four together gzip to 386 bytes. Four
+candidates are too small and repetitive to establish a dataset compression ratio.
+A three-leg itinerary references three stored legs (about 1.7 KiB at the proposed
+593-byte profile); it creates no additional persistent itinerary rows. API JSON
+and airport metadata have their own response overhead.
+
+At the proposed profile, a 15 GiB facts allowance projects to about 27 million
+legs. This is a capacity estimate, not a count of usable 2025 flights. A complete
+day of validated leg extraction is still required to estimate year coverage,
+working-space peaks and final database size.
+
+### Raw archive volume and earlier benchmark
+
 The [2025 source archive](https://github.com/adsblol/globe_history_2025) contains
 repeated positions across all aircraft categories and heatmap replay data.
 One preferred copy per UTC day totals **1,035.564 GiB** for 365 days; December 31
@@ -168,7 +243,8 @@ decoding and upstream throttling add time. The full-year scan has not started.
 Scheduled flight records now have an optional flat `aircraft_type_code` field.
 It survives SQLite storage, edits, JSON/CSV imports, snapshots, exports and API
 responses. The route detail card displays it. Missing codes remain unknown.
-The ingestion/admin writer migrates existing flight files; serving stays read-only.
+The ingestion/admin writer migrates existing flight files. Serving queries durable
+flight facts without editing them; configured downloads manage cache metadata and files.
 
 The route calendar enables only dates containing non-cancelled departures from
 the selected origin, in the chosen UTC or airport-local clock. Archive inventory
