@@ -182,7 +182,7 @@ Hosted settings accept `data_mode: real`. This validates the shared schema and
 rejects demo flight records, allows an initialized empty dataset, and never seeds
 it. The default `synthetic` mode keeps the isolated demo's existing checks. Install
 backend, frontend and admin together, and point serving and ingestion at the same
-absolute database path. Readiness and admin stats expose the schema contract and
+absolute database path. Readiness and admin `overview --json` expose the schema contract and
 version; admin overview also reports searchable counts by basis and batch states.
 
 API routing accepts `time_basis: scheduled | actual | observed`. An omitted basis

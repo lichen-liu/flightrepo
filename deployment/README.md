@@ -105,5 +105,5 @@ Install backend/frontend/admin together while the hosted jobs are stopped. Resum
 only a writer using the same schema and path. `manage.py check` and `check --public`
 validate real readiness and a route from the actual dataset, rather than hardcoded
 demo airports/dates. `/health/ready` exposes schema identity and selected time basis;
-admin `stats` reports the file path and same schema. Historical ADSB records use
+admin `overview --json` reports the file path and same schema. Historical ADSB records use
 observed time bounds and partial coverage; they cannot supply future schedules.

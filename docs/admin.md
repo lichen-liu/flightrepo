@@ -265,7 +265,7 @@ HTTP API contracts and the website's routing engine remain unchanged.
 
 ## Shared serving schema
 
-New files use the `flight-legs` contract. `stats` exposes the schema version;
+New files use the `flight-legs` contract. `overview --json` exposes the schema version;
 `overview` separates scheduled, actual and observed searchable counts and shows
 successful/failed/running ingestion attempts. ADSB ingestion defaults to the
 selected database. `--data-root` selects disposable working storage; an explicit
