@@ -19,6 +19,7 @@ from core.routing.models import (
     IncompleteSearchError,
     RouteSearchRequest,
     RoutingError,
+    TimeBasis,
     utc_instant,
 )
 from core.routing.results import RouteSearchResult
@@ -111,6 +112,9 @@ def readiness(store: FlightReader = Depends(get_store)):
         "status": "ready",
         "flight_count": catalog.dataset.flight_count,
         "catalogue_flight_count": catalog.dataset.catalogue_flight_count,
+        "schema_contract": "flight-legs",
+        "schema_version": 1,
+        "time_basis": catalog.dataset.default_time_basis,
     }
 
 
@@ -121,10 +125,13 @@ def catalog(store: FlightReader = Depends(get_store)) -> WebCatalog:
 
 @app.get("/v1/dates", response_model=AvailableDates)
 def available_dates(
-    origin: str, clock: Literal["local", "UTC"] = "local", store: FlightReader = Depends(get_store)
+    origin: str,
+    clock: Literal["local", "UTC"] = "local",
+    time_basis: TimeBasis | None = None,
+    store: FlightReader = Depends(get_store),
 ):
     try:
-        return store.available_dates(origin, clock)
+        return store.available_dates(origin, clock, time_basis)
     except ValueError as error:
         raise routing_http_error(error) from error
 

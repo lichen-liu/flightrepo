@@ -88,7 +88,7 @@ they are retired. An evicted chunk needs the upstream source to be available.
 
 The downloader consumes `ItineraryCatalog` from `core/itinerary_catalog.py`:
 
-- `format_version: 1`, airport metadata and directed transfers.
+- `format_version: 1` for schedules, or `2` for explicit observed/actual time bases; airport metadata and directed transfers.
 - Chunk URLs, SHA-256 and encoded byte lengths.
 - Provider/origin and disjoint UTC departure windows for each chunk.
 - Destinations, counts, cancellation counts, refresh evidence and UTC/local dates.
@@ -112,8 +112,8 @@ Host the generated `catalog.json` and content-addressed `.json.gz` files over
 HTTP(S), then configure their catalogue URL. The builder validates identities and
 groups records by provider, origin and UTC month, splitting busy months into
 disjoint windows of at most 20,000 records. Monthly grouping keeps a global
-year's metadata smaller than an airport/day catalogue. The format requires scheduled
-flight facts; it does not invent schedules from ADSB.lol observations.
+year's metadata smaller than an airport/day catalogue. Version 1 preserves scheduled facts. Version 2 adds explicit observed/actual
+time bases without inventing schedules from observations.
 
 ## Verified behavior and remaining source work
 
@@ -131,5 +131,5 @@ the same six itineraries with aircraft type B738. No payload files remained
 after that zero-retention search; the protected database occupied 122,880 bytes.
 
 The [offline ingestion pipeline](ingestion.md) extracts observed ADSB.lol legs
-separately. It needs an observed-time serving contract before it can feed search;
-these records cannot be inserted into this scheduled catalogue format as-is.
+into the shared typed serving contract. Accepted historical legs power observed
+search and date availability after each daily commit; raw observations stay offline.

@@ -73,7 +73,7 @@ def edit_flight(path, provider, provider_id, output):
     try:
         while True:
             data = original.model_dump(mode="json")
-            for field in (
+            fields = (
                 "flight_number",
                 "airline_iata",
                 "origin_iata",
@@ -84,15 +84,39 @@ def edit_flight(path, provider, provider_id, output):
                 "arrival_actual",
                 "status",
                 "codeshares",
+            )
+            if original.departure_observed_lower is not None:
+                fields = (
+                    *fields,
+                    "callsign",
+                    "departure_observed_lower",
+                    "departure_observed_upper",
+                    "arrival_observed_lower",
+                    "arrival_observed_upper",
+                )
+            if (
+                original.aircraft_type_code is not None
+                or original.departure_observed_lower is not None
             ):
-                current = data[field]
+                fields = (*fields, "aircraft_type_code")
+            for field in fields:
+                current = data.get(field)
                 default = ",".join(current) if field == "codeshares" else (current or "-")
                 value = ask(field, default)
                 if field == "codeshares":
                     data[field] = (
                         [] if value == "-" else [code.strip() for code in value.split(",")]
                     )
-                elif field in ("airline_iata", "departure_actual", "arrival_actual"):
+                elif field in (
+                    "flight_number",
+                    "airline_iata",
+                    "departure_scheduled",
+                    "arrival_scheduled",
+                    "departure_actual",
+                    "arrival_actual",
+                    "callsign",
+                    "aircraft_type_code",
+                ) or field.startswith(("departure_observed_", "arrival_observed_")):
                     data[field] = None if value == "-" else value
                 else:
                     data[field] = value

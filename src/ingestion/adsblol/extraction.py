@@ -8,9 +8,13 @@ from collections import Counter
 from contextlib import closing, nullcontext
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from core.file_lock import file_mutex
 from core.itinerary_cache import cache_directory, database_bytes, file_bytes, policy
+from core.models import FlightRecord
+from core.storage import SCHEMA as SERVING_SCHEMA
+from core.storage import store_flight, utc_us
 from ingestion.adsblol.archive import (
     MAX_BUDGET_BYTES,
     archive_traces,
@@ -55,13 +59,25 @@ CREATE TABLE IF NOT EXISTS extraction_sources (
 """
 
 SCHEMA = (
-    SOURCE_SCHEMA
+    SERVING_SCHEMA
+    + SOURCE_SCHEMA
     + """
-CREATE TABLE IF NOT EXISTS itinerary_legs (
-    key TEXT PRIMARY KEY,
-    departure_date TEXT NOT NULL,
-    data TEXT NOT NULL
-);
+CREATE VIEW IF NOT EXISTS itinerary_legs AS
+SELECT provider_id AS key, substr(departure_observed_lower,1,10) AS departure_date,
+json_object('aircraft_type_code',aircraft_type_code,
+    'arrival_lower',replace(replace(arrival_observed_lower,'.000000',''),'+00:00','Z'),
+    'arrival_upper',replace(replace(arrival_observed_upper,'.000000',''),'+00:00','Z'),
+    'callsign',callsign,
+    'departure_lower',replace(replace(departure_observed_lower,'.000000',''),'+00:00','Z'),
+    'departure_upper',replace(replace(departure_observed_upper,'.000000',''),'+00:00','Z'),
+    'destination_iata',destination_iata,'evidence','ground_brackets_and_nearby_airports',
+    'origin_iata',origin_iata,'status','inferred_candidate') AS data
+FROM flights WHERE provider='adsblol' AND departure_observed_lower IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS itinerary_legs_update INSTEAD OF UPDATE ON itinerary_legs
+BEGIN
+    UPDATE flight_legs SET callsign=json_extract(NEW.data,'$.callsign')
+    WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=OLD.key;
+END;
 CREATE TABLE IF NOT EXISTS extraction_days (
     day TEXT PRIMARY KEY,
     selection TEXT NOT NULL,
@@ -90,6 +106,17 @@ def record_sources(connection):
     connection.executemany(
         "INSERT OR REPLACE INTO extraction_sources VALUES (?,?,?,?,?)", SOURCE_ROWS
     )
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='data_sources'").fetchone():
+        connection.executemany(
+            "INSERT INTO data_sources(code,name,source_url,license_expression,license_url) VALUES (?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name,source_url=excluded.source_url,license_expression=excluded.license_expression,license_url=excluded.license_url",
+            SOURCE_ROWS,
+        )
+        connection.execute(
+            "UPDATE data_sources SET attribution=? WHERE code='adsblol'",
+            (
+                "Contains information from ADSB.lol, available under the Open Database Licence (ODbL) 1.0.",
+            ),
+        )
 
 
 def canonical(value):
@@ -114,16 +141,55 @@ def receipt_scope(receipt, saved_config):
 def save_leg(connection, leg, counters, *, diagnostics=None):
     identity = f"observed-itinerary-v1:{leg.icao_hex}:{leg.departure_lower.isoformat()}"
     key = hashlib.blake2b(identity.encode(), digest_size=16).hexdigest()
-    encoded = canonical(leg.model_dump(mode="json", exclude={"icao_hex"}))
+    return save_candidate(
+        connection,
+        key,
+        leg.model_dump(mode="json", exclude={"icao_hex"}),
+        counters,
+        diagnostics=diagnostics,
+    )
+
+
+def save_candidate(connection, key, data, counters, *, diagnostics=None):
+    protected = connection.execute(
+        "SELECT 1 FROM flight_tombstones WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? UNION ALL SELECT 1 FROM flight_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? AND locally_modified_us IS NOT NULL",
+        (key, key),
+    ).fetchone()
+    if protected:
+        counters["records_protected"] += 1
+        return False
+    encoded = canonical(data)
     old = connection.execute("SELECT data FROM itinerary_legs WHERE key=?", (key,)).fetchone()
     if old is not None and old[0] != encoded:
         if diagnostics is not None:
             diagnostics.count("invalid_records", "conflicting_itinerary_identity")
         raise ValueError("Conflicting itinerary identity; day not committed")
-    inserted = connection.execute(
-        "INSERT OR IGNORE INTO itinerary_legs VALUES (?,?,?)",
-        (key, str(leg.departure_lower.date()), encoded),
-    ).rowcount
+    batch = connection.execute(
+        "SELECT id FROM ingestion_batches WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND state='running' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    outcome = store_flight(
+        connection,
+        FlightRecord(
+            provider="adsblol",
+            provider_id=key,
+            callsign=data["callsign"],
+            origin_iata=data["origin_iata"],
+            destination_iata=data["destination_iata"],
+            aircraft_type_code=data["aircraft_type_code"],
+            evidence_kind="inferred_ground_brackets",
+            departure_observed_lower=data["departure_lower"],
+            departure_observed_upper=data["departure_upper"],
+            arrival_observed_lower=data["arrival_lower"],
+            arrival_observed_upper=data["arrival_upper"],
+            fetched_at=datetime.now(UTC),
+        ),
+        restore=False,
+        batch_id=batch[0] if batch else None,
+    )
+    if outcome == "protected":
+        counters["records_protected"] += 1
+        return False
+    inserted = old is None
     counters["records_inserted" if inserted else "records_already_present"] += 1
     return bool(inserted)
 
@@ -244,6 +310,97 @@ def cleanup_raw(root, receipt):
         path.with_name(path.name + ".verified.json").unlink(missing_ok=True)
 
 
+def scan_day(
+    connection,
+    paths,
+    day,
+    lookup,
+    rules,
+    start_us,
+    end_us,
+    departure_year,
+    budget,
+    counters,
+    diagnostics,
+):
+    seen = set()
+    affected = set()
+    current_tails = []
+    diagnostics.phase = "archive_scan"
+    for data, compressed_bytes in archive_traces(paths, diagnostics=diagnostics):
+        counters["aircraft_members"] += 1
+        counters["raw_member_bytes"] += compressed_bytes
+        hex_id = data.get("icao")
+        diagnostics.aircraft_id = hex_id if isinstance(hex_id, str) else None
+        diagnostics.observation_index = None
+        if isinstance(hex_id, str) and re.fullmatch(r"[0-9a-f]{6}", hex_id):
+            if hex_id in seen:
+                diagnostics.count("invalid_records", "duplicate_aircraft_member")
+                raise ValueError("Duplicate aircraft member; day not committed")
+            seen.add(hex_id)
+        kind = data.get("t")
+        leading = LeadingMovement(aircraft_type_code=kind if isinstance(kind, str) else "")
+        diagnostics.phase = "reduce_movement"
+        legs, state, reason = reduce_movement(
+            data,
+            None,
+            lookup,
+            rules,
+            start_us,
+            end_us,
+            leading=leading,
+            diagnostics=diagnostics,
+        )
+        counters[reason] += 1
+        for leg in legs:
+            if departure_year is not None and leg.departure_lower.year != departure_year:
+                counters["legs_outside_departure_year"] += 1
+                continue
+            save_leg(connection, leg, counters, diagnostics=diagnostics)
+            counters["legs_completed"] += 1
+            if counters["legs_completed"] % 100 == 0:
+                budget.check(1024**2)
+        if reason == "processed" and (
+            state is not None or leading.valid and leading.first_us is not None
+        ):
+            connection.execute(
+                "INSERT OR REPLACE INTO extraction_boundaries VALUES (?,?,?)",
+                (
+                    hex_id,
+                    str(day),
+                    canonical(
+                        {
+                            "leading": leading.model_dump() if leading.valid else None,
+                            "tail": state.model_dump() if state else None,
+                        }
+                    ),
+                ),
+            )
+            affected.add(hex_id)
+        if state is not None:
+            current_tails.append((hex_id, state.model_dump_json()))
+        if counters["aircraft_members"] % 100 == 0:
+            budget.check(1024**2)
+        if counters["aircraft_members"] % 1000 == 0:
+            LOGGER.info(
+                "%s",
+                canonical(
+                    {
+                        "event": "day_progress",
+                        "day": str(day),
+                        "committed": False,
+                        "counts_provisional": True,
+                        "counts": dict(counters),
+                        "diagnostics": diagnostics.summary(),
+                    }
+                ),
+            )
+        diagnostics.phase = "archive_scan"
+        diagnostics.aircraft_id = None
+        diagnostics.observation_index = None
+    return affected, current_tails
+
+
 def _extract_day(
     root,
     day,
@@ -338,14 +495,50 @@ def _extract_day(
         receipt = None
     budget.check(1024**2)
     database.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(database, timeout=10)) as connection:
+    with (
+        closing(sqlite3.connect(database, timeout=10)) as connection,
+        TemporaryDirectory(prefix=".day-stage-", dir=root) as scratch,
+        closing(sqlite3.connect(Path(scratch) / "day.db")) as staged,
+    ):
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA journal_mode=WAL")
+        legacy = connection.execute(
+            "SELECT type FROM sqlite_master WHERE name='itinerary_legs'"
+        ).fetchone()
+        if legacy and legacy[0] == "table":
+            if connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0]:
+                raise ValueError("Legacy extraction schema; use a new output database")
+            connection.execute("DROP TABLE itinerary_legs")
         connection.executescript(SCHEMA)
         saved_config = connection.execute(
             "SELECT data FROM extraction_config WHERE id=1"
         ).fetchone()
         if saved_config is not None and not compatible_config(saved_config[0], config):
             raise ValueError("Extraction configuration changed; use a separate data root")
+        start_us = int(datetime.combine(day, time.min, UTC).timestamp()) * 1_000_000
+        end_us = start_us + 86_400_000_000
+        with connection:
+            record_sources(connection)
+            sid = connection.execute("SELECT id FROM data_sources WHERE code='adsblol'").fetchone()[
+                0
+            ]
+            started = utc_us(datetime.now(UTC))
+            connection.execute(
+                "UPDATE ingestion_batches SET state='interrupted',finished_us=MAX(started_us,?),error_summary='Previous extraction ended before commit' WHERE source_id=? AND state='running'",
+                (started, sid),
+            )
+            batch_id = connection.execute(
+                "INSERT INTO ingestion_batches(source_id,input_start_us,input_end_us,started_us,state,pipeline_version,config_sha256,config_json,inputs_json,diagnostics_json) VALUES (?,?,?,?,'running','observed-itinerary-v1',?,?,?,'{}')",
+                (
+                    sid,
+                    start_us,
+                    end_us,
+                    started,
+                    hashlib.sha256(config.encode()).hexdigest(),
+                    config,
+                    canonical(assets),
+                ),
+            ).lastrowid
         output = root / "raw"
         diagnostics.phase = "download"
         if download:
@@ -369,12 +562,41 @@ def _extract_day(
             }
             for path, item in zip(paths, assets, strict=True)
         ]
-        start_us = int(datetime.combine(day, time.min, UTC).timestamp()) * 1_000_000
-        end_us = start_us + 86_400_000_000
-        seen = set()
+        with connection:
+            connection.execute(
+                "UPDATE ingestion_batches SET inputs_json=? WHERE id=?",
+                (canonical(inputs), batch_id),
+            )
+        staged.executescript(SCHEMA)
+        with staged:
+            record_sources(staged)
+            affected, current_tails = scan_day(
+                staged,
+                paths,
+                day,
+                lookup,
+                rules,
+                start_us,
+                end_us,
+                departure_year,
+                budget,
+                counters,
+                diagnostics,
+            )
+        counters["candidate_records"] = counters["records_inserted"]
+        counters["records_inserted"] = counters["records_already_present"] = 0
+        diagnostics.phase = "prepare_commit"
+        budget.check(1024**2)
         with connection:
             connection.execute("BEGIN IMMEDIATE")
             record_sources(connection)
+            airport_source = connection.execute(
+                "SELECT id FROM data_sources WHERE code='ourairports'"
+            ).fetchone()[0]
+            connection.executemany(
+                "INSERT INTO airports(iata,latitude,longitude,metadata_source_id) VALUES(?,?,?,?) ON CONFLICT(iata) DO UPDATE SET latitude=COALESCE(airports.latitude,excluded.latitude),longitude=COALESCE(airports.longitude,excluded.longitude),metadata_source_id=COALESCE(airports.metadata_source_id,excluded.metadata_source_id)",
+                [(code, lat, lon, airport_source) for code, lat, lon in airports],
+            )
             connection.execute("INSERT OR IGNORE INTO extraction_config VALUES (1,?)", (config,))
             last = connection.execute("SELECT MAX(day) FROM extraction_days").fetchone()[0]
             last_receipt = (
@@ -393,80 +615,13 @@ def _extract_day(
                         "INSERT OR IGNORE INTO extraction_boundaries VALUES (?,?,?)",
                         (hex_id, last, canonical({"leading": None, "tail": json.loads(raw)})),
                     )
-            affected = set()
-            current_tails = []
-            diagnostics.phase = "archive_scan"
-            for data, compressed_bytes in archive_traces(paths, diagnostics=diagnostics):
-                counters["aircraft_members"] += 1
-                counters["raw_member_bytes"] += compressed_bytes
-                hex_id = data.get("icao")
-                diagnostics.aircraft_id = hex_id if isinstance(hex_id, str) else None
-                diagnostics.observation_index = None
-                if isinstance(hex_id, str) and re.fullmatch(r"[0-9a-f]{6}", hex_id):
-                    if hex_id in seen:
-                        diagnostics.count("invalid_records", "duplicate_aircraft_member")
-                        raise ValueError("Duplicate aircraft member; day not committed")
-                    seen.add(hex_id)
-                kind = data.get("t")
-                leading = LeadingMovement(aircraft_type_code=kind if isinstance(kind, str) else "")
-                diagnostics.phase = "reduce_movement"
-                legs, state, reason = reduce_movement(
-                    data,
-                    None,
-                    lookup,
-                    rules,
-                    start_us,
-                    end_us,
-                    leading=leading,
-                    diagnostics=diagnostics,
-                )
-                counters[reason] += 1
-                for leg in legs:
-                    if departure_year is not None and leg.departure_lower.year != departure_year:
-                        counters["legs_outside_departure_year"] += 1
-                        continue
-                    save_leg(connection, leg, counters, diagnostics=diagnostics)
-                    counters["legs_completed"] += 1
-                    if counters["legs_completed"] % 100 == 0:
-                        budget.check(1024**2)
-                if reason == "processed" and (
-                    state is not None or leading.valid and leading.first_us is not None
-                ):
-                    connection.execute(
-                        "INSERT OR REPLACE INTO extraction_boundaries VALUES (?,?,?)",
-                        (
-                            hex_id,
-                            str(day),
-                            canonical(
-                                {
-                                    "leading": leading.model_dump() if leading.valid else None,
-                                    "tail": state.model_dump() if state else None,
-                                }
-                            ),
-                        ),
-                    )
-                    affected.add(hex_id)
-                if state is not None:
-                    current_tails.append((hex_id, state.model_dump_json()))
-                if counters["aircraft_members"] % 100 == 0:
-                    budget.check(1024**2)
-                if counters["aircraft_members"] % 1000 == 0:
-                    LOGGER.info(
-                        "%s",
-                        canonical(
-                            {
-                                "event": "day_progress",
-                                "day": str(day),
-                                "committed": False,
-                                "counts_provisional": True,
-                                "counts": dict(counters),
-                                "diagnostics": diagnostics.summary(),
-                            }
-                        ),
-                    )
-                diagnostics.phase = "archive_scan"
-                diagnostics.aircraft_id = None
-                diagnostics.observation_index = None
+            diagnostics.phase = "merge_candidates"
+            for key, raw in staged.execute("SELECT key,data FROM itinerary_legs"):
+                save_candidate(connection, key, json.loads(raw), counters, diagnostics=diagnostics)
+            connection.executemany(
+                "INSERT OR REPLACE INTO extraction_boundaries VALUES (?,?,?)",
+                staged.execute("SELECT icao_hex,day,data FROM extraction_boundaries"),
+            )
             if last is None or str(day) >= last:
                 connection.execute("DELETE FROM pending_movements")
                 connection.executemany("INSERT INTO pending_movements VALUES (?,?)", current_tails)
@@ -506,10 +661,21 @@ def _extract_day(
             counters["legs_completed"] += counters["boundary_legs_completed"]
             receipt["counts"] = dict(counters)
             receipt["diagnostics"] = diagnostics.summary()
+            receipt["batch_id"] = batch_id
             connection.execute(
                 "UPDATE extraction_days SET receipt=? WHERE day=?", (canonical(receipt), str(day))
             )
             budget.check(1024**2)
+            connection.execute(
+                "UPDATE ingestion_batches SET state='committed',finished_us=?,inserted_count=?,duplicate_count=?,diagnostics_json=? WHERE id=?",
+                (
+                    utc_us(datetime.now(UTC)),
+                    counters["records_inserted"],
+                    counters["records_already_present"],
+                    canonical(diagnostics.summary()),
+                    batch_id,
+                ),
+            )
             diagnostics.phase = "commit"
         diagnostics.committed = True
         diagnostics.phase = "checkpoint"
@@ -583,6 +749,21 @@ def extract_day(
                 refresh_diagnostics=refresh_diagnostics,
             )
         except (Exception, KeyboardInterrupt) as error:
+            if not diagnostics.committed and budget.database.is_file():
+                with closing(sqlite3.connect(budget.database, timeout=10)) as failure, failure:
+                    if failure.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='ingestion_batches'"
+                    ).fetchone():
+                        failure.execute(
+                            "UPDATE ingestion_batches SET state=?,finished_us=MAX(started_us,?),error_summary=?,diagnostics_json=? WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND input_start_us=? AND state='running'",
+                            (
+                                "interrupted" if isinstance(error, KeyboardInterrupt) else "failed",
+                                utc_us(datetime.now(UTC)),
+                                str(error),
+                                canonical(diagnostics.summary()),
+                                utc_us(datetime.combine(day, time.min, UTC)),
+                            ),
+                        )
             LOGGER.error(
                 "%s",
                 canonical(

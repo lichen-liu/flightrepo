@@ -267,7 +267,7 @@ def test_local_search_uses_exact_dates_and_applies_constraints(client):
 def test_missing_timezone_and_aware_wall_time_are_actionable(client, demo):
     with demo[0].connect() as connection:
         connection.execute("DELETE FROM airport_transfers")
-        connection.execute("DELETE FROM airports WHERE iata='YYZ'")
+        connection.execute("UPDATE airports SET timezone=NULL WHERE iata='YYZ'")
     result = client.post("/v1/itineraries/search/local", json=request())
     assert result.status_code == 422
     assert result.json()["detail"]["code"] == "airport_metadata_missing"

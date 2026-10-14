@@ -3,10 +3,18 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 ENGINE_VERSION = "routing-5"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
+TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None
 MAX_DEPARTURE_DAYS = 31
 MAX_ONWARD_DAYS = 31
@@ -97,6 +105,14 @@ class RouteSearchRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
+    time_basis: TimeBasis | None = None
+
+    @model_serializer(mode="wrap")
+    def optional_basis(self, handler):
+        data = handler(self)
+        if self.time_basis is None:
+            data.pop("time_basis", None)
+        return data
 
     _codes = field_validator("origin", "destination", mode="before")(airport_code)
     _times = field_validator("departure_start", "departure_end", "horizon_end")(utc_instant)

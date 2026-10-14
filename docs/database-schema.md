@@ -1,9 +1,9 @@
-# Shared flight database proposal
+# Shared flight database
 
-**Status: design, not deployed.** [Executable SQLite DDL](database-schema.sql)
-defines the proposed serving tables. It has no effect on the running ingestion
-or website. The hosted database remains `var/hosted/flights.db`.
-The proposal requires SQLite 3.38 or newer (STRICT tables and built-in JSON).
+**Implemented contract: `flight-legs`, schema version 1.** The canonical
+[SQLite DDL](../src/core/schema.sql) and [storage adapter](../src/core/storage.py)
+are shared by ingestion, API and admin. Startup does not seed real databases.
+SQLite 3.38 or newer is required (STRICT tables and built-in JSON).
 
 ## Start with the consumer
 
@@ -31,10 +31,10 @@ never synthesize a flight number, schedule, airport timezone or city membership.
 | `schema_metadata` | Versioned contract for startup and migration checks |
 | `searchable_legs` (view) | Common departure/arrival intervals, filtered by explicit time basis |
 
-The DDL covers the shared facts. Retain existing `ingestion_profiles`, extraction
+The DDL covers the shared facts. The runtime also retains `ingestion_profiles`, extraction
 config/day receipts/boundary state, and cache policy/catalogue/LRU/locator tables
-during migration. They support resumability and storage, rather than defining a
-second kind of flight. Boundary summaries contain compact airport/time evidence,
+for resumability and storage. Compatibility `flights` and `itinerary_legs`
+views project the same typed facts; they are not separate flight stores. Boundary summaries contain compact airport/time evidence,
 not tracks; successful receipts remain available after raw deletion. A later
 cleanup can retire redundant metadata only after compatibility is demonstrated.
 
@@ -49,7 +49,8 @@ An identical reimport records a duplicate, without increasing the revision.
 A trustworthy upstream correction updates the same identity and increments its
 revision. An unexpected conflicting ADSB extraction identity fails its day's
 transaction and reports the conflict. `locally_modified_us` protects manual
-overrides from subsequent ingestion; edits use compare-and-swap on `revision`.
+overrides from subsequent ingestion. Edits compare reviewed facts under an
+immediate transaction, and the stored revision tracks changes.
 Delete writes a tombstone in the same transaction as removing the leg. Only an
 explicit restore clears it. The view also hides any tombstoned cached row.
 
@@ -168,34 +169,41 @@ rows, respecting local overrides and tombstones, for **every** consumer. Keep
 simple chunk URL/hash/window metadata; ADSB.lol raw archive URLs do not supply
 on-demand itineraries.
 
-## Migration and release sequence
+## Initialization and serving
 
-1. Validate this design in a disposable DB. Implement the new models, writer and
-   shared reader together, then route catalog/stats/dates/lookup/search/rebuild/
-   exports/admin through them. Upgrade normalized cache format and saved routing
-   snapshots explicitly; do not reinterpret version-1 scheduled fields.
-2. Prepare a versioned, transactional migration and verify it against a consistent
-   SQLite backup of the real DB, using the backup API rather than copying a main
-   file with outstanding WAL changes. Copy `flights` as source-reported schedule/actual facts;
-   copy `itinerary_legs` as observed candidates, retaining their keys and all four
-   bounds. Add airport stubs, then enrich from the saved airport snapshot without
-   invented timezones. Preserve metadata/state/tombstones; validate row counts,
-   identities and exact UTC microseconds. Keep old tables through validation,
-   then retire them to release pages at a planned maintenance boundary.
-   Invalid legacy records fail migration with diagnostics rather than disappearing.
-3. Before the live migration, finish the current day and pause the existing
-   ingestor. Its current empty-`flights` guard must be replaced by version/source
-   checks before resuming. Budget backup/migration space explicitly. Do not
-   change schemas beneath an active old writer.
-4. Install the coordinated backend/frontend/admin update, with an explicit
-   database path shared by ingestion and serving. Replace the deployment's
-   demo-only validation with schema/version/readiness checks. Demo seeding is an
-   explicit isolated operation, never a fallback for empty production data.
-5. Resume daily ingestion. A new day's commit must change API counts and eligible
-   dates immediately; test historical search, connections, bounds/type display,
-   exports, overlapping imports, manual edits/deletes, quota changes and
-   concurrent readers against this exact file. Compare database schema version,
-   resolved path and counts through admin and the deployed API.
+Initialize a fresh target explicitly with `python -m admin --db PATH db --create`.
+The admin ADSB pipeline defaults to the shell's selected database; `--output-db`
+remains an explicit override. Scratch directories hold temporary inputs/staging,
+not a second serving database. Noncontiguous jobs and overlapping days retain
+stable keys and boundary state. Legacy schemas require a new initialized file;
+there is no automatic destructive conversion or reseeding.
 
-This design does not make the current website serve extracted records. That
-requires the coordinated implementation and deployment above, not just DDL.
+Hosted settings accept `data_mode: real`. This validates the shared schema and
+rejects demo flight records, allows an initialized empty dataset, and never seeds
+it. The default `synthetic` mode keeps the isolated demo's existing checks. Install
+backend, frontend and admin together, and point serving and ingestion at the same
+absolute database path. Readiness and admin stats expose the schema contract and
+version; admin overview also reports searchable counts by basis and batch states.
+
+API routing accepts `time_basis: scheduled | actual | observed`. An omitted basis
+selects available scheduled evidence first, then observed, then actual. Calendars
+use the same preference. Lookup and JSON export retain every available kind of
+evidence, including partial facts that cannot yet participate in routing. The
+frontend offers the three modes, labels callsigns and inferred intervals, selects
+UTC explicitly when no timezone metadata exists, and shows source/licence notices.
+Version-1 normalized HTTP catalogues remain valid for schedules; version 2 also
+supports observed/actual chunks using the same typed serving contract.
+
+Raw parsing writes disposable daily staging outside the main database's write
+transaction. Admin quota changes can commit while this parser runs. Only the
+candidate/boundary merge, receipt and successful batch state acquire the main
+write lock. Readers see prior complete days until that commit. Failed attempts
+retain diagnostics and raw retry inputs, remove staging, and apply no partial
+legs. Lowering quota during parsing is rechecked before committing the day.
+
+`tests/test_shared_flight_database.py` exercises the complete daily handoff,
+API/calendar/routing/rebuild/replay/export/admin, edit/delete protection, failed-day
+receipts, partial records, normalized observed downloads, interval connection
+limits and a separate admin writer changing quota during parsing. Scheduled
+routing, interactive admin, package and browser regression suites cover the
+existing workflows.

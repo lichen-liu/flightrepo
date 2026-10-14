@@ -3,12 +3,20 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from core.models import FlightRecord
 from core.routing.models import (
     SearchDiagnostics,
     SearchLimits,
+    TimeBasis,
     ViaAirports,
     airport_codes,
     optional_airport_code,
@@ -20,20 +28,28 @@ from core.routing.models import (
 
 class Airport(BaseModel):
     iata: str = Field(pattern=r"^[A-Z]{3}$")
-    name: str = Field(min_length=1)
-    city_id: str = Field(min_length=1)
-    timezone: str
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
+    name: str | None = Field(default=None, min_length=1)
+    city_id: str | None = Field(default=None, min_length=1)
+    timezone: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
 
     @field_validator("timezone")
     @classmethod
     def valid_zone(cls, value: str) -> str:
+        if value is None:
+            return None
         try:
             ZoneInfo(value)
         except ZoneInfoNotFoundError as error:
             raise ValueError("timezone must be an IANA zone") from error
         return value
+
+    @model_validator(mode="after")
+    def coordinate_pair(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("airport coordinates must both be present or both be unknown")
+        return self
 
 
 class AirportTransfer(BaseModel):
@@ -93,6 +109,14 @@ class RebuildRequest(BaseModel):
     option_limit: int = Field(default=100, ge=1, le=500)
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
+    time_basis: TimeBasis | None = None
+
+    @model_serializer(mode="wrap")
+    def optional_basis(self, handler):
+        data = handler(self)
+        if self.time_basis is None:
+            data.pop("time_basis", None)
+        return data
 
     _avoided_codes = field_validator("avoid_airports", mode="before")(airport_codes)
     _via_codes = field_validator("via_airport", mode="before")(via_airports)

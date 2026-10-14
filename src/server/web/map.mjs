@@ -1,4 +1,4 @@
-import { stamp } from "./format.mjs";
+import { stamp, departureTime, arrivalTime, flightLabel } from "./format.mjs";
 
 export class RouteMap {
   constructor(svg, info) {
@@ -130,8 +130,8 @@ export class RouteMap {
     for (let i = 0; i < this.legs.length; i++) {
       const f = this.legs[i],
         previous = this.legs[i - 1];
-      const start = Date.parse(f.departure_scheduled),
-        end = Date.parse(f.arrival_scheduled);
+      const start = Date.parse(departureTime(f)),
+        end = Date.parse(arrivalTime(f));
       if (this.cursor >= start && this.cursor <= end) {
         const a = this.point(f.origin_iata),
           b = this.point(f.destination_iata);
@@ -307,8 +307,8 @@ export function drawTimeline(container, legs, cursor) {
   const d3 = window.d3,
     w = container.clientWidth - 36;
   if (!d3 || w < 100) return;
-  const start = new Date(legs[0].departure_scheduled),
-    end = new Date(legs.at(-1).arrival_scheduled);
+  const start = new Date(departureTime(legs[0])),
+    end = new Date(arrivalTime(legs.at(-1)));
   const x = d3
     .scaleUtc()
     .domain([start, end])
@@ -325,10 +325,10 @@ export function drawTimeline(container, legs, cursor) {
     );
   for (let i = 0; i < legs.length; i++) {
     const f = legs[i],
-      a = x(new Date(f.departure_scheduled)),
-      b = x(new Date(f.arrival_scheduled));
+      a = x(new Date(departureTime(f))),
+      b = x(new Date(arrivalTime(f)));
     if (i) {
-      const prev = x(new Date(legs[i - 1].arrival_scheduled));
+      const prev = x(new Date(arrivalTime(legs[i - 1])));
       svg
         .append("line")
         .attr("x1", prev)

@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import URLError
@@ -898,3 +899,60 @@ def test_public_response_failure_or_size_limit_not_accepted(scripts, monkeypatch
     stub_requests(scripts, monkeypatch, open_url)
     with pytest.raises(ValueError, match="Unexpected or oversized"):
         scripts.manage.probe("https://fly.boboji.fyi")
+
+
+def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
+    from test_adsblol_extraction import run
+    from test_adsblol_legs import leg_trace
+
+    root = tmp_path / "runtime"
+    root.mkdir()
+    database = tmp_path / "real.db"
+    run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=database)
+    (root / "settings.json").write_text(
+        json.dumps(
+            {
+                "hostname": "fly.boboji.fyi",
+                "port": 8014,
+                "database_path": str(database),
+                "data_mode": "real",
+            }
+        )
+    )
+    result = scripts.serve.seed_database(root)
+    assert result["seeded"] is False and result["flight_count"] == 1
+    application, _ = scripts.serve.create_server(root)
+    with TestClient(application, base_url="https://fly.boboji.fyi") as client:
+        response = client.get("/v1/catalog")
+        assert response.status_code == 200
+        assert response.json()["dataset"]["providers"] == ["adsblol"]
+        assert client.get("/health/ready").json()["schema_contract"] == "flight-legs"
+
+
+def test_real_mode_requires_an_initialized_database_and_rejects_demo(tmp_path, scripts):
+    from core.models import FlightRecord
+    from ingestion.updater import FlightUpdater
+
+    root = tmp_path / "runtime"
+    root.mkdir()
+    database = tmp_path / "real.db"
+    (root / "settings.json").write_text(
+        json.dumps(
+            {
+                "hostname": "fly.boboji.fyi",
+                "port": 8014,
+                "database_path": str(database),
+                "data_mode": "real",
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="never seeds"):
+        scripts.serve.seed_database(root)
+    assert not database.exists()
+    updater = FlightUpdater(database)
+    updater.initialize()
+    assert scripts.serve.seed_database(root)["flight_count"] == 0
+    fixture = json.loads((Path(__file__).parents[1] / "fixtures/connections-demo.json").read_text())
+    updater.upsert([FlightRecord.model_validate(fixture["flights"][0])])
+    with pytest.raises(ValueError, match="demo flight records"):
+        scripts.serve.create_server(root)

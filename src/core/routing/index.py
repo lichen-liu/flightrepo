@@ -9,7 +9,7 @@ from core.routing.snapshot import flight_key
 
 
 def departure_key(flight):
-    return flight.departure_scheduled, *flight_key(flight)
+    return flight.departure_lower, *flight_key(flight)
 
 
 class FlightIndex:
@@ -21,12 +21,12 @@ class FlightIndex:
             origin: tuple(sorted(rows, key=departure_key)) for origin, rows in grouped.items()
         }
         self.times = {
-            origin: tuple(f.departure_scheduled for f in rows)
+            origin: tuple(f.departure_lower for f in rows)
             for origin, rows in self.by_origin.items()
         }
         reverse = defaultdict(set)
         for flight in records.values():
-            if flight.status == FlightStatus.CANCELLED or flight.arrival_scheduled > horizon:
+            if flight.status == FlightStatus.CANCELLED or flight.arrival_upper > horizon:
                 continue
             if flight.origin_iata in policy.avoid or flight.destination_iata in policy.avoid:
                 continue

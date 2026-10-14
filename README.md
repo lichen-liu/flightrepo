@@ -19,7 +19,7 @@ Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe o
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
-To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). The first hosted version uses a separate synthetic database under `var/hosted/`; building the real flight database is the next phase.
+To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). Hosted settings explicitly select synthetic or real serving; real mode uses the shared flight-leg database under `var/hosted/` and never seeds demo data.
 
 ## What works
 
@@ -42,7 +42,7 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
 
 `src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, recoverable itinerary downloads, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
 
-The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Offline observed itinerary candidates remain separate from the scheduled serving database.
+The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Accepted observed legs, scheduled flights and reported actual events share the [typed serving schema](docs/database-schema.md). Each completed ingestion day feeds counts, calendars, routing and admin immediately.
 
 The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) supports
 separate short jobs: `ingest configure --source adsblol`, then

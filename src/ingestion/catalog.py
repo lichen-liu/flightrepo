@@ -27,14 +27,20 @@ def write_itinerary_catalog(records, airports, transfers, output, base_url):
         if identity in identities:
             raise ValueError("Duplicate flight identity in source records")
         identities.add(identity)
-        departure = record.departure_scheduled
-        groups[(record.provider, record.origin_iata, departure.year, departure.month)].append(
-            record
-        )
+        departure = record.departure_lower
+        groups[
+            (
+                record.provider,
+                record.origin_iata,
+                record.effective_time_basis,
+                departure.year,
+                departure.month,
+            )
+        ].append(record)
     chunks, files = [], {}
     windows = []
-    for (provider, origin, year, month), flights in sorted(groups.items()):
-        flights.sort(key=lambda f: (f.departure_scheduled, f.provider_id))
+    for (provider, origin, basis, year, month), flights in sorted(groups.items()):
+        flights.sort(key=lambda f: (f.departure_lower, f.provider_id))
         start = datetime(year, month, 1, tzinfo=UTC)
         end = (
             datetime(year, month + 1, 1, tzinfo=UTC)
@@ -48,15 +54,15 @@ def write_itinerary_catalog(records, airports, transfers, output, base_url):
             stop = min(offset + MAX_CHUNK_RECORDS, len(flights))
             # Windows are disjoint; equal departure instants must stay together.
             while stop < len(flights) and (
-                flights[stop - 1].departure_scheduled == flights[stop].departure_scheduled
+                flights[stop - 1].departure_lower == flights[stop].departure_lower
             ):
                 stop -= 1
                 if stop == offset:
                     raise ValueError("Too many flights at one provider/origin departure instant")
-            boundary = flights[stop].departure_scheduled if stop < len(flights) else end
-            windows.append((provider, origin, start, boundary, flights[offset:stop]))
+            boundary = flights[stop].departure_lower if stop < len(flights) else end
+            windows.append((provider, origin, basis, start, boundary, flights[offset:stop]))
             start, offset = boundary, stop
-    for provider, origin, start, end, flights in windows:
+    for provider, origin, basis, start, end, flights in windows:
         content = gzip.compress(
             ItineraryPayload(flights=flights).model_dump_json().encode(), mtime=0
         )
@@ -70,25 +76,44 @@ def write_itinerary_catalog(records, airports, transfers, output, base_url):
                 url=base_url.rstrip("/") + "/" + digest + ".json.gz",
                 bytes=len(content),
                 provider=provider,
+                time_basis=basis,
                 origin=origin,
                 destinations=sorted({f.destination_iata for f in flights}),
                 departure_start=start,
                 departure_end=end,
                 flight_count=len(flights),
                 cancelled_count=len(flights) - len(active),
-                first_departure=min((f.departure_scheduled for f in active), default=None),
-                last_departure=max((f.departure_scheduled for f in active), default=None),
+                first_departure=min((f.departure_lower for f in active), default=None),
+                last_departure=max((f.departure_lower for f in active), default=None),
                 oldest_fact_refresh=min(f.fetched_at for f in flights),
                 newest_fact_refresh=max(f.fetched_at for f in flights),
                 origin_timezone=timezone,
-                dates_utc=sorted({f.departure_scheduled.date() for f in active}),
-                dates_local=sorted({f.departure_scheduled.astimezone(local).date() for f in active})
+                dates_utc=sorted(
+                    {
+                        f.departure_lower.date()
+                        for f in active
+                        if f.departure_lower.date() == f.departure_upper.date()
+                    }
+                ),
+                dates_local=sorted(
+                    {
+                        f.departure_lower.astimezone(local).date()
+                        for f in active
+                        if f.departure_lower.astimezone(local).date()
+                        == f.departure_upper.astimezone(local).date()
+                    }
+                )
                 if local
                 else [],
             )
         )
         files[digest + ".json.gz"] = content
-    catalog = ItineraryCatalog(chunks=chunks, airports=airports, transfers=transfers)
+    catalog = ItineraryCatalog(
+        format_version=2 if any(c.time_basis != "scheduled" for c in chunks) else 1,
+        chunks=chunks,
+        airports=airports,
+        transfers=transfers,
+    )
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():

@@ -262,3 +262,22 @@ Duplicate entry points have been removed. Update existing scripts as follows:
 Unlike the former dated `flights` command, the unified browser includes cancelled
 flights by default. Use `--status scheduled` when you want only scheduled records.
 HTTP API contracts and the website's routing engine remain unchanged.
+
+## Shared serving schema
+
+New files use the `flight-legs` contract. `stats` exposes the schema version;
+`overview` separates scheduled, actual and observed searchable counts and shows
+successful/failed/running ingestion attempts. ADSB ingestion defaults to the
+selected database. `--data-root` selects disposable working storage; an explicit
+`--output-db` overrides the serving target. The final job summary prints both paths.
+
+`flight show`, `flights`, search, export, edit and delete operate on accepted
+observed legs too. Edits retain four time bounds, callsign and aircraft type;
+reprocessing preserves local edits and deletion markers. `import-json` explicitly
+restores an identity. Search/rebuild request JSON can set `time_basis` to
+`scheduled`, `actual` or `observed`. Unknown airport timezones require UTC input.
+A placeholder airport created by ingestion can be completed with `airport create`
+or catalog import; directed transfers still require known city membership.
+
+A schema change requires a fresh initialized file; opening admin never silently
+converts an old database or seeds synthetic flights. See [the schema reference](database-schema.md).

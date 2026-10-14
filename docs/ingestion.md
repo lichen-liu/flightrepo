@@ -2,7 +2,8 @@
 
 Updated October 14, 2026. Process one archive day, keep compact **observed
 itinerary-leg candidates** with aircraft type, then delete raw inputs. The
-December 30 pilot is complete; full-year extraction and serving remain unfinished.
+December 30 pilot is complete; shared serving is implemented, and full-year
+extraction remains unfinished.
 
 ## Sources and licences
 
@@ -54,7 +55,7 @@ Callsigns are radio identifiers, not verified marketing flight numbers.
 
 ```text
 daily URL inventory → download/verify → read one aircraft member
-                   → filter/reconstruct → atomic SQLite commit → delete raw day
+                   → filter/reconstruct in staging → atomic SQLite commit → delete raw day
 ```
 
 1. Download one preferred copy; resume partials, verify length/available checksum and
@@ -72,15 +73,15 @@ daily URL inventory → download/verify → read one aircraft member
 5. Atomically commit legs, state and receipt; delete verified raw parts. Failed
    days roll back and keep inputs. Restarts skip committed days and finish cleanup.
 
-The output database contains `itinerary_legs(key, departure_date, data)` plus config,
-daily receipts, boundary summaries and source/licence metadata. `departure_date` uses
-the lower UTC departure bound. Primary keys prevent duplicate identities; there
-are no additional SQL search indexes. Multi-leg journeys can be assembled from
-individual legs, without storing every connection combination.
+The shared output stores typed `flight_legs`, sources, ingestion attempts, receipts
+and compact boundary state. Compatibility `flights`/`itinerary_legs` views read
+those same facts; the API and admin see committed days immediately. Stable source
+keys prevent duplicates. Only two observed-time query indexes are populated for
+an observed-only dataset. Multi-leg journeys are assembled at query time.
 
-These are observed bounds, not scheduled/gate times. Output stays separate from
-scheduled serving until accuracy/coverage validation and observed-time routing
-are implemented.
+Observed bounds are not scheduled/gate times. Search uses explicit observed mode,
+conservative interval connections and visible uncertainty. No flight number or
+airport timezone is invented. See [the shared schema](database-schema.md).
 
 ## Run and resume
 
@@ -112,8 +113,8 @@ independently; cancellation keeps prior days and a later invocation resumes.
 
 Use `--output-db var/hosted/<name>.db` in either entry point for an exact SQLite
 destination; `--data-root` remains its disposable download/working directory.
-The default is `DATA_ROOT/itineraries.db`. The output may share the selected admin
-file without turning observed bounds into scheduled flight facts. Quota accounting
+The default is `DATA_ROOT/itineraries.db`. The admin defaults to the selected serving file; an explicit output override
+can select another database. Observed bounds retain their meaning. Quota accounting
 includes output and SQLite sidecars once, even when it is also the policy file.
 `maintenance clear-data --yes` clears observed records and resume state too;
 confirm the destination and stop ingestion before clearing a real database.

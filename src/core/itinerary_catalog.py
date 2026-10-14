@@ -5,11 +5,18 @@ from typing import Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from core.connections import Airport, AirportTransfer
 from core.models import FlightRecord
-from core.routing.models import airport_code, utc_instant
+from core.routing.models import TimeBasis, airport_code, utc_instant
 
 MAX_CHUNK_RECORDS = 20_000
 
@@ -47,6 +54,14 @@ class ItineraryChunk(BaseModel):
     origin_timezone: str | None = None
     dates_utc: list[date]
     dates_local: list[date]
+    time_basis: TimeBasis = "scheduled"
+
+    @model_serializer(mode="wrap")
+    def legacy_schedule(self, handler):
+        data = handler(self)
+        if self.time_basis == "scheduled":
+            data.pop("time_basis", None)
+        return data
 
     _url = field_validator("url")(http_url)
     _origin = field_validator("origin", mode="before")(airport_code)
@@ -73,7 +88,11 @@ class ItineraryChunk(BaseModel):
                 or self.dates_local
             ):
                 raise ValueError("Cancelled-only chunks cannot advertise departure dates")
-        elif self.first_departure is None or self.last_departure is None or not self.dates_utc:
+        elif (
+            self.first_departure is None
+            or self.last_departure is None
+            or (not self.dates_utc and self.time_basis != "observed")
+        ):
             raise ValueError("Non-cancelled chunks require departure coverage")
         if self.first_departure is not None and not (
             self.departure_start <= self.first_departure <= self.last_departure < self.departure_end
@@ -106,7 +125,7 @@ class ItineraryChunk(BaseModel):
 
 class ItineraryCatalog(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    format_version: Literal[1] = 1
+    format_version: Literal[1, 2] = 1
     airports: list[Airport] = Field(default_factory=list, max_length=20_000)
     transfers: list[AirportTransfer] = Field(default_factory=list, max_length=20_000)
     chunks: list[ItineraryChunk] = Field(max_length=100_000)
@@ -115,10 +134,12 @@ class ItineraryCatalog(BaseModel):
     def unambiguous(self):
         seen, windows = set(), {}
         for chunk in self.chunks:
+            if self.format_version == 1 and chunk.time_basis != "scheduled":
+                raise ValueError("Observed/actual chunks require catalogue format version 2")
             if chunk.sha256 in seen:
                 raise ValueError("Duplicate itinerary chunk")
             seen.add(chunk.sha256)
-            windows.setdefault((chunk.provider, chunk.origin), []).append(chunk)
+            windows.setdefault((chunk.provider, chunk.origin, chunk.time_basis), []).append(chunk)
         for chunks in windows.values():
             ordered = sorted(chunks, key=lambda chunk: chunk.departure_start)
             if any(
@@ -137,7 +158,12 @@ class ItineraryCatalog(BaseModel):
                 raise ValueError("Chunk local dates must use catalogue airport timezone")
         for transfer in self.transfers:
             first, last = by_code.get(transfer.arrival_iata), by_code.get(transfer.departure_iata)
-            if first is None or last is None or first.city_id != last.city_id:
+            if (
+                first is None
+                or last is None
+                or first.city_id is None
+                or first.city_id != last.city_id
+            ):
                 raise ValueError("Transfer airports must exist in the same city")
         if len({(t.arrival_iata, t.departure_iata) for t in self.transfers}) != len(self.transfers):
             raise ValueError("Duplicate catalogue transfer")

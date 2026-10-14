@@ -16,7 +16,6 @@ import httpx
 from core.file_lock import file_mutex
 from core.itinerary_catalog import ItineraryCatalog, ItineraryPayload, http_url
 from core.models import FlightRecord
-from core.storage import utc_text
 
 MAX_DOWNLOAD_BYTES = 64 * 1024**2
 
@@ -265,7 +264,7 @@ class ItineraryCache:
                             (url, encoded),
                         )
                         connection.executemany(
-                            "INSERT OR IGNORE INTO airports VALUES (:iata,:name,:city_id,:timezone,:latitude,:longitude)",
+                            "INSERT INTO airports(iata,name,city_id,timezone,latitude,longitude) VALUES (:iata,:name,:city_id,:timezone,:latitude,:longitude) ON CONFLICT(iata) DO UPDATE SET name=COALESCE(airports.name,excluded.name),city_id=COALESCE(airports.city_id,excluded.city_id),timezone=COALESCE(airports.timezone,excluded.timezone),latitude=COALESCE(airports.latitude,excluded.latitude),longitude=COALESCE(airports.longitude,excluded.longitude)",
                             [a.model_dump() for a in catalog.airports],
                         )
                         for transfer in catalog.transfers:
@@ -273,7 +272,11 @@ class ItineraryCache:
                                 "SELECT city_id FROM airports WHERE iata IN (?,?)",
                                 (transfer.arrival_iata, transfer.departure_iata),
                             ).fetchall()
-                            if len(cities) == 2 and cities[0][0] == cities[1][0]:
+                            if (
+                                len(cities) == 2
+                                and cities[0][0] is not None
+                                and cities[0][0] == cities[1][0]
+                            ):
                                 connection.execute(
                                     "INSERT OR IGNORE INTO airport_transfers VALUES (:arrival_iata,:departure_iata,:minimum_minutes,:source)",
                                     transfer.model_dump(),
@@ -299,28 +302,41 @@ class ItineraryCache:
             ) != len(records):
                 raise ValueError("Itinerary row count or identities disagree with catalogue")
             if any(
-                f.provider != chunk.provider
+                f.effective_time_basis != chunk.time_basis
+                or f.provider != chunk.provider
                 or f.origin_iata != chunk.origin
-                or not chunk.departure_start <= f.departure_scheduled < chunk.departure_end
+                or not chunk.departure_start <= f.departure_lower < chunk.departure_end
                 for f in records
             ):
                 raise ValueError("Itinerary records fall outside catalogue scope")
             active = [f for f in records if f.status != "cancelled"]
             local = ZoneInfo(chunk.origin_timezone) if chunk.origin_timezone else None
             expected_local = (
-                sorted({f.departure_scheduled.astimezone(local).date() for f in active})
+                sorted(
+                    {
+                        f.departure_lower.astimezone(local).date()
+                        for f in active
+                        if f.departure_lower.astimezone(local).date()
+                        == f.departure_upper.astimezone(local).date()
+                    }
+                )
                 if local
                 else []
             )
             if (
                 sorted({f.destination_iata for f in records}) != chunk.destinations
                 or len(records) - len(active) != chunk.cancelled_count
-                or sorted({f.departure_scheduled.date() for f in active}) != chunk.dates_utc
+                or sorted(
+                    {
+                        f.departure_lower.date()
+                        for f in active
+                        if f.departure_lower.date() == f.departure_upper.date()
+                    }
+                )
+                != chunk.dates_utc
                 or expected_local != chunk.dates_local
-                or min((f.departure_scheduled for f in active), default=None)
-                != chunk.first_departure
-                or max((f.departure_scheduled for f in active), default=None)
-                != chunk.last_departure
+                or min((f.departure_lower for f in active), default=None) != chunk.first_departure
+                or max((f.departure_lower for f in active), default=None) != chunk.last_departure
                 or min(f.fetched_at for f in records) != chunk.oldest_fact_refresh
                 or max(f.fetched_at for f in records) != chunk.newest_fact_refresh
             ):
@@ -331,27 +347,11 @@ class ItineraryCache:
         partial.unlink(missing_ok=True)
         try:
             with closing(sqlite3.connect(partial)) as connection, connection:
-                from core.storage import SCHEMA
+                from core.storage import FLIGHT_SCHEMA, store_flight
 
-                # Only flight rows and their indexes belong in each recoverable chunk.
-                flight_schema = SCHEMA.split("CREATE TABLE IF NOT EXISTS airports")[0]
-                connection.executescript(flight_schema)
+                connection.executescript(FLIGHT_SCHEMA)
                 for record in records:
-                    data = record.model_dump(mode="json")
-                    data["aircraft_type_code"] = record.aircraft_type_code
-                    data["codeshares"] = json.dumps(record.codeshares)
-                    for key in (
-                        "departure_scheduled",
-                        "arrival_scheduled",
-                        "departure_actual",
-                        "arrival_actual",
-                        "fetched_at",
-                    ):
-                        data[key] = utc_text(getattr(record, key)) if getattr(record, key) else None
-                    connection.execute(
-                        f"INSERT INTO flights ({','.join(data)}) VALUES ({','.join(':' + name for name in data)})",
-                        data,
-                    )
+                    store_flight(connection, record)
             with control(self.path, writable=True) as connection:
                 connection.executemany(
                     "INSERT INTO itinerary_cache_refs VALUES (?,?,?) ON CONFLICT(provider,provider_id) DO UPDATE SET sha256=excluded.sha256",
@@ -367,6 +367,13 @@ class ItineraryCache:
         root = cache_directory(self.path)
         with file_mutex(root / "locks" / (chunk.sha256 + ".lock")):
             file = root / (chunk.sha256 + ".sqlite")
+            if file.is_file():
+                with closing(sqlite3.connect(file.as_uri() + "?mode=ro", uri=True)) as old:
+                    compatible = old.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='schema_metadata'"
+                    ).fetchone()
+                if not compatible:
+                    file.unlink()
             if not file.is_file():
                 self._build(chunk, file)
             with control(self.path, writable=True) as connection:
@@ -396,6 +403,11 @@ class ItineraryCache:
         with control(self.path) as connection:
             if connection.execute(
                 "SELECT 1 FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",
+                (provider, provider_id),
+            ).fetchone():
+                return None
+            if connection.execute(
+                "SELECT 1 FROM flight_tombstones t JOIN data_sources s ON s.id=t.source_id WHERE s.code=? AND t.source_record_key=?",
                 (provider, provider_id),
             ).fetchone():
                 return None

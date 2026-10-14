@@ -91,3 +91,19 @@ This phase starts with twelve synthetic demo schedules in
 database. Fares and booking are outside the explorer. Anyone with access to the
 published hostname can query these demo records; customer validation and real-data
 deployment are later work.
+
+## Real itinerary serving
+
+Set `"data_mode": "real"` in the installed private `settings.json` and select an
+explicit absolute `database_path` under the project's ignored `var/hosted/`.
+Initialize that file with admin before installation/startup. Real mode validates
+the `flight-legs` schema, accepts an empty initialized dataset and rejects demo
+flight records; the seed step cannot insert demo data in this mode. Existing
+synthetic installations keep their default mode and original smoke checks.
+
+Install backend/frontend/admin together while the hosted jobs are stopped. Resume
+only a writer using the same schema and path. `manage.py check` and `check --public`
+validate real readiness and a route from the actual dataset, rather than hardcoded
+demo airports/dates. `/health/ready` exposes schema identity and selected time basis;
+admin `stats` reports the file path and same schema. Historical ADSB records use
+observed time bounds and partial coverage; they cannot supply future schedules.

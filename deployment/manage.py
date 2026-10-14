@@ -245,7 +245,7 @@ def status(root: Path):
     print("Process state does not verify the public URL. Use check --public.")
 
 
-def probe(base_url: str) -> dict:
+def probe(base_url: str, *, data_mode="synthetic") -> dict:
     """Verify the served app and a real synthetic route, with normal TLS validation."""
 
     def origin(url):
@@ -286,6 +286,52 @@ def probe(base_url: str) -> dict:
         raise ValueError("The Flyji catalog is missing its dataset.")
     count = dataset.get("flight_count")
     departure = dataset.get("first_departure")
+    if data_mode == "real":
+        if (
+            ready.get("status") != "ready"
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            or "demo" in dataset.get("providers", [])
+        ):
+            raise ValueError("Real serving requires a ready database without demo records")
+        if count == 0:
+            return {"url": base_url, "flight_count": 0, "route_search": "empty dataset"}
+        if not any(dataset.get("time_bases", {}).values()):
+            return {
+                "url": base_url,
+                "flight_count": count,
+                "route_search": "no complete time evidence",
+            }
+        route = catalog.get("suggested_route")
+        if not isinstance(route, dict) or not isinstance(departure, str):
+            raise ValueError("Real dataset is missing searchable departure evidence")
+        first = datetime.fromisoformat(departure.replace("Z", "+00:00"))
+        start = first.replace(hour=0, minute=0, second=0, microsecond=0)
+        basis = dataset.get("default_time_basis", "scheduled")
+        result = json.loads(
+            fetch(
+                "/v1/itineraries/search",
+                {
+                    "origin": route.get("origin_iata"),
+                    "destination": route.get("destination_iata"),
+                    "departure_start": start.isoformat(),
+                    "departure_end": (start + timedelta(days=2)).isoformat(),
+                    "horizon_end": (start + timedelta(days=7)).isoformat(),
+                    "time_basis": basis,
+                },
+            )
+        )
+        if not isinstance(result, dict) or not result.get("items"):
+            raise ValueError("Real dataset route search returned no itinerary")
+        legs = result["items"][0].get("legs", [])
+        if (
+            not legs
+            or legs[0].get("origin_iata") != route.get("origin_iata")
+            or legs[-1].get("destination_iata") != route.get("destination_iata")
+        ):
+            raise ValueError("Real dataset route search returned the wrong route")
+        return {"url": base_url, "flight_count": count, "route_search": "passed"}
     if (
         ready.get("status") != "ready"
         or dataset.get("providers") != ["demo"]
@@ -334,9 +380,9 @@ def check(root: Path, *, public: bool = False):
     require_private(root / "settings.json")
     settings = read_settings(root)
     base = f"https://{settings['hostname']}" if public else f"http://127.0.0.1:{settings['port']}"
-    result = probe(base)
+    result = probe(base, data_mode=settings["data_mode"])
     print(
-        f"Verified {'live' if public else 'locally'}: {base}/ · synthetic data · {result['flight_count']} flights"
+        f"Verified {'live' if public else 'locally'}: {base}/ · {settings['data_mode']} data · {result['flight_count']} flights"
     )
 
 

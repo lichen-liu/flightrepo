@@ -178,6 +178,12 @@ def print_overview(summary):
     for label, key in (("Providers", "providers"), ("Statuses", "statuses")):
         counts = ", ".join(f"{name}: {count:,}" for name, count in summary[key].items())
         print(f"{label}: {counts or '—'}")
+    for label, key in (
+        ("Searchable time evidence", "time_bases"),
+        ("Ingestion attempts", "ingestion_batches"),
+    ):
+        counts = ", ".join(f"{name}: {count:,}" for name, count in summary.get(key, {}).items())
+        print(f"{label}: {counts or '—'}")
     print("Top routes by flight count (includes cancelled flights):")
     for route in summary["top_routes"]:
         print(f"  {route['origin_iata']} -> {route['destination_iata']}: {route['flights']:,}")
@@ -240,8 +246,8 @@ def parser():
     flights.add_argument(
         "--status", choices=list(FlightStatus), help="default: all statuses, including cancelled"
     )
-    flights.add_argument("--start", type=timestamp, help="inclusive scheduled departure cutoff")
-    flights.add_argument("--end", type=timestamp, help="exclusive scheduled departure cutoff")
+    flights.add_argument("--start", type=timestamp, help="inclusive departure cutoff")
+    flights.add_argument("--end", type=timestamp, help="exclusive departure cutoff")
     flights.add_argument("--limit", type=query_limit, default=20)
 
     flight = commands.add_parser(

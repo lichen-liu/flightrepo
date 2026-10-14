@@ -2,11 +2,12 @@
 
 import json
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from core.connections import Airport, AirportTransfer
 from core.itinerary_cache import ItineraryCache
 from core.models import FlightRecord
-from core.storage import SCHEMA, SQLiteConnection, utc_text
+from core.storage import SCHEMA, SQLiteConnection, source_id, store_flight, utc_us
 
 
 class FlightUpdater(SQLiteConnection):
@@ -42,6 +43,13 @@ class FlightUpdater(SQLiteConnection):
             mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
             if mode != "wal":
                 raise RuntimeError("SQLite WAL mode could not be enabled")
+            legacy = connection.execute(
+                "SELECT type FROM sqlite_master WHERE name='flights'"
+            ).fetchone()
+            if legacy and legacy[0] == "table":
+                raise ValueError(
+                    "Legacy database schema; initialize a new file for the shared flight-leg contract"
+                )
             connection.executescript(SCHEMA)
             connection.execute("BEGIN IMMEDIATE")
             old_policy = {
@@ -55,51 +63,29 @@ class FlightUpdater(SQLiteConnection):
                 connection.execute(
                     "UPDATE itinerary_cache_policy SET catalog_json=NULL, catalog_url=NULL WHERE id=1"
                 )
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(flights)")}
-            if "aircraft_type_code" not in columns:
-                connection.execute("ALTER TABLE flights ADD COLUMN aircraft_type_code TEXT")
 
-    def upsert(self, records: Iterable[FlightRecord]) -> int:
-        rows = []
-        for record in records:
-            record = FlightRecord.model_validate(record.model_dump())
-            data = record.model_dump(mode="json")
-            for field in (
-                "departure_scheduled",
-                "arrival_scheduled",
-                "departure_actual",
-                "arrival_actual",
-                "fetched_at",
-            ):
-                value = getattr(record, field)
-                data[field] = utc_text(value) if value else None
-            data["codeshares"] = json.dumps(record.codeshares)
-            data["aircraft_type_code"] = record.aircraft_type_code
-            rows.append(data)
-        if not rows:
+    def upsert(self, records: Iterable[FlightRecord], *, restore=True) -> int:
+        records = [FlightRecord.model_validate(record.model_dump()) for record in records]
+        if not records:
             return 0
-        columns = list(rows[0])
-        updates = ", ".join(
-            f"{name}=excluded.{name}" for name in columns if name not in ("provider", "provider_id")
-        )
-        sql = (
-            f"INSERT INTO flights ({', '.join(columns)}) VALUES ({', '.join(':' + name for name in columns)}) "
-            f"ON CONFLICT(provider, provider_id) DO UPDATE SET {updates}"
-        )
         with self.connect() as connection:
-            connection.executemany(sql, rows)
-            if self._cache_schema(connection):
+            applied = 0
+            for record in records:
+                applied += store_flight(connection, record, restore=restore) != "protected"
+            if restore and self._cache_schema(connection):
                 connection.executemany(
                     "DELETE FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",
-                    [(record["provider"], record["provider_id"]) for record in rows],
+                    [(record.provider, record.provider_id) for record in records],
                 )
-        return len(rows)
+        return applied
 
     def reset(self) -> None:
         self.initialize()
         # Transactional deletion keeps existing connections valid; never unlink a live DB.
         with self.connect() as connection:
-            connection.execute("DELETE FROM flights")
+            connection.execute("DELETE FROM flight_legs")
+            connection.execute("DELETE FROM flight_tombstones")
+            connection.execute("DELETE FROM ingestion_batches")
             connection.execute("DELETE FROM airport_transfers")
             connection.execute("DELETE FROM airports")
             connection.execute("DELETE FROM itinerary_cache_entries")
@@ -122,6 +108,7 @@ class FlightUpdater(SQLiteConnection):
             ):
                 if table in tables:
                     connection.execute(f'DELETE FROM "{table}"')
+            connection.execute("DELETE FROM data_sources")
 
     def create_airport(self, airport: Airport) -> None:
         """Insert one validated airport without replacing existing metadata."""
@@ -130,7 +117,11 @@ class FlightUpdater(SQLiteConnection):
             cursor = connection.execute(
                 """INSERT INTO airports (iata, name, city_id, timezone, latitude, longitude)
                 VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
-                ON CONFLICT(iata) DO NOTHING""",
+                ON CONFLICT(iata) DO UPDATE SET name=excluded.name,city_id=excluded.city_id,
+                timezone=excluded.timezone,latitude=excluded.latitude,longitude=excluded.longitude,
+                metadata_source_id=NULL
+                WHERE airports.name IS NULL OR airports.city_id IS NULL OR airports.timezone IS NULL
+                OR airports.latitude IS NULL OR airports.longitude IS NULL""",
                 airport.model_dump(),
             )
             if cursor.rowcount == 0:
@@ -146,14 +137,14 @@ class FlightUpdater(SQLiteConnection):
         transfers = [AirportTransfer.model_validate(t.model_dump()) for t in transfers]
         with self.connect() as connection:
             connection.executemany(
-                """INSERT INTO airports VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
+                """INSERT INTO airports (iata,name,city_id,timezone,latitude,longitude) VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
                 ON CONFLICT(iata) DO UPDATE SET name=excluded.name, city_id=excluded.city_id,
                 timezone=excluded.timezone, latitude=excluded.latitude, longitude=excluded.longitude""",
                 [a.model_dump() for a in airports],
             )
             invalid = connection.execute("""SELECT 1 FROM airport_transfers t
                 JOIN airports a ON a.iata=t.arrival_iata JOIN airports b ON b.iata=t.departure_iata
-                WHERE a.city_id != b.city_id LIMIT 1""").fetchone()
+                WHERE a.city_id IS NULL OR b.city_id IS NULL OR a.city_id != b.city_id LIMIT 1""").fetchone()
             if invalid:
                 raise ValueError("city update would invalidate an existing transfer")
             for transfer in transfers:
@@ -161,7 +152,11 @@ class FlightUpdater(SQLiteConnection):
                     "SELECT city_id FROM airports WHERE iata IN (?, ?)",
                     (transfer.arrival_iata, transfer.departure_iata),
                 ).fetchall()
-                if len(rows) != 2 or rows[0]["city_id"] != rows[1]["city_id"]:
+                if (
+                    len(rows) != 2
+                    or rows[0]["city_id"] is None
+                    or rows[0]["city_id"] != rows[1]["city_id"]
+                ):
                     raise ValueError("transfer airports must exist and share a city_id")
             connection.executemany(
                 """INSERT INTO airport_transfers VALUES
@@ -181,12 +176,23 @@ class FlightUpdater(SQLiteConnection):
             if expected is not None:
                 connection.execute("BEGIN IMMEDIATE")
                 self._require_unchanged(connection, expected, remote=remote, version=version)
+            sid = source_id(connection, provider)
             changed = connection.execute(
-                "DELETE FROM flights WHERE provider=? AND provider_id=?",
-                (provider, provider_id),
-            ).rowcount
+                "SELECT COUNT(*) FROM flight_legs WHERE source_id=? AND source_record_key=?",
+                (sid, provider_id),
+            ).fetchone()[0]
+            if changed or remote is not None:
+                connection.execute(
+                    "INSERT INTO flight_tombstones VALUES (?,?,?) ON CONFLICT(source_id,source_record_key) DO UPDATE SET deleted_us=excluded.deleted_us",
+                    (sid, provider_id, utc_us(datetime.now(UTC))),
+                )
+            connection.execute(
+                "DELETE FROM flight_legs WHERE source_id=? AND source_record_key=?",
+                (sid, provider_id),
+            )
             if self._cache_schema(connection) and (
-                remote is not None
+                changed
+                or remote is not None
                 or connection.execute(
                     "SELECT 1 FROM itinerary_cache_refs WHERE provider=? AND provider_id=?",
                     (provider, provider_id),
@@ -228,34 +234,11 @@ class FlightUpdater(SQLiteConnection):
             replacement.provider_id,
         ):
             raise ValueError("provider and provider_id cannot change during an update")
-        data = replacement.model_dump(mode="json")
-        for field in (
-            "departure_scheduled",
-            "arrival_scheduled",
-            "departure_actual",
-            "arrival_actual",
-            "fetched_at",
-        ):
-            value = getattr(replacement, field)
-            data[field] = utc_text(value) if value else None
-        data["codeshares"] = json.dumps(data["codeshares"])
-        data["aircraft_type_code"] = replacement.aircraft_type_code
         remote, version = self._remote_original(original.provider, original.provider_id)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._require_unchanged(connection, original, remote=remote, version=version)
-            assignments = ", ".join(
-                f"{field}=:{field}" for field in data if field not in ("provider", "provider_id")
-            )
-            count = connection.execute(
-                f"UPDATE flights SET {assignments} WHERE provider=:provider AND provider_id=:provider_id",
-                data,
-            ).rowcount
-            if not count:
-                connection.execute(
-                    f"INSERT INTO flights ({','.join(data)}) VALUES ({','.join(':' + name for name in data)})",
-                    data,
-                )
+            store_flight(connection, replacement, local_edit=True)
             if self._cache_schema(connection):
                 connection.execute(
                     "DELETE FROM itinerary_cache_deleted WHERE provider=? AND provider_id=?",

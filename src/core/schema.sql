@@ -1,18 +1,16 @@
--- PROPOSAL ONLY. Apply to an empty disposable SQLite database, not the hosted DB.
--- Runtime migration, writer, readers, API and frontend must change together.
+-- Shared flight-leg contract. Initialized only by an explicit writer.
 -- All *_us values are signed INTEGER Unix microseconds in UTC.
 PRAGMA foreign_keys = ON;
 
-BEGIN;
 
-CREATE TABLE schema_metadata (
+CREATE TABLE IF NOT EXISTS schema_metadata (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     contract TEXT NOT NULL,
     version INTEGER NOT NULL CHECK(version > 0)
 ) STRICT;
-INSERT INTO schema_metadata VALUES (1, 'flight-legs', 1);
+INSERT OR IGNORE INTO schema_metadata VALUES (1, 'flight-legs', 1);
 
-CREATE TABLE data_sources (
+CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE CHECK(length(trim(code)) > 0),
     name TEXT NOT NULL CHECK(length(trim(name)) > 0),
@@ -23,7 +21,7 @@ CREATE TABLE data_sources (
 ) STRICT;
 
 -- A stub airport with just its code is valid. Missing metadata stays NULL.
-CREATE TABLE airports (
+CREATE TABLE IF NOT EXISTS airports (
     iata TEXT PRIMARY KEY CHECK(iata GLOB '[A-Z][A-Z][A-Z]'),
     name TEXT,
     city_id TEXT,
@@ -34,9 +32,9 @@ CREATE TABLE airports (
     metadata_updated_us INTEGER,
     CHECK((latitude IS NULL) = (longitude IS NULL))
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX airports_city ON airports(city_id, iata) WHERE city_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS airports_city ON airports(city_id, iata) WHERE city_id IS NOT NULL;
 
-CREATE TABLE airport_transfers (
+CREATE TABLE IF NOT EXISTS airport_transfers (
     arrival_iata TEXT NOT NULL REFERENCES airports(iata),
     departure_iata TEXT NOT NULL REFERENCES airports(iata),
     minimum_minutes INTEGER NOT NULL CHECK(minimum_minutes BETWEEN 1 AND 1440),
@@ -47,7 +45,7 @@ CREATE TABLE airport_transfers (
 
 -- One attempt per requested input day, or per bounded non-archive import.
 -- Failed attempts are observable but never count as completed source coverage.
-CREATE TABLE ingestion_batches (
+CREATE TABLE IF NOT EXISTS ingestion_batches (
     id INTEGER PRIMARY KEY,
     source_id INTEGER NOT NULL REFERENCES data_sources(id),
     input_start_us INTEGER NOT NULL,
@@ -73,13 +71,13 @@ CREATE TABLE ingestion_batches (
           (state <> 'running' AND finished_us IS NOT NULL)),
     CHECK(state = 'committed' OR (inserted_count = 0 AND updated_count = 0))
 ) STRICT;
-CREATE INDEX ingestion_batches_coverage
+CREATE INDEX IF NOT EXISTS ingestion_batches_coverage
 ON ingestion_batches(source_id, input_start_us, input_end_us)
 WHERE state = 'committed';
 
 -- One source assertion about one origin-to-destination movement, not a journey,
 -- an aircraft-day, or a globally deduplicated physical flight.
-CREATE TABLE flight_legs (
+CREATE TABLE IF NOT EXISTS flight_legs (
     id INTEGER PRIMARY KEY,
     source_id INTEGER NOT NULL REFERENCES data_sources(id),
     source_record_key TEXT NOT NULL CHECK(length(trim(source_record_key)) > 0),
@@ -143,14 +141,15 @@ CREATE TABLE flight_legs (
           departure_observed_lower_us IS NOT NULL)
 ) STRICT;
 
-CREATE TABLE flight_codeshares (
+CREATE TABLE IF NOT EXISTS flight_codeshares (
     leg_id INTEGER NOT NULL REFERENCES flight_legs(id) ON DELETE CASCADE,
     flight_number TEXT NOT NULL CHECK(length(trim(flight_number)) > 0),
+    ordinal INTEGER NOT NULL DEFAULT 0 CHECK(ordinal >= 0),
     PRIMARY KEY(leg_id, flight_number)
 ) STRICT, WITHOUT ROWID;
 
 -- Preserve deletion intent when an upstream chunk/day is fetched again.
-CREATE TABLE flight_tombstones (
+CREATE TABLE IF NOT EXISTS flight_tombstones (
     source_id INTEGER NOT NULL REFERENCES data_sources(id),
     source_record_key TEXT NOT NULL CHECK(length(trim(source_record_key)) > 0),
     deleted_us INTEGER NOT NULL,
@@ -159,33 +158,33 @@ CREATE TABLE flight_tombstones (
 
 -- Two partial indexes per time basis: onward routing and global date windows.
 -- Empty bases have no index entries. Do not index every possible filter.
-CREATE INDEX flight_legs_scheduled_origin
+CREATE INDEX IF NOT EXISTS flight_legs_scheduled_origin
 ON flight_legs(origin_iata, departure_scheduled_us)
 WHERE status <> 'cancelled' AND departure_scheduled_us IS NOT NULL
     AND arrival_scheduled_us IS NOT NULL;
-CREATE INDEX flight_legs_scheduled_departure
+CREATE INDEX IF NOT EXISTS flight_legs_scheduled_departure
 ON flight_legs(departure_scheduled_us)
 WHERE status <> 'cancelled' AND departure_scheduled_us IS NOT NULL
     AND arrival_scheduled_us IS NOT NULL;
-CREATE INDEX flight_legs_actual_origin
+CREATE INDEX IF NOT EXISTS flight_legs_actual_origin
 ON flight_legs(origin_iata, departure_actual_us)
 WHERE status <> 'cancelled' AND departure_actual_us IS NOT NULL
     AND arrival_actual_us IS NOT NULL;
-CREATE INDEX flight_legs_actual_departure
+CREATE INDEX IF NOT EXISTS flight_legs_actual_departure
 ON flight_legs(departure_actual_us)
 WHERE status <> 'cancelled' AND departure_actual_us IS NOT NULL
     AND arrival_actual_us IS NOT NULL;
-CREATE INDEX flight_legs_observed_origin
+CREATE INDEX IF NOT EXISTS flight_legs_observed_origin
 ON flight_legs(origin_iata, departure_observed_lower_us)
 WHERE status <> 'cancelled' AND departure_observed_lower_us IS NOT NULL;
-CREATE INDEX flight_legs_observed_departure
+CREATE INDEX IF NOT EXISTS flight_legs_observed_departure
 ON flight_legs(departure_observed_lower_us)
 WHERE status <> 'cancelled' AND departure_observed_lower_us IS NOT NULL;
 
 -- A common interval contract. Consumers select exactly one time_basis per query;
 -- a leg with several kinds of evidence must not become several returned flights.
 -- Cancelled/deleted flights remain auditable but cannot power routing/calendar.
-CREATE VIEW searchable_legs AS
+CREATE VIEW IF NOT EXISTS searchable_legs AS
 SELECT f.id AS leg_id, f.source_id, f.source_record_key,
        f.origin_iata, f.destination_iata, f.aircraft_type_code,
        'scheduled' AS time_basis,
@@ -221,5 +220,3 @@ FROM flight_legs f
 WHERE f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key);
-
-COMMIT;

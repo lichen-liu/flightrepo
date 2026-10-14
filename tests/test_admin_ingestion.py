@@ -182,7 +182,7 @@ def test_hosted_destination_holds_observed_facts_and_reset_clears_resume_state(p
     assert not (root / "itineraries.db").exists()
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM flights").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM flights").fetchone()[0] == 1
     capsys.readouterr()
     client.LocalShell(database).onecmd("ingest status")
     status = json.loads(capsys.readouterr().out)

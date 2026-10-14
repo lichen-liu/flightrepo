@@ -20,7 +20,7 @@ class IngestionService:
         for airport in airports:
             for record in await self.provider.flights_for_airport(airport, start, end):
                 unique[(record.provider, record.provider_id)] = record
-        count = self.store.upsert(unique.values())
+        count = self.store.upsert(unique.values(), restore=False)
         return IngestResult(
             provider=self.provider.name,
             fetched=len(unique),

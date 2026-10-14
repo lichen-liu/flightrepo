@@ -71,7 +71,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             emit(
                 {
                     "source": source,
-                    **extraction_status(root, args.output_db or data.get("output_db")),
+                    **extraction_status(root, args.output_db or data.get("output_db") or path),
                 }
             )
         else:
@@ -130,7 +130,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             "output_db",
             args.output_db,
             "Itinerary output SQLite file",
-            Path(data["data_root"]) / "itineraries.db",
+            path,
         )
         field(
             "boundary_manifest",
@@ -218,7 +218,8 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 "records_inserted": inserted,
                 "days_skipped": skipped,
                 **extraction_status(data["data_root"], data["output_db"]),
-                "serving": "observed candidates; scheduled serving database is separate",
+                "serving": "observed candidates in the shared serving database",
+                "selected_database": str(path.resolve()),
             }
         )
     else:

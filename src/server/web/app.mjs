@@ -1,5 +1,6 @@
 import {
   escapeHTML as e,
+  departureTime, arrivalTime, flightLabel, flightTimeLabel,
   ref,
   duration,
   stamp,
@@ -163,6 +164,7 @@ function values() {
       "maximum",
       "avoid",
       "input-clock",
+      "time-basis",
     ]
       .map((name) => [
         name,
@@ -213,7 +215,7 @@ function updateLastDates() {
 }
 async function loadDates() {
   const origin = airportCode(field("origin").value), clock = field("input-clock").value,
-    key = `${origin}/${clock}`;
+    key = `${origin}/${clock}/${field("time-basis").value}`;
   if (key === datesKey) return;
   datesKey = key;
   datesLane.cancel();
@@ -228,7 +230,7 @@ async function loadDates() {
     return;
   }
   $("date-availability").textContent = "Loading departure dates…";
-  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}`, undefined, (result) => {
+  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${field("time-basis").value}`, undefined, (result) => {
     availableDates = new Set(result.dates);
     firstCalendar.setDates(result.dates);
     updateLastDates();
@@ -258,6 +260,7 @@ function commonQuery() {
       .filter(Boolean)
       .map((v) => v.toUpperCase()),
     trace: true,
+    time_basis: field("time-basis").value,
   };
 }
 function searchRequest() {
@@ -265,7 +268,7 @@ function searchRequest() {
     first = field("date").value,
     last = field("last-date").value || first;
   if (!first) throw Error("Choose a departure date.");
-  if (datesKey !== `${query.origin}/${field("input-clock").value}` ||
+  if (datesKey !== `${query.origin}/${field("input-clock").value}/${field("time-basis").value}` ||
       !availableDates.has(first) || !availableDates.has(last))
     throw Error("Choose departure dates with data for this origin and clock.");
   if (last < first)
@@ -413,15 +416,15 @@ function renderJourney({ preserveView = false } = {}) {
   $("export").disabled = !legs.length;
   $("journey-status").textContent = !legs.length
     ? "Select a flight option to inspect its legs."
-    : `${selected.edited ? "Edited journey · " : ""}${selected.complete ? "Arrives at " + legs.at(-1).destination_iata : "No complete onward route found"} · ${duration((Date.parse(legs.at(-1).arrival_scheduled) - Date.parse(legs[0].departure_scheduled)) / 60000)}${selected.diagnostics?.exhaustive === false ? " · search partial" : ""}`;
+    : `${selected.edited ? "Edited journey · " : ""}${selected.complete ? "Arrives at " + legs.at(-1).destination_iata : "No complete onward route found"} · ${duration((Date.parse(arrivalTime(legs.at(-1))) - Date.parse(departureTime(legs[0]))) / 60000)}${selected.diagnostics?.exhaustive === false ? " · search partial" : ""}`;
   $("legs").innerHTML = legs
     .map((f, i) => {
       const conn = selected.connections[i],
         gap = conn
           ? `<div class="gap ${conn.airport_change ? "airport-change" : ""}"><span>${conn.airport_change ? `${e(conn.arrival_iata)} → ${e(conn.departure_iata)} · airport change` : e(conn.arrival_iata) + " connection"} · ${duration(conn.wait_minutes)}<br><span class="small">Minimum ${conn.minimum_minutes}m · ${e(conn.source)}</span></span><button type="button" data-edit="${i}">Change connection</button></div>`
           : "";
-      return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(f.flight_number)} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
-      <div class="leg-time"><div><strong>${e(stamp(f.departure_scheduled, zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(stamp(f.arrival_scheduled, zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
+      return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
+      <div class="leg-time"><div><strong>${e(flightTimeLabel(f, "departure", zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(flightTimeLabel(f, "arrival", zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
       ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
       <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
@@ -438,7 +441,7 @@ function renderJourney({ preserveView = false } = {}) {
     );
   $("time-cursor").disabled = !legs.length;
   if (!preserveView) $("time-cursor").value = 0;
-  state.cursor = legs.length ? Date.parse(legs[0].departure_scheduled) : null;
+  state.cursor = legs.length ? Date.parse(departureTime(legs[0])) : null;
   if (!preserveView) {
     map.setAirports(selected?.airports || [...state.airports.values()]);
     map.setJourney(legs);
@@ -453,23 +456,23 @@ function updateCursor() {
     $("timeline").replaceChildren();
     return;
   }
-  const start = Date.parse(legs[0].departure_scheduled),
-    end = Date.parse(legs.at(-1).arrival_scheduled);
+  const start = Date.parse(departureTime(legs[0])),
+    end = Date.parse(arrivalTime(legs.at(-1)));
   state.cursor =
     start + ((end - start) * Number($("time-cursor").value)) / 1000;
   let detail = "Arrived at " + legs.at(-1).destination_iata;
   for (let i = 0; i < legs.length; i++) {
     const f = legs[i],
       previous = legs[i - 1];
-    if (state.cursor < Date.parse(f.departure_scheduled)) {
+    if (state.cursor < Date.parse(departureTime(f))) {
       detail =
         previous && previous.destination_iata !== f.origin_iata
-          ? `Airport change ${previous.destination_iata} → ${f.origin_iata} · next flight ${f.flight_number}`
-          : `Waiting at ${f.origin_iata} · next flight ${f.flight_number}`;
+          ? `Airport change ${previous.destination_iata} → ${f.origin_iata} · next flight ${flightLabel(f)}`
+          : `Waiting at ${f.origin_iata} · next flight ${flightLabel(f)}`;
       break;
     }
-    if (state.cursor <= Date.parse(f.arrival_scheduled)) {
-      detail = `${f.flight_number} · ${f.origin_iata} → ${f.destination_iata}`;
+    if (state.cursor <= Date.parse(arrivalTime(f))) {
+      detail = `${flightLabel(f)} · ${f.origin_iata} → ${f.destination_iata}`;
       break;
     }
   }
@@ -524,8 +527,15 @@ function renderEvidence() {
         `${d.events.length} retained · ${d.stats.trace_events_omitted} omitted`,
       ],
     );
+  for (const source of data.sources || [])
+    if (source.attribution) entries.push(["Attribution", source.attribution]);
+  const sourceLinks = (data.sources || []).map((source) => {
+    const link = (url, text) => /^https?:\/\//i.test(url || "")
+      ? `<a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(text)}</a>` : e(text);
+    return `<p>${link(source.source_url, source.name || source.code)} · ${link(source.license_url, source.license_expression || "Licence unknown")}</p>`;
+  }).join("");
   $("evidence-content").innerHTML =
-    `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>${d?.events.length ? `<details><summary>Decision trace</summary><pre>${e(JSON.stringify(d.events, null, 2))}</pre></details>` : ""}`;
+    `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>${sourceLinks}${d?.events.length ? `<details><summary>Decision trace</summary><pre>${e(JSON.stringify(d.events, null, 2))}</pre></details>` : ""}`;
 }
 function closeEditor() {
   editLane.cancel();
@@ -550,13 +560,13 @@ function openEditor(index) {
   updateAirportNames();
   const f = state.selection.legs[index];
   editField("after").value = localInput(
-    f.arrival_scheduled,
+    arrivalTime(f),
     inputZone(f.destination_iata),
   );
   editField("fold").value = "";
   editField("after").required = false;
   $("editor-title").textContent =
-    `After ${f.flight_number} at ${f.destination_iata}`;
+    `After ${flightLabel(f)} at ${f.destination_iata}`;
   updateEditorZone();
   $("connection-editor").hidden = false;
   $("after-field").hidden = true;
@@ -584,6 +594,7 @@ function editorRequest(notBefore = null) {
     next_airport: airportCode(editField("next-airport").value) || null,
     avoid_airports: state.result.query.avoid_airports,
     trace: true,
+    time_basis: state.result.query.time_basis || state.selection.legs[0]?.time_basis || "scheduled",
   };
 }
 async function findNext() {
@@ -619,7 +630,7 @@ async function findNext() {
           .map((option, i) => {
             const f = option.flight,
               c = option.connection;
-            return `<div class="next-option"><div><strong>${e(f.flight_number)} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</strong><span>${e(stamp(f.departure_scheduled, inputZone(f.origin_iata, plan)))}</span><span>${duration(c.wait_minutes)} wait${c.airport_change ? " · airport change · minimum " + c.minimum_minutes + "m" : ""}</span><span>${option.complete ? "Arrives " + e(stamp((option.tail.at(-1) || f).arrival_scheduled, inputZone(state.result.query.destination, plan))) : "No complete onward route found"}</span></div><button type="button" data-next="${i}">Apply flight</button></div>`;
+            return `<div class="next-option"><div><strong>${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</strong><span>${e(stamp(departureTime(f), inputZone(f.origin_iata, plan)))}</span><span>${duration(c.wait_minutes)} wait${c.airport_change ? " · airport change · minimum " + c.minimum_minutes + "m" : ""}</span><span>${option.complete ? "Arrives " + e(stamp(arrivalTime(option.tail.at(-1) || f), inputZone(state.result.query.destination, plan))) : "No complete onward route found"}</span></div><button type="button" data-next="${i}">Apply flight</button></div>`;
           })
           .join("")
       : `<p class="empty">${
@@ -916,7 +927,7 @@ $("export").addEventListener("click", () => {
     query_inputs: state.queryValues,
     selection: state.selection,
     coverage: "unknown",
-    time_basis: "scheduled",
+    time_basis: state.result.query.time_basis || state.selection.legs[0]?.time_basis || "scheduled",
   };
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(payload, null, 2) + "\n"], {
@@ -951,6 +962,15 @@ async function loadCatalog() {
       field("destination").value = codes.includes("CDG")
         ? "CDG"
         : codes.find((c) => c !== field("origin").value) || "";
+      field("time-basis").value = catalog.dataset.default_time_basis || "scheduled";
+      for (const option of field("time-basis").options)
+        option.disabled = !!catalog.dataset.time_bases && !catalog.dataset.time_bases[option.value];
+      if (field("time-basis").value !== "scheduled" && catalog.suggested_route) {
+        field("origin").value = catalog.suggested_route.origin_iata;
+        field("destination").value = catalog.suggested_route.destination_iata;
+      }
+      if (!state.airports.get(field("origin").value)?.timezone)
+        field("input-clock").value = "UTC";
       const first = catalog.dataset.first_departure || new Date().toISOString();
       field("date").value = localDate(first, inputZone(field("origin").value));
       const fromURL = Object.fromEntries(new URLSearchParams(location.search));
@@ -963,9 +983,9 @@ async function loadCatalog() {
       $("dataset-tag").textContent =
         catalog.dataset.catalogue_flight_count
           ? `Catalogue schedules · ${catalog.dataset.catalogue_flight_count} records · ${catalog.dataset.flight_count} local`
-          : `${demo ? "Demo schedules" : "Imported schedules"} · ${catalog.dataset.flight_count} records`;
+          : `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} records`;
       $("status").textContent = hasFlights
-        ? "Dates are based on the imported schedules."
+        ? catalog.dataset.default_time_basis === "observed" ? "Historical observations with inferred time bounds; coverage is partial." : "Dates are based on the imported flight records."
         : "No flight records loaded. Import data with the internal client to begin.";
       if (catalog.airports_truncated)
         $("status").textContent +=
@@ -999,3 +1019,5 @@ map
     ),
   );
 loadCatalog();
+
+field("time-basis").addEventListener("change", () => { datesKey = null; loadDates(); });
