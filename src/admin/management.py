@@ -2,6 +2,7 @@
 
 import sqlite3
 
+from core.connections import Airport
 from core.models import FlightRecord
 from core.routing.models import RouteSearchRequest
 from core.storage import SQLiteConnection
@@ -26,6 +27,42 @@ def yes_no(label, default="n"):
         if value in ("y", "yes", "n", "no"):
             return value in ("y", "yes")
         print("Enter y or n.")
+
+
+def create_airport(path, output):
+    print(f"Database: {path.resolve()}")
+    print("Type cancel at any prompt to discard the airport.")
+    fields = {
+        "iata": "IATA code (3 letters)",
+        "name": "Airport name",
+        "city_id": "City ID (reuse the existing ID for airports in the same city)",
+        "timezone": "IANA timezone (e.g. America/Toronto)",
+        "latitude": "Latitude (-90 to 90)",
+        "longitude": "Longitude (-180 to 180)",
+    }
+    data = {}
+    try:
+        while True:
+            data = {field: ask(label, data.get(field)) for field, label in fields.items()}
+            data["iata"] = data["iata"].upper()
+            try:
+                airport = Airport.model_validate(data)
+            except ValueError as error:
+                print(f"Invalid airport: {error}\nRe-enter the fields; Enter keeps a value.")
+                continue
+            break
+        print("Airport preview:")
+        output(airport)
+        if not yes_no(f"Save {airport.iata} to {path.resolve()}?"):
+            print("Airport discarded; no changes saved.")
+            return
+    except (EOFError, KeyboardInterrupt):
+        print("\nAirport creation cancelled; no changes saved.")
+        return
+    updater = FlightUpdater(path)
+    updater.initialize()
+    updater.create_airport(airport)
+    output({"created": airport.iata, "database": path})
 
 
 def edit_flight(path, provider, provider_id, output):

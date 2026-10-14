@@ -55,6 +55,21 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM airport_transfers")
             connection.execute("DELETE FROM airports")
 
+    def create_airport(self, airport: Airport) -> None:
+        """Insert one validated airport without replacing existing metadata."""
+        airport = Airport.model_validate(airport.model_dump())
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """INSERT INTO airports (iata, name, city_id, timezone, latitude, longitude)
+                VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
+                ON CONFLICT(iata) DO NOTHING""",
+                airport.model_dump(),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Airport {airport.iata} already exists; use airports import to update it"
+                )
+
     def update_airports(
         self, airports: Iterable[Airport], transfers: Iterable[AirportTransfer]
     ) -> None:
