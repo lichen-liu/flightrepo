@@ -5,8 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ENGINE_VERSION = "routing-4"
+ENGINE_VERSION = "routing-5"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
+ViaAirports = str | list[str] | None
 
 
 def airport_code(value: str) -> str:
@@ -28,6 +29,34 @@ def airport_codes(values) -> list[str]:
 
 def optional_airport_code(value: str | None) -> str | None:
     return airport_code(value) if value is not None else None
+
+
+def via_airports(value) -> ViaAirports:
+    if value is None or isinstance(value, str):
+        return optional_airport_code(value)
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("via_airport must be an IATA code or an ordered list of codes")
+    if len(value) > 6:
+        raise ValueError("at most six via airports are supported")
+    codes = [airport_code(code) for code in value]
+    if len(set(codes)) != len(codes):
+        raise ValueError("via airports must not repeat")
+    return codes
+
+
+def required_via_airports(value: ViaAirports) -> tuple[str, ...]:
+    return (value,) if isinstance(value, str) else tuple(value or ())
+
+
+def validate_via_constraints(value, endpoints, avoided, max_legs, allow_airport_change):
+    codes = required_via_airports(value)
+    if any(code in endpoints for code in codes):
+        raise ValueError("via airports must be intermediate airports")
+    if any(code in avoided for code in codes):
+        raise ValueError("cannot avoid a required via airport")
+    capacity = (max_legs - 1) * (2 if allow_airport_change else 1)
+    if len(codes) > capacity:
+        raise ValueError("increase max_legs or allow airport changes to visit all via airports")
 
 
 def utc_instant(value: datetime) -> datetime:
@@ -57,9 +86,9 @@ class RouteSearchRequest(BaseModel):
     minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
     maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44_640)
     allow_airport_change: bool = False
-    via_airport: str | None = Field(
+    via_airport: ViaAirports = Field(
         default=None,
-        description="Required intermediate IATA airport, as an arrival or permitted transfer departure.",
+        description="Required intermediate IATA code or ordered list. Each can be an arrival or permitted transfer departure.",
     )
     avoid_airports: list[str] = Field(default_factory=list, max_length=50)
     ranking: Ranking = "fewest_legs"
@@ -71,7 +100,7 @@ class RouteSearchRequest(BaseModel):
     _times = field_validator("departure_start", "departure_end", "horizon_end")(utc_instant)
 
     _avoided_codes = field_validator("avoid_airports", mode="before")(airport_codes)
-    _via_code = field_validator("via_airport", mode="before")(optional_airport_code)
+    _via_codes = field_validator("via_airport", mode="before")(via_airports)
 
     @model_validator(mode="after")
     def sensible_query(self):
@@ -90,13 +119,13 @@ class RouteSearchRequest(BaseModel):
             raise ValueError("maximum connection must be at least the minimum")
         if self.origin in self.avoid_airports or self.destination in self.avoid_airports:
             raise ValueError("cannot avoid the origin or destination")
-        if self.via_airport is not None:
-            if self.via_airport in (self.origin, self.destination):
-                raise ValueError("via_airport must be an intermediate airport")
-            if self.via_airport in self.avoid_airports:
-                raise ValueError("cannot avoid the required via_airport")
-            if self.max_legs < 2:
-                raise ValueError("via_airport requires at least two flight legs")
+        validate_via_constraints(
+            self.via_airport,
+            (self.origin, self.destination),
+            self.avoid_airports,
+            self.max_legs,
+            self.allow_airport_change,
+        )
         return self
 
 

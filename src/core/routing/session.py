@@ -9,6 +9,7 @@ from core.routing.models import (
     SearchDiagnostics,
     SearchStats,
     TraceEvent,
+    required_via_airports,
 )
 from core.routing.policy import ConnectionPolicy
 from core.routing.snapshot import RoutingSnapshot, digest, flight_key
@@ -47,6 +48,7 @@ class RoutingSession:
             rows_loaded=len(self.records), origins_queried=snapshot.origins_queried
         )
         self.events, self.search_truncated = [], False
+        self.required_via = required_via_airports(request.via_airport)
 
     def take(self):
         if self.stats.candidates_checked >= self.request.limits.max_candidates:
@@ -84,9 +86,26 @@ class RoutingSession:
     def reachable(self, airport, remaining):
         return self.distance.get(airport, remaining + 1) <= remaining
 
-    def via_satisfied(self, visited):
-        # Visited includes arrival airports and departure airports after a transfer.
-        return self.request.via_airport is None or self.request.via_airport in visited
+    def advance_via(self, progress, flight):
+        if progress is None:
+            return None
+        # At a transfer, the previous arrival precedes this departure airport.
+        for code in (flight.origin_iata, flight.destination_iata):
+            if progress < len(self.required_via):
+                if code == self.required_via[progress]:
+                    progress += 1
+                elif code in self.required_via[progress + 1 :]:
+                    return None
+        return progress
+
+    def via_progress(self, legs):
+        progress = 0
+        for flight in legs:
+            progress = self.advance_via(progress, flight)
+        return progress
+
+    def via_satisfied(self, progress):
+        return progress == len(self.required_via)
 
     def diagnostics(self, *, result_limit_reached=False):
         reasons = []

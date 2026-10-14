@@ -66,6 +66,24 @@ def airport(code, city):
     return Airport(iata=code, name=code, city_id=city, timezone="UTC", latitude=0, longitude=0)
 
 
+def oracle_visits(legs):
+    # Connections happen in this order: arrival, then departure after any transfer.
+    # Origin/final destination are not intermediate visits. A same-airport
+    # connection is one visit, independent of how production tracks progress.
+    visits = []
+    for previous, following in zip(legs, legs[1:]):
+        visits.append(previous.destination_iata)
+        if following.origin_iata != previous.destination_iata:
+            visits.append(following.origin_iata)
+    return visits
+
+
+def oracle_via_satisfied(legs, via):
+    required = [] if via is None else [via] if isinstance(via, str) else via
+    visits = iter(oracle_visits(legs))
+    return all(any(visit == code for visit in visits) for code in required)
+
+
 def oracle_paths(records, request, airports=(), transfers=(), prefix=(), active_window=None):
     # Slow all-record traversal: no production policy, index, session or ranking.
     cities = {a.iata: a.city_id for a in airports}
@@ -80,10 +98,7 @@ def oracle_paths(records, request, airports=(), transfers=(), prefix=(), active_
 
     def walk(legs, visited):
         if legs and legs[-1].destination_iata == request.destination:
-            intermediate_airports = {f.destination_iata for f in legs[:-1]} | {
-                f.origin_iata for f in legs[1:]
-            }
-            if request.via_airport is None or request.via_airport in intermediate_airports:
+            if oracle_via_satisfied(legs, request.via_airport):
                 found.append(legs)
             return
         if len(legs) >= request.max_legs:
@@ -179,7 +194,20 @@ def oracle_score(legs, ranking):
 
 
 @pytest.mark.parametrize("seed", range(30))
-@pytest.mark.parametrize("via", [None, "BBB", "CCC", "ZZZ"])
+@pytest.mark.parametrize(
+    "via",
+    [
+        None,
+        "BBB",
+        "CCC",
+        "ZZZ",
+        [],
+        ["BBB", "CCC"],
+        ["CCC", "BBB"],
+        ["BBB", "CCC", "DDD"],
+        ["BBB", "ZZZ"],
+    ],
+)
 def test_search_matches_oracle_and_input_permutations(seed, via, tmp_path):
     rng = random.Random(seed)
     codes = ["AAA", "BBB", "CCC", "DDD", "EEE"]
@@ -187,7 +215,13 @@ def test_search_matches_oracle_and_input_permutations(seed, via, tmp_path):
     transfers = [
         AirportTransfer(arrival_iata="BBB", departure_iata="CCC", minimum_minutes=30, source="test")
     ]
-    records = []
+    # Guarantee an ordered three-stop route as well as random alternatives.
+    records = [
+        flight("chain-1", "AAA", "BBB", 40, 50),
+        flight("chain-2", "BBB", "CCC", 80, 90),
+        flight("chain-3", "CCC", "DDD", 120, 130),
+        flight("chain-4", "DDD", "EEE", 160, 180),
+    ]
     for i in range(45):
         a, b = rng.sample(codes, 2)
         out = rng.randrange(0, 600)
@@ -216,7 +250,7 @@ def test_search_matches_oracle_and_input_permutations(seed, via, tmp_path):
             maximum_connection_minutes=None if seed % 2 else 120,
             allow_airport_change=bool(seed % 2),
             via_airport=via,
-            avoid_airports=["DDD"] if seed % 4 == 0 else [],
+            avoid_airports=["DDD"] if seed % 4 == 0 and "DDD" not in (via or []) else [],
             trace=True,
             limits={"max_trace_events": 15},
         )
@@ -244,7 +278,22 @@ def test_search_matches_oracle_and_input_permutations(seed, via, tmp_path):
 
 
 @pytest.mark.parametrize("seed", range(20))
-@pytest.mark.parametrize("via", [None, "BBB", "CCC", "DDD", "ZZZ"])
+@pytest.mark.parametrize(
+    "via",
+    [
+        None,
+        "BBB",
+        "CCC",
+        "DDD",
+        "ZZZ",
+        [],
+        ["BBB", "CCC"],
+        ["CCC", "BBB"],
+        ["BBB", "CCC", "DDD"],
+        ["CCC", "DDD"],
+        ["BBB", "ZZZ"],
+    ],
+)
 def test_continuations_match_oracle(seed, via, tmp_path):
     rng = random.Random(seed)
     prefix = flight("prefix", "AAA", "BBB", 0, 30)
@@ -253,7 +302,12 @@ def test_continuations_match_oracle(seed, via, tmp_path):
     rules = [
         AirportTransfer(arrival_iata="BBB", departure_iata="CCC", minimum_minutes=30, source="test")
     ]
-    records = [prefix]
+    records = [
+        prefix,
+        flight("chain-2", "BBB", "CCC", 80, 90),
+        flight("chain-3", "CCC", "DDD", 120, 130),
+        flight("chain-4", "DDD", "EEE", 160, 180),
+    ]
     for i in range(70):
         a, b = rng.sample(codes, 2)
         out = rng.randrange(30, 700)
@@ -698,7 +752,7 @@ def test_invalid_query_rejected(updates):
         {"via_airport": "BBB", "max_legs": 1},
         {"via_airport": ""},
         {"via_airport": "LON1"},
-        {"via_airport": ["BBB", "CCC"]},
+        {"via_airport": ["BBB", "bbb"]},
         {"via_airport": 123},
     ],
 )
@@ -789,7 +843,7 @@ def test_rebuild_via_can_be_satisfied_by_arrival_or_transfer_departure(via):
         {"via_airport": "EEE"},
         {"via_airport": "BBB", "avoid_airports": ["BBB"]},
         {"via_airport": "BBB", "max_legs": 1},
-        {"via_airport": ["BBB", "CCC"]},
+        {"via_airport": ["BBB", "bbb"]},
         {"via_airport": ""},
         {"next_airport": ["CCC", "DDD"]},
         {"next_airport": 123},
@@ -1069,3 +1123,450 @@ def test_malformed_replay_has_a_stable_error(data, code):
     with pytest.raises(RoutingError) as caught:
         replay(data)
     assert caught.value.code == code
+
+
+def test_ordered_oracle_matches_subsequence_not_membership():
+    legs = [
+        flight("one", "AAA", "BBB", 0, 30),
+        flight("two", "CCC", "DDD", 60, 90),
+        flight("three", "DDD", "EEE", 105, 120),
+    ]
+    assert oracle_visits(legs) == ["BBB", "CCC", "DDD"]
+    assert oracle_via_satisfied(legs, ["BBB", "DDD"])
+    assert not oracle_via_satisfied(legs, ["DDD", "BBB"])
+    assert not oracle_via_satisfied(legs, ["BBB", "BBB"])
+    assert not oracle_via_satisfied(legs, ["AAA"])
+    assert not oracle_via_satisfied(legs, ["EEE"])
+
+
+@pytest.mark.parametrize("via", [None, [], " bbb ", [" bbb "], [" bbb ", "ccc"]])
+def test_via_shapes_normalize_without_changing_scalar_response(via):
+    normalized = (
+        None
+        if via is None
+        else "BBB"
+        if isinstance(via, str)
+        else [code.strip().upper() for code in via]
+    )
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("middle", "BBB", "CCC", 45, 60),
+        flight("last", "CCC", "EEE", 75, 90),
+    )
+    snapshot = RoutingSnapshot(records)
+    searched = search_routes(query(via_airport=via), snapshot)
+    assert searched.query.via_airport == normalized
+    assert searched.query.model_dump(mode="json")["via_airport"] == normalized
+    assert searched.items[0].legs == list(records)
+    request = continuation_request(via_airport=via)
+    assert request.model_dump(mode="json")["via_airport"] == normalized
+    assert rebuild_from_snapshot(request, snapshot).complete
+
+
+def test_empty_via_list_allows_single_flight_and_single_leg_final_prefix():
+    record = flight("prefix", "AAA", "EEE", 0, 30)
+    snapshot = RoutingSnapshot((record,))
+    empty = search_routes(query(via_airport=[], max_legs=1), snapshot)
+    unconstrained = search_routes(query(max_legs=1), snapshot)
+    assert empty.items == unconstrained.items and empty.diagnostics.exhaustive
+    rebuilt = rebuild_from_snapshot(continuation_request(via_airport=[], max_legs=1), snapshot)
+    assert rebuilt.legs == [record] and rebuilt.complete and not rebuilt.options
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"via_airport": ["BBB", " bbb "]},
+        {"via_airport": ["BBB", "EEE"]},
+        {"via_airport": ["BBB", "CCC"], "avoid_airports": ["CCC"]},
+        {"via_airport": ["BBB", ""]},
+        {"via_airport": ["BBB", None]},
+        {"via_airport": ["BBB", 123]},
+        {"via_airport": ["BBB", ["CCC"]]},
+        {"via_airport": ["BBB", "AB1"]},
+        {"via_airport": {"first": "BBB"}},
+        {"via_airport": ["BBB"], "max_legs": 1},
+        {"via_airport": ["BBB", "CCC"], "max_legs": 2},
+        {"via_airport": ["BBB", "CCC", "DDD"], "max_legs": 2, "allow_airport_change": True},
+        {
+            "via_airport": ["BBB", "CCC", "DDD", "FFF", "GGG", "HHH", "III"],
+            "allow_airport_change": True,
+        },
+    ],
+)
+def test_ordered_via_invalid_elements_conflicts_and_impossible_capacity(updates, tmp_path):
+    for factory in (query, continuation_request):
+        with pytest.raises(ValueError):
+            factory(**updates)
+    # The union/list boundary must produce HTTP validation errors, not attempt
+    # storage access or leak a Python TypeError into a server error.
+    absent = tmp_path / "absent.db"
+    app.dependency_overrides[get_store] = lambda: FlightReader(absent)
+    try:
+        with TestClient(app) as client:
+            for endpoint, request in (
+                ("/v1/itineraries/search", query()),
+                ("/v1/plans/rebuild", continuation_request()),
+            ):
+                payload = {**request.model_dump(mode="json"), **updates}
+                assert client.post(endpoint, json=payload).status_code == 422
+        assert not absent.exists()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ordered_via_origin_rejected_after_prefix_resolution():
+    with pytest.raises(ValueError):
+        query(via_airport=["BBB", "AAA"])
+    prefix = flight("prefix", "AAA", "BBB", 0, 30)
+    request = continuation_request(via_airport=["BBB", "AAA"])
+    with pytest.raises(RoutingError) as caught:
+        rebuild_from_snapshot(request, RoutingSnapshot((prefix,)))
+    assert caught.value.code == "invalid_via_airport"
+
+
+@pytest.mark.parametrize("ranking", ["fewest_legs", "shortest_elapsed", "earliest_arrival"])
+@pytest.mark.parametrize("via", [["BBB", "CCC"], ["CCC", "BBB"]])
+def test_ordered_via_filter_precedes_top_k_even_when_reverse_is_faster(ranking, via):
+    records = (
+        flight("direct", "AAA", "EEE", 0, 10),
+        flight("reverse-1", "AAA", "CCC", 0, 20),
+        flight("reverse-2", "CCC", "BBB", 35, 50),
+        flight("reverse-3", "BBB", "EEE", 65, 80),
+        flight("forward-1", "AAA", "BBB", 100, 130),
+        flight("forward-2", "BBB", "CCC", 145, 180),
+        flight("forward-3", "CCC", "EEE", 195, 240),
+    )
+    result = search_routes(
+        query(via_airport=via, ranking=ranking, limit=1), RoutingSnapshot(records)
+    )
+    expected = records[4:] if via == ["BBB", "CCC"] else records[1:4]
+    assert result.items[0].legs == list(expected)
+    assert result.diagnostics.exhaustive and result.diagnostics.stats.routes_found == 1
+
+
+@pytest.mark.parametrize("via", [["BBB", "CCC"], ["CCC", "BBB"]])
+def test_ordered_transfer_visits_arrival_before_departure(via):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("last", "CCC", "EEE", 60, 100),
+    )
+    airports = (airport("BBB", "city"), airport("CCC", "city"))
+    transfers = (
+        AirportTransfer(
+            arrival_iata="BBB", departure_iata="CCC", minimum_minutes=30, source="test"
+        ),
+    )
+    snapshot = RoutingSnapshot(records, airports, transfers)
+    searched = search_routes(
+        query(via_airport=via, max_legs=2, allow_airport_change=True), snapshot
+    )
+    request = continuation_request(
+        via_airport=via,
+        max_legs=2,
+        allow_airport_change=True,
+        chosen_next={"provider": "test", "provider_id": "last"},
+    )
+    rebuilt = rebuild_from_snapshot(request, snapshot)
+    correct_order = via == ["BBB", "CCC"]
+    assert bool(searched.items) == correct_order
+    assert rebuilt.legs == list(records) and rebuilt.complete == correct_order
+    assert rebuilt.options[0].complete == correct_order
+    assert oracle_via_satisfied(rebuilt.legs, via) == correct_order
+    assert searched.diagnostics.exhaustive and rebuilt.diagnostics.exhaustive
+
+
+@pytest.mark.parametrize("missing", ["permission", "metadata", "direction", "shared_city"])
+def test_ordered_transfer_visits_require_allowed_supported_directed_connection(missing):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("last", "CCC", "EEE", 60, 100),
+    )
+    airports = (
+        (
+            airport("BBB", "city"),
+            airport("CCC", "other" if missing == "shared_city" else "city"),
+        )
+        if missing != "metadata"
+        else ()
+    )
+    arrival, departure = ("CCC", "BBB") if missing == "direction" else ("BBB", "CCC")
+    transfers = (
+        AirportTransfer(
+            arrival_iata=arrival, departure_iata=departure, minimum_minutes=30, source="test"
+        ),
+    )
+    allowed = missing != "permission"
+    snapshot = RoutingSnapshot(records, airports, transfers)
+    request = query(via_airport=["BBB", "CCC"], max_legs=3, allow_airport_change=allowed)
+    assert not oracle_paths(records, request, airports, transfers)
+    searched = search_routes(request, snapshot)
+    rebuilt = rebuild_from_snapshot(
+        continuation_request(via_airport=["BBB", "CCC"], allow_airport_change=allowed), snapshot
+    )
+    assert not searched.items and searched.diagnostics.exhaustive
+    assert rebuilt.legs == [records[0]] and not rebuilt.options and not rebuilt.complete
+    assert rebuilt.diagnostics.exhaustive
+
+
+def test_six_ordered_vias_fit_four_flights_with_three_directed_transfers():
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("second", "CCC", "DDD", 60, 90),
+        flight("third", "FFF", "GGG", 120, 150),
+        flight("last", "HHH", "EEE", 180, 210),
+    )
+    pairs = [("BBB", "CCC"), ("DDD", "FFF"), ("GGG", "HHH")]
+    airports = tuple(airport(code, str(i)) for i, pair in enumerate(pairs) for code in pair)
+    transfers = tuple(
+        AirportTransfer(arrival_iata=a, departure_iata=b, minimum_minutes=30, source="test")
+        for a, b in pairs
+    )
+    vias = ["BBB", "CCC", "DDD", "FFF", "GGG", "HHH"]
+    snapshot = RoutingSnapshot(records, airports, transfers)
+    searched = search_routes(query(via_airport=vias, allow_airport_change=True), snapshot)
+    assert searched.items[0].legs == list(records)
+    request = continuation_request(
+        prefix=[{"provider": "test", "provider_id": f.provider_id} for f in records[:2]],
+        via_airport=vias,
+        next_airport="GGG",
+        allow_airport_change=True,
+    )
+    rebuilt = rebuild_from_snapshot(request, snapshot)
+    assert rebuilt.legs == list(records) and rebuilt.complete
+    assert [o.flight.provider_id for o in rebuilt.options] == ["third"]
+    assert oracle_visits(rebuilt.legs) == vias
+
+
+def test_retained_prefix_and_next_choice_advance_ordered_vias_before_tail():
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("retained", "BBB", "CCC", 45, 60),
+        flight("fast", "CCC", "EEE", 75, 90),
+        flight("next", "CCC", "DDD", 90, 105),
+        flight("last", "DDD", "EEE", 120, 150),
+    )
+    request = continuation_request(
+        prefix=[{"provider": "test", "provider_id": f.provider_id} for f in records[:2]],
+        via_airport=["BBB", "CCC", "DDD"],
+        next_airport="DDD",
+        option_limit=1,
+        chosen_next={"provider": "test", "provider_id": "next"},
+    )
+    result = rebuild_from_snapshot(request, RoutingSnapshot(records))
+    assert result.legs == [*records[:2], *records[3:]] and result.complete
+    assert [o.flight.provider_id for o in result.options] == ["next"]
+    assert result.options_total == 1 and result.diagnostics.exhaustive
+
+
+@pytest.mark.parametrize("prefix_count", [2, 3])
+def test_wrong_order_retained_prefix_preserved_without_completion(prefix_count):
+    records = (
+        flight("prefix", "AAA", "CCC", 0, 30),
+        flight("retained", "CCC", "BBB", 45, 60),
+        flight("last", "BBB", "EEE", 75, 90),
+    )
+    request = continuation_request(
+        prefix=[{"provider": "test", "provider_id": f.provider_id} for f in records[:prefix_count]],
+        via_airport=["BBB", "CCC"],
+    )
+    result = rebuild_from_snapshot(request, RoutingSnapshot(records))
+    assert result.legs == list(records[:prefix_count]) and not result.complete
+    assert all(not option.complete for option in result.options)
+    assert result.diagnostics.exhaustive
+
+
+def test_chosen_future_via_keeps_a_dead_end_but_auto_selection_finds_ordered_route():
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("wrong-order", "BBB", "DDD", 45, 60),
+        flight("right-order", "BBB", "CCC", 60, 75),
+        flight("via", "CCC", "DDD", 90, 105),
+        flight("last", "DDD", "EEE", 120, 150),
+    )
+    snapshot = RoutingSnapshot(records)
+    request = continuation_request(via_airport=["BBB", "CCC", "DDD"])
+    result = rebuild_from_snapshot(request, snapshot)
+    assert result.legs == [records[0], *records[2:]] and result.complete
+    assert [(o.flight.provider_id, o.complete) for o in result.options] == [
+        ("wrong-order", False),
+        ("right-order", True),
+    ]
+    chosen = rebuild_from_snapshot(
+        continuation_request(
+            via_airport=request.via_airport,
+            chosen_next={"provider": "test", "provider_id": "wrong-order"},
+        ),
+        snapshot,
+    )
+    assert chosen.legs == list(records[:2]) and not chosen.complete
+    assert chosen.diagnostics.exhaustive
+
+
+def test_tail_memo_separates_opposite_order_with_identical_seen_airports():
+    records = (
+        flight("prefix", "AAA", "HHH", 0, 30),
+        flight("wrong-order", "CCC", "BBB", 45, 60),
+        flight("right-order", "BBB", "CCC", 60, 75),
+        flight("shared", "DDD", "FFF", 105, 120),
+        flight("last", "FFF", "EEE", 135, 150),
+    )
+    airports = tuple(airport(code, "city") for code in ["HHH", "BBB", "CCC", "DDD"])
+    transfers = tuple(
+        AirportTransfer(arrival_iata=a, departure_iata=b, minimum_minutes=15, source="test")
+        for a, b in [("HHH", "CCC"), ("HHH", "BBB"), ("BBB", "DDD"), ("CCC", "DDD")]
+    )
+    request = continuation_request(via_airport=["BBB", "CCC"], allow_airport_change=True)
+    expected = oracle_paths(records, request, airports, transfers, [records[0]], request.window)
+    result = rebuild_from_snapshot(request, RoutingSnapshot(records, airports, transfers))
+    assert [identity(p) for p in expected] == [identity(result.legs)]
+    assert result.legs == [records[0], *records[2:]] and result.complete
+    assert [(o.flight.provider_id, o.complete) for o in result.options] == [
+        ("wrong-order", False),
+        ("right-order", True),
+    ]
+
+
+@pytest.mark.parametrize("budget", [1, 2, 3, 4, 5])
+def test_ordered_via_candidate_budget_never_returns_unordered_route(budget):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("direct", "BBB", "EEE", 45, 60),
+        flight("next", "BBB", "CCC", 60, 90),
+        flight("last", "CCC", "EEE", 105, 150),
+        flight("other", "CCC", "EEE", 120, 160),
+    )
+    request = query(via_airport=["BBB", "CCC"], limits={"max_candidates": budget})
+    expected = {identity(p) for p in oracle_paths(records, request)}
+    result = search_routes(request, RoutingSnapshot(records))
+    assert {identity(item.legs) for item in result.items} <= expected
+    assert all(oracle_via_satisfied(item.legs, request.via_airport) for item in result.items)
+    if budget < 5:
+        assert not result.diagnostics.exhaustive
+        assert result.diagnostics.termination_reasons == ["candidate_limit"]
+        assert result.diagnostics.stats.candidates_checked == budget
+    else:
+        assert {identity(item.legs) for item in result.items} == expected
+        assert result.diagnostics.exhaustive
+
+
+@pytest.mark.parametrize("budget,complete", [(2, False), (3, True)])
+def test_ordered_chosen_next_budget_retains_choice_and_only_valid_complete_tail(budget, complete):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("next", "BBB", "CCC", 45, 60),
+        flight("via", "CCC", "DDD", 75, 90),
+        flight("last", "DDD", "EEE", 105, 120),
+        flight("other", "DDD", "EEE", 120, 130),
+    )
+    request = continuation_request(
+        via_airport=["BBB", "CCC", "DDD"],
+        limits={"max_candidates": budget},
+        chosen_next={"provider": "test", "provider_id": "next"},
+    )
+    result = rebuild_from_snapshot(request, RoutingSnapshot(records))
+    assert result.legs[:2] == list(records[:2]) and result.complete == complete
+    assert result.options[0].flight == records[1] and result.options[0].complete == complete
+    assert result.search_truncated and not result.diagnostics.exhaustive
+    assert result.options_total is None
+    if complete:
+        assert result.legs == list(records[:4])
+        assert oracle_via_satisfied(result.legs, request.via_airport)
+
+
+def test_ordered_vias_in_data_limited_snapshot_keep_only_valid_partial_claim():
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("next", "BBB", "CCC", 45, 60),
+        flight("last", "CCC", "EEE", 75, 90),
+    )
+    snapshot = RoutingSnapshot(records, data_truncated=True)
+    searched = search_routes(query(via_airport=["BBB", "CCC"]), snapshot)
+    rebuilt = rebuild_from_snapshot(
+        continuation_request(via_airport=["BBB", "CCC"], next_airport="CCC"), snapshot
+    )
+    assert searched.items[0].legs == list(records)
+    assert rebuilt.legs == list(records) and rebuilt.complete and rebuilt.data_truncated
+    for result in (searched, rebuilt):
+        assert not result.diagnostics.exhaustive
+        assert result.diagnostics.termination_reasons == ["data_limit"]
+
+
+@pytest.mark.parametrize("scope", ["data", "candidates"])
+@pytest.mark.parametrize("protected", ["prefix", "chosen_next"])
+def test_proven_order_failure_message_survives_partial_search_flags(scope, protected):
+    if protected == "prefix":
+        records = (
+            flight("prefix", "AAA", "CCC", 0, 30),
+            flight("direct", "CCC", "EEE", 45, 60),
+            flight("other", "CCC", "DDD", 60, 90),
+        )
+        updates = {"via_airport": ["BBB", "CCC"]}
+        retained = [records[0]]
+    else:
+        records = (
+            flight("prefix", "AAA", "BBB", 0, 30),
+            flight("wrong-order", "BBB", "DDD", 45, 60),
+            flight("other", "BBB", "CCC", 60, 75),
+            flight("last", "DDD", "EEE", 75, 90),
+        )
+        updates = {
+            "via_airport": ["BBB", "CCC", "DDD"],
+            "chosen_next": {"provider": "test", "provider_id": "wrong-order"},
+        }
+        retained = list(records[:2])
+    if scope == "candidates":
+        updates["limits"] = {"max_candidates": 1}
+    result = rebuild_from_snapshot(
+        continuation_request(**updates), RoutingSnapshot(records, data_truncated=scope == "data")
+    )
+    assert result.legs == retained and not result.complete
+    assert not result.diagnostics.exhaustive
+    assert result.diagnostics.termination_reasons == [
+        "data_limit" if scope == "data" else "candidate_limit"
+    ]
+    message = result.message.lower()
+    assert "out of order" in message and "earlier" in message and "partial" in message
+    assert "complete continuation may" not in message
+
+
+def test_ordered_via_replay_preserves_list_and_detects_changed_order(tmp_path, monkeypatch, capsys):
+    records = (
+        flight("prefix", "AAA", "BBB", 0, 30),
+        flight("next", "BBB", "CCC", 45, 60),
+        flight("last", "CCC", "EEE", 75, 90),
+    )
+    snapshot = RoutingSnapshot(records)
+    requests = [
+        query(via_airport=[" bbb ", "ccc"]),
+        continuation_request(via_airport=["BBB", "CCC"]),
+    ]
+    documents = []
+    for kind, request, operation in zip(
+        ["search", "rebuild"], requests, [search_routes, rebuild_from_snapshot]
+    ):
+        result = operation(request, snapshot)
+        saved = json.loads(json.dumps(replay_document(kind, request, snapshot, result)))
+        assert saved["request"]["via_airport"] == ["BBB", "CCC"]
+        assert replay(saved)["matches_saved_result"]
+        documents.append(saved)
+        changed = {**saved, "request": {**saved["request"], "via_airport": ["CCC", "BBB"]}}
+        replayed = replay(changed)
+        assert not replayed["matches_saved_result"]
+        if kind == "search":
+            assert not replayed["result"]["items"]
+        else:
+            assert not replayed["result"]["complete"]
+        duplicate = {**saved, "request": {**saved["request"], "via_airport": ["BBB", "bbb"]}}
+        with pytest.raises(ValueError):
+            replay(duplicate)
+    monkeypatch.setattr(
+        admin,
+        "get_settings",
+        lambda: (_ for _ in ()).throw(AssertionError("offline replay must not read DB settings")),
+    )
+    for i, saved in enumerate(documents):
+        path = tmp_path / f"ordered-replay-{i}.json"
+        path.write_text(json.dumps(saved))
+        admin.run(["replay-routing", str(path)])
+        assert json.loads(capsys.readouterr().out)["matches_saved_result"]

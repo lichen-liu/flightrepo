@@ -2,6 +2,8 @@
 
 Explore dated flight options, inspect their routes and schedules, and change a connection to see how the rest of the journey changes. Flyji runs locally with Python, FastAPI and SQLite. Its intended domain is **fly.boboji.fyi**.
 
+Flyji shares boboji.fyi's fonts, colors and branding with Trip Split and AeroRepo. Fonts and map assets are bundled locally.
+
 This preview uses imported schedules. It does not establish seat availability, fares, booking protection or whether a transfer is suitable for a traveler. The demo data is synthetic; coverage is unknown.
 
 ## Try the demo
@@ -23,7 +25,7 @@ To host the installed preview at **fly.boboji.fyi**, follow [installation](insta
 
 | Capability | Current behavior |
 |---|---|
-| Search | Typed airport codes with suggestions, a required via airport, local or UTC dates, arrival deadline, connection bounds, avoided airports and deterministic ranking |
+| Search | Typed airport codes with suggestions, ordered via airports, local or UTC dates, arrival deadline, connection bounds, avoided airports and deterministic ranking |
 | Explore | Linked route list, globe/flat map, leg details, local clocks and a schedule cursor |
 | Edit | Keep a selected prefix, type the next airport, choose a later flight, rebuild subsequent legs, show dead ends and undo |
 | Airport changes | Opt-in, same-city changes with an explicit directed allowance in SQLite |

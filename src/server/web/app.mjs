@@ -9,6 +9,8 @@ import {
   errorMessage,
   queryLink,
   RequestLane,
+  airportList,
+  airportListSuggestions,
 } from "./format.mjs";
 import { RouteMap, drawTimeline } from "./map.mjs";
 
@@ -67,9 +69,12 @@ function acceptTimeError(error) {
 
 const airportCode = (value) => value.trim().toUpperCase();
 function normalizeAirportInput(control) {
-  const value = airportCode(control.value);
+  const list = control.hasAttribute("data-airport-list"),
+    value = list ? control.value.toUpperCase() : airportCode(control.value);
   if (value === control.value) return;
-  const leading = control.value.length - control.value.trimStart().length,
+  const leading = list
+      ? 0
+      : control.value.length - control.value.trimStart().length,
     start = control.selectionStart,
     end = control.selectionEnd;
   control.value = value;
@@ -83,7 +88,6 @@ function updateAirportNames() {
   for (const [control, id, optional] of [
     [field("origin"), "origin-name", false],
     [field("destination"), "destination-name", false],
-    [field("via"), "via-name", true],
     [editField("next-airport"), "next-airport-name", true],
   ]) {
     const code = airportCode(control.value),
@@ -95,6 +99,50 @@ function updateAirportNames() {
         ? "Airport details not loaded"
         : "Three-letter airport code");
   }
+  const codes = field("via")
+    .value.toUpperCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+  $("via-name").hidden = !codes.length;
+  $("via-name").textContent = codes
+    .map(
+      (code) =>
+        `${code}: ${state.airports.get(code)?.name || "Airport details not loaded"}`,
+    )
+    .join(" → ");
+  updateViaSuggestions();
+}
+let viaOptions = [], viaActive = -1;
+function hideViaSuggestions() {
+  $("via-suggestions").hidden = true;
+  field("via").setAttribute("aria-expanded", "false");
+  field("via").removeAttribute("aria-activedescendant");
+  viaActive = -1;
+}
+function updateViaSuggestions(open = false) {
+  const control = field("via");
+  viaOptions = airportListSuggestions(
+    control.value,
+    control.selectionStart ?? control.value.length,
+    [...state.airports.keys()],
+  ).slice(0, 8);
+  hideViaSuggestions();
+  $("via-suggestions").innerHTML = viaOptions.map(({ code, value }, index) =>
+    `<span role="option" id="via-option-${index}" data-via-option="${index}" data-value="${e(value)}" aria-selected="false"><strong>${e(code)}</strong><span>${e(state.airports.get(code).name || code)}</span></span>`,
+  ).join("");
+  if (open && document.activeElement === control && viaOptions.length) {
+    $("via-suggestions").hidden = false;
+    control.setAttribute("aria-expanded", "true");
+  }
+}
+function chooseVia(index) {
+  const option = viaOptions[index];
+  if (!option) return;
+  const control = field("via");
+  control.value = option.value;
+  control.setSelectionRange(option.caret, option.caret);
+  control.dispatchEvent(new Event("input", { bubbles: true }));
+  hideViaSuggestions();
 }
 function values() {
   return Object.fromEntries(
@@ -115,9 +163,15 @@ function values() {
     ]
       .map((name) => [
         name,
-        field(name).hasAttribute("data-airport-code")
-          ? airportCode(field(name).value)
-          : field(name).value,
+        field(name).hasAttribute("data-airport-list")
+          ? field(name)
+              .value.toUpperCase()
+              .split(/[\s,]+/)
+              .filter(Boolean)
+              .join(", ")
+          : field(name).hasAttribute("data-airport-code")
+            ? airportCode(field(name).value)
+            : field(name).value,
       ])
       .concat([
         ["airport-change", field("airport-change").checked ? "1" : "0"],
@@ -153,10 +207,11 @@ function updateZones() {
       ` · timezone details not loaded for ${missing.join(", ")}; choose UTC or load airport data`;
 }
 function commonQuery() {
+  const via = airportList(field("via").value);
   return {
     origin: airportCode(field("origin").value),
     destination: airportCode(field("destination").value),
-    via_airport: airportCode(field("via").value) || null,
+    via_airport: via.length ? via : null,
     max_legs: Number(field("stops").value) + 1,
     ranking: field("ranking").value,
     minimum_connection_minutes: Number(field("minimum").value),
@@ -180,6 +235,23 @@ function searchRequest() {
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
     throw Error("Choose different origin and destination airports.");
+  const capacity = (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
+  if ((query.via_airport?.length || 0) > capacity)
+    throw Error(
+      query.max_legs < 4
+        ? "Increase Maximum stops under Search filters to visit all via airports."
+        : "Too many via airports for three stops. Use fewer codes or allow permitted airport changes.",
+    );
+  for (const code of query.via_airport || []) {
+    if ([query.origin, query.destination].includes(code))
+      throw Error(
+        `${code} is an endpoint. Via airports must be intermediate airports.`,
+      );
+    if (query.avoid_airports.includes(code))
+      throw Error(
+        `${code} is both a via and an avoided airport. Remove one constraint.`,
+      );
+  }
   if (field("input-clock").value === "local")
     return {
       url: "/v1/itineraries/search/local",
@@ -221,6 +293,8 @@ async function search() {
     return;
   }
   const submitted = values();
+  field("via").value = submitted.via;
+  updateAirportNames();
   closeEditor();
   showError("error", "");
   $("status").textContent = "Searching imported schedules…";
@@ -273,9 +347,11 @@ function renderOptions() {
   $("result-count").textContent = result.diagnostics.result_limit_reached
     ? `${result.items.length} of ${result.diagnostics.stats.routes_found}${result.diagnostics.exhaustive ? "" : " examined"}`
     : String(result.items.length);
-  const v = state.queryValues;
+  const v = state.queryValues,
+    via = result.query.via_airport,
+    viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${result.query.via_airport ? " via " + result.query.via_airport : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : state.airports.get(result.query.origin)?.timezone || "local"}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : state.airports.get(result.query.origin)?.timezone || "local"}`;
   const d = result.diagnostics;
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
@@ -599,6 +675,7 @@ form.addEventListener("input", (event) => {
   if (!event.target.hasAttribute("data-airport-code")) return;
   normalizeAirportInput(event.target);
   updateZones();
+  if (event.target.hasAttribute("data-airport-list")) updateViaSuggestions(true);
   closeEditor();
   if (state.result)
     $("status").textContent =
@@ -611,6 +688,44 @@ form.addEventListener("change", (event) => {
   if (state.result)
     $("status").textContent =
       "Inputs changed. Search to apply them; previous results remain visible.";
+});
+for (const event of ["focus", "click"])
+  field("via").addEventListener(event, () => updateViaSuggestions(true));
+field("via").addEventListener("blur", hideViaSuggestions);
+field("via").addEventListener("keyup", (event) => {
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+    updateViaSuggestions(true);
+});
+field("via").addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === "Escape" || event.key === "Tab") {
+    hideViaSuggestions();
+  } else if (event.key === "Enter" && viaActive >= 0) {
+    event.preventDefault();
+    chooseVia(viaActive);
+  } else if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+    if ($("via-suggestions").hidden) updateViaSuggestions(true);
+    if (!viaOptions.length) return;
+    event.preventDefault();
+    const down = event.key === "ArrowDown";
+    viaActive = viaActive < 0
+      ? (down ? 0 : viaOptions.length - 1)
+      : (viaActive + (down ? 1 : viaOptions.length - 1)) % viaOptions.length;
+    const options = $("via-suggestions").children;
+    for (const [index, option] of [...options].entries())
+      option.setAttribute("aria-selected", String(index === viaActive));
+    const active = options[viaActive];
+    field("via").setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+});
+$("via-suggestions").addEventListener("mousedown", (event) => event.preventDefault());
+$("via-suggestions").addEventListener("click", (event) => {
+  const option = event.target.closest("[data-via-option]");
+  if (option) {
+    event.preventDefault();
+    chooseVia(Number(option.dataset.viaOption));
+  }
 });
 $("swap").addEventListener("click", () => {
   const origin = field("origin").value;

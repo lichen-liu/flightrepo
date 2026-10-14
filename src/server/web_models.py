@@ -11,7 +11,9 @@ from core.routing.models import (
     RouteSearchRequest,
     RoutingError,
     SearchLimits,
+    ViaAirports,
     airport_code,
+    via_airports,
 )
 from core.routing.results import RouteSearchResult
 from core.timezones import resolve_local
@@ -21,7 +23,7 @@ class LocalRouteSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     origin: str
     destination: str
-    via_airport: str | None = None
+    via_airport: ViaAirports = None
     departure_date: date
     departure_last_date: date | None = None
     arrival_by_local: datetime
@@ -43,10 +45,7 @@ class LocalRouteSearchRequest(BaseModel):
     def codes(cls, value):
         return airport_code(value)
 
-    @field_validator("via_airport", mode="before")
-    @classmethod
-    def via_code(cls, value):
-        return airport_code(value) if value is not None else None
+    _via_codes = field_validator("via_airport", mode="before")(via_airports)
 
     def utc_request(self, airports: tuple[Airport, ...]) -> RouteSearchRequest:
         by_code = {a.iata: a for a in airports}

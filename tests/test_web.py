@@ -1,10 +1,14 @@
 """End-to-end serving contracts and local clock edge cases for the real workspace."""
 
 import json
+import re
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
 from itertools import islice, product
 from pathlib import Path
 from string import ascii_uppercase
+from urllib.parse import urljoin, urlsplit
+from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +18,7 @@ from core.models import FlightRecord
 from core.routing.models import RoutingError
 from core.timezones import resolve_local
 from ingestion.updater import FlightUpdater
-from server.api import app, get_store
+from server.api import WEB_ROOT, app, get_store
 from server.reader import FlightReader
 from server.web_models import LocalRouteSearchRequest
 
@@ -250,6 +254,64 @@ def test_required_via_is_enforced_before_top_result(client):
     assert result["diagnostics"]["exhaustive"]
 
 
+@pytest.mark.parametrize("endpoint", ["/v1/itineraries/search/local", "/v1/itineraries/search"])
+def test_ordered_via_list_search_and_rebuild(client, demo, endpoint):
+    payload = request(via_airport=[" lhr ", "ams"], limit=1)
+    if endpoint.endswith("/local"):
+        query = payload
+    else:
+        query = (
+            LocalRouteSearchRequest.model_validate(payload)
+            .utc_request(demo[1].airports(limit=100))
+            .model_dump(mode="json")
+        )
+    response = client.post(endpoint, json=query)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["query"]["via_airport"] == ["LHR", "AMS"]
+    assert len(result["items"]) == 1
+    legs = result["items"][0]["legs"]
+    assert [f["destination_iata"] for f in legs] == ["LHR", "AMS", "CDG"]
+    query["via_airport"] = ["AMS", "LHR"]
+    reversed_route = client.post(endpoint, json=query).json()
+    assert not reversed_route["items"] and reversed_route["diagnostics"]["exhaustive"]
+    rebuild = demo[2]["request"] | {"via_airport": ["LHR", "AMS"], "next_airport": "AMS"}
+    plan = client.post("/v1/plans/rebuild", json=rebuild).json()
+    assert plan["complete"] and plan["legs"] == legs
+    rebuild["prefix"] = [
+        {"provider": f["provider"], "provider_id": f["provider_id"]} for f in legs[:2]
+    ]
+    rebuild["next_airport"] = "CDG"
+    kept = client.post("/v1/plans/rebuild", json=rebuild).json()
+    assert kept["complete"] and kept["legs"][:2] == legs[:2]
+
+
+def test_via_list_counts_both_sides_of_permitted_ground_change(client):
+    query = request(via_airport=["LHR", "LGW", "AMS"])
+    response = client.post("/v1/itineraries/search/local", json=query)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["items"]
+    assert all(item["connections"][0]["airport_change"] for item in result["items"])
+    query["via_airport"] = ["LGW", "LHR", "AMS"]
+    reversed_route = client.post("/v1/itineraries/search/local", json=query).json()
+    assert not reversed_route["items"] and reversed_route["diagnostics"]["exhaustive"]
+
+
+@pytest.mark.parametrize("vias", [["LHR", "lhr"], ["AMS", "YYZ"], ["LHR", "CDG"], ["AMS", 42]])
+def test_bad_via_lists_return_readable_validation_errors(client, vias):
+    response = client.post("/v1/itineraries/search/local", json=request(via_airport=vias))
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]
+
+
+def test_unknown_via_list_needs_no_timezone_metadata(client):
+    result = client.post("/v1/itineraries/search/local", json=request(via_airport=["LHR", "XYZ"]))
+    assert result.status_code == 200, result.text
+    assert result.json()["items"] == []
+    assert result.json()["diagnostics"]["exhaustive"]
+
+
 def test_via_can_require_departure_side_of_ground_transfer(client):
     for allowed in (False, True):
         result = client.post(
@@ -357,6 +419,121 @@ def test_web_assets_and_api_use_same_origin(client):
     assert client.get("/v1/catalog").headers["cache-control"] == "no-store"
     assert client.get("/assets/../../.env").status_code == 404
     assert client.get("/assets/%2e%2e/%2e%2e/.env").status_code == 404
+
+
+def test_family_fonts_are_real_self_hosted_assets_with_retained_licenses(client):
+    stylesheet = client.get("/assets/app.css")
+    assert stylesheet.status_code == 200
+    faces = re.findall(r"@font-face\s*\{([^}]+)\}", stylesheet.text, re.DOTALL)
+    assert len(faces) == 3
+    urls, families = set(), set()
+    for face in faces:
+        family = re.search(r'font-family:\s*"([^"]+)"', face)
+        assert family is not None
+        families.add(family.group(1))
+        assert re.search(r"font-display:\s*swap\s*;", face)
+        sources = re.findall(r'url\(["\']?([^"\'()\s]+)', face)
+        assert len(sources) == 1
+        asset = urljoin("/assets/app.css", sources[0])
+        assert not urlsplit(asset).netloc and asset.startswith("/assets/fonts/")
+        urls.add(asset)
+        response = client.get(asset)
+        assert response.status_code == 200
+        assert response.headers["content-type"].split(";")[0] == "font/woff2"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        # A 200 HTML fallback is not a usable font. Check the WOFF2 signature
+        # and declared binary length, plus the actual file in this runtime.
+        assert response.content[:4] == b"wOF2" and len(response.content) >= 48
+        assert int.from_bytes(response.content[8:12], "big") == len(response.content)
+        assert response.content == (WEB_ROOT / asset.removeprefix("/assets/")).read_bytes()
+        directives = {
+            parts[0]: parts[1:]
+            for rule in response.headers["content-security-policy"].split(";")
+            if (parts := rule.split())
+        }
+        assert directives.get("font-src", directives["default-src"]) == ["'self'"]
+    assert families == {"Manrope", "DM Mono"}
+    assert urls == {
+        "/assets/fonts/manrope-variable.woff2",
+        "/assets/fonts/dm-mono-400.woff2",
+        "/assets/fonts/dm-mono-500.woff2",
+    }
+    assert "@import" not in stylesheet.text
+    assert re.search(r'--sans:\s*"Manrope",.*sans-serif', stylesheet.text)
+    assert re.search(r'--mono:\s*"DM Mono",.*monospace', stylesheet.text)
+    for name in ("Manrope", "DMMono"):
+        license_response = client.get(f"/assets/fonts/OFL-{name}.txt")
+        assert license_response.status_code == 200
+        assert "SIL OPEN FONT LICENSE Version 1.1" in license_response.text
+        assert license_response.content == (WEB_ROOT / "fonts" / f"OFL-{name}.txt").read_bytes()
+
+
+def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
+    page = client.get("/")
+    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"' in page.text
+    response = client.get("/assets/favicon.svg")
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == "image/svg+xml"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == (WEB_ROOT / "favicon.svg").read_bytes()
+    svg = ElementTree.fromstring(response.content)
+    assert svg.tag == "{http://www.w3.org/2000/svg}svg"
+    x, y, width, height = map(float, svg.attrib["viewBox"].split())
+    assert width > 0 and height > 0
+    assert list(svg)
+    assert "img-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_family_shell_keeps_accessible_flight_workspace_and_system_theme(client):
+    class Elements(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.nodes = []
+
+        def handle_starttag(self, tag, attrs):
+            self.nodes.append((tag, dict(attrs)))
+
+    response = client.get("/")
+    assert response.status_code == 200
+    parsed = Elements()
+    parsed.feed(response.text)
+    nodes = parsed.nodes
+    ids = [attrs["id"] for _, attrs in nodes if "id" in attrs]
+    assert len(ids) == len(set(ids))
+    assert any(tag == "html" and attrs.get("lang") == "en" for tag, attrs in nodes)
+    assert "<title>Flyji · boboji.fyi</title>" in response.text
+    assert len([tag for tag, _ in nodes if tag == "main"]) == 1
+    assert any(tag == "h1" and attrs.get("id") == "page-title" for tag, attrs in nodes)
+    assert any(tag == "form" and attrs.get("id") == "search-form" for tag, attrs in nodes)
+    assert any(
+        tag == "a" and attrs.get("href") == "#results" and attrs.get("class") == "skip"
+        for tag, attrs in nodes
+    )
+    assert any(
+        attrs.get("id") == "results" and attrs.get("aria-labelledby") == "options-heading"
+        for _, attrs in nodes
+    )
+    for label, href in (("Flyji home", "/"), ("boboji.fyi home", "https://boboji.fyi/")):
+        assert any(
+            tag == "a" and attrs.get("aria-label") == label and attrs.get("href") == href
+            for tag, attrs in nodes
+        )
+    assert any(tag == "nav" and attrs.get("aria-label") == "Flyji tools" for tag, attrs in nodes)
+    assert any(
+        tag == "aside" and attrs.get("aria-label") == "boboji.fyi tools" for tag, attrs in nodes
+    )
+    assert any(
+        tag == "meta"
+        and attrs.get("name") == "color-scheme"
+        and attrs.get("content") == "light dark"
+        for tag, attrs in nodes
+    )
+    css = client.get("/assets/app.css").text
+    assert "@media (prefers-color-scheme: dark)" in css
+    assert "color-scheme: light dark" in css
+    # These source checks preserve the agreed system-theme contract. Browser
+    # QA still has to establish computed colors, contrast, layout and focus.
+    assert "@media (prefers-reduced-motion: reduce)" in css
 
 
 def test_readiness_checks_storage_without_creating_it(tmp_path):

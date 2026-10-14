@@ -5,6 +5,8 @@ import {
   localDate,
   localInput,
   RequestLane,
+  airportList,
+  airportListSuggestions,
 } from "../src/server/web/format.mjs";
 
 function deferred() {
@@ -15,6 +17,33 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("via lists preserve travel order across whitespace, commas and trailing separators", () => {
+  assert.deepEqual(airportList(" ams,  lhr ,,\n"), ["AMS", "LHR"]);
+  assert.deepEqual(airportList("lhr ams"), ["LHR", "AMS"]);
+  assert.deepEqual(airportList(""), []);
+  assert.deepEqual(airportList("xyz"), ["XYZ"]);
+  assert.throws(() => airportList("AMS ams"), /must not repeat/);
+  assert.throws(() => airportList("AMS FRA1"), /Invalid airport code: FRA1/);
+  assert.throws(() => airportList("AAA BBB CCC DDD EEE FFF GGG"), /at most six/);
+});
+
+test("via suggestions replace the active token and retain the other airports", () => {
+  assert.deepEqual(airportListSuggestions("LHR, A", 6, ["LHR", "AMS", "CDG"]), [
+    { code: "AMS", value: "LHR, AMS", caret: 8 },
+  ]);
+  assert.deepEqual(
+    airportListSuggestions("LHR, , CDG", 5, ["LHR", "AMS", "KEF", "CDG"]),
+    [
+      { code: "AMS", value: "LHR, AMS, CDG", caret: 8 },
+      { code: "KEF", value: "LHR, KEF, CDG", caret: 8 },
+    ],
+  );
+  assert.deepEqual(airportListSuggestions("LHR ", 4, ["LHR", "AMS"]), [
+    { code: "AMS", value: "LHR AMS", caret: 7 },
+  ]);
+  assert.deepEqual(airportListSuggestions("LHR, XYZ", 8, ["LHR", "AMS"]), []);
+});
 function transport(t) {
   const requests = new Map();
   t.mock.method(globalThis, "fetch", (url, options) => {

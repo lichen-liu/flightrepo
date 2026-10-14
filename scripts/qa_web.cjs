@@ -123,17 +123,19 @@ async function next(
   ).toBeEnabled();
   return data;
 }
-async function viaSearch(page) {
+async function viaSearch(page, input = "ams", expected = ["AMS"]) {
   await open(page);
-  await page.getByLabel("Via airport", { exact: true }).fill("ams");
+  await page.getByLabel("Via airports", { exact: true }).fill(input);
   const data = await search(page, () =>
-    page.getByLabel("Via airport", { exact: true }).press("Enter"),
+    page.getByLabel("Via airports", { exact: true }).press("Enter"),
   );
-  assert.equal(data.query.via_airport, "AMS");
+  assert.deepEqual(data.query.via_airport, expected);
   assert.ok(data.items.length);
   assert.ok(
     data.items.every((item) =>
-      item.legs.some((flight) => flight.destination_iata === "AMS"),
+      expected.every((code) =>
+        item.legs.some((flight) => flight.destination_iata === code),
+      ),
     ),
   );
   return data;
@@ -148,7 +150,7 @@ check(
       identity(selected.selection.legs),
       identity(data.items[0].legs),
     );
-    assert.equal(selected.query.via_airport, "AMS");
+    assert.deepEqual(selected.query.via_airport, ["AMS"]);
     assert.equal(selected.coverage, "unknown");
     assert.ok(selected.selection.diagnostics.snapshot_id);
     assert.equal(new URL(page.url()).searchParams.get("via"), "AMS");
@@ -156,7 +158,7 @@ check(
     await reloaded.goto(page.url());
     await expect(reloaded.locator("[data-option]").first()).toBeVisible();
     await expect(
-      reloaded.getByLabel("Via airport", { exact: true }),
+      reloaded.getByLabel("Via airports", { exact: true }),
     ).toHaveValue("AMS");
   },
 );
@@ -164,7 +166,7 @@ check(
 check(
   "connection edits preserve prefix rebuild suffix and undo",
   async (page) => {
-    await viaSearch(page);
+    await viaSearch(page, "lhr ams", ["LHR", "AMS"]);
     const before = (await exported(page)).selection;
     await edit(page);
     await page.getByLabel("Next departure").selectOption("any");
@@ -204,6 +206,7 @@ check(
       identity((await exported(page)).selection.legs),
       identity(updated.legs),
     );
+    assert.deepEqual((await exported(page)).query.via_airport, ["LHR", "AMS"]);
     await page.getByRole("button", { name: "Undo edit", exact: true }).click();
     assert.deepEqual(
       identity((await exported(page)).selection.legs),
@@ -214,6 +217,101 @@ check(
     ).toBeDisabled();
   },
 );
+
+check("ordered via lists survive typing, links and export", async (page, context) => {
+  await open(page);
+  const via = page.getByLabel("Via airports", { exact: true });
+  await via.pressSequentially("lhr ams");
+  await expect(via).toHaveValue("LHR AMS");
+  const data = await search(page, () => via.press("Enter"));
+  assert.deepEqual(data.query.via_airport, ["LHR", "AMS"]);
+  assert.ok(data.items.length);
+  for (const item of data.items)
+    assert.deepEqual(item.legs.map((f) => f.destination_iata), ["LHR", "AMS", "CDG"]);
+  await expect(via).toHaveValue("LHR, AMS");
+  await expect(page.locator("#applied-query")).toContainText("via LHR → AMS");
+  assert.equal(new URL(page.url()).searchParams.get("via"), "LHR, AMS");
+  assert.deepEqual((await exported(page)).query.via_airport, ["LHR", "AMS"]);
+  const reloaded = await context.newPage();
+  await result(reloaded, searchPath, () => reloaded.goto(page.url()));
+  await expect(reloaded.locator("[data-option]").first()).toBeVisible();
+  await expect(reloaded.getByLabel("Via airports", { exact: true })).toHaveValue(
+    "LHR, AMS",
+  );
+  await via.fill(" ams,, lhr, ");
+  const reversed = await search(page, () => via.press("Enter"));
+  assert.deepEqual(reversed.query.via_airport, ["AMS", "LHR"]);
+  assert.deepEqual(reversed.items, []);
+  assert.equal(reversed.diagnostics.exhaustive, true);
+});
+
+check("via suggestions preserve other codes and invalid lists preserve the journey", async (page) => {
+  await viaSearch(page, "LHR, AMS", ["LHR", "AMS"]);
+  const via = page.getByLabel("Via airports", { exact: true }),
+    before = (await exported(page)).selection;
+  await via.fill("LHR, A");
+  const appended = await page
+    .locator("#via-suggestions [role=option]")
+    .evaluateAll((options) => options.map((o) => o.dataset.value));
+  assert.ok(appended.includes("LHR, AMS"));
+  assert.ok(!appended.includes("LHR, LHR"));
+  await via.press("ArrowDown");
+  await expect(via).toHaveAttribute("aria-activedescendant", "via-option-0");
+  await via.press("Enter");
+  await expect(via).toHaveValue("LHR, AMS");
+  await expect(via).toBeFocused();
+  await expect(via).toHaveAttribute("aria-expanded", "false");
+  await via.fill("LHR, LG, KEF");
+  await via.evaluate((input) => input.setSelectionRange(6, 6));
+  await via.press("ArrowRight");
+  const replaced = await page
+    .locator("#via-suggestions [role=option]")
+    .evaluateAll((options) => options.map((o) => o.dataset.value));
+  assert.ok(replaced.includes("LHR, LGW, KEF"));
+  assert.ok(!replaced.includes("LHR, KEF, KEF"));
+  await page.getByRole("option", { name: /^LGW / }).click();
+  await expect(via).toHaveValue("LHR, LGW, KEF");
+  await expect(via).toBeFocused();
+  await expect(via).toHaveAttribute("aria-expanded", "false");
+  assert.equal(await via.evaluate((input) => input.selectionStart), 8);
+  await via.fill("LHR, ");
+  const choices = page.locator("#via-suggestions [role=option]");
+  assert.ok(await choices.count() > 1);
+  await via.press("ArrowUp");
+  await expect(via).toHaveAttribute("aria-activedescendant", await choices.last().getAttribute("id"));
+  await via.press("ArrowDown");
+  await expect(via).toHaveAttribute("aria-activedescendant", await choices.first().getAttribute("id"));
+  await via.press("Escape");
+  await expect(via).toHaveValue("LHR, ");
+  await expect(via).toHaveAttribute("aria-expanded", "false");
+  await via.press("ArrowDown");
+  await via.press("Tab");
+  await expect(via).not.toBeFocused();
+  await expect(via).toHaveValue("LHR, ");
+  await expect(via).toHaveAttribute("aria-expanded", "false");
+  for (const [value, error] of [
+    ["LHR, lhr", "must not repeat"],
+    ["LHR, FRA1", "Invalid airport code: FRA1"],
+    ["YYZ, AMS", "endpoint"],
+  ]) {
+    await via.fill(value);
+    await via.press("Enter");
+    await expect(page.locator("#error")).toContainText(error);
+    assert.deepEqual(
+      identity((await exported(page)).selection.legs),
+      identity(before.legs),
+    );
+  }
+  await page.locator("#search-details > summary").click();
+  await page.locator("#search-form [name=stops]").selectOption("3");
+  await via.fill("LHR, AMS, KEF, YUL");
+  await via.press("Enter");
+  await expect(page.locator("#error")).toContainText("Use fewer codes or allow permitted airport changes");
+  assert.deepEqual(
+    identity((await exported(page)).selection.legs),
+    identity(before.legs),
+  );
+});
 
 check(
   "connection bounds and avoided airports reach the engine",
@@ -449,9 +547,18 @@ check(
   "phone workspace remains usable without horizontal overflow",
   async (page) => {
     await open(page);
+    const via = page.getByLabel("Via airports", { exact: true });
+    await via.fill("LHR, A");
+    await page.getByRole("option", { name: /^AMS / }).tap();
+    await expect(via).toHaveValue("LHR, AMS");
+    await expect(via).toHaveAttribute("aria-expanded", "false");
     const views = page.getByRole("navigation", { name: "Workspace view" });
     for (const width of [320, 390, 736, 1180]) {
       await page.setViewportSize({ width, height: 900 });
+      await via.fill("LHR, ");
+      await expect(via).toHaveAttribute("aria-expanded", "true");
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await via.press("Escape");
       if (await views.isVisible()) {
         await views.getByRole("button", { name: "Journey", exact: true }).tap();
         await expect(
