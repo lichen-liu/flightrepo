@@ -88,9 +88,56 @@ class FlightUpdater(SQLiteConnection):
                 [t.model_dump() for t in transfers],
             )
 
-    def delete(self, provider: str, provider_id: str) -> int:
+    def delete(
+        self, provider: str, provider_id: str, *, expected: FlightRecord | None = None
+    ) -> int:
         with self.connect() as connection:
+            if expected is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                self._require_unchanged(connection, expected)
             return connection.execute(
                 "DELETE FROM flights WHERE provider=? AND provider_id=?",
                 (provider, provider_id),
+            ).rowcount
+
+    @staticmethod
+    def _require_unchanged(connection, original):
+        row = connection.execute(
+            "SELECT * FROM flights WHERE provider=? AND provider_id=?",
+            (original.provider, original.provider_id),
+        ).fetchone()
+        current = dict(row) if row is not None else None
+        if current is not None:
+            current["codeshares"] = json.loads(current["codeshares"])
+        if current is None or FlightRecord.model_validate(current) != original:
+            raise ValueError("Flight changed or was deleted; reload it before updating or deleting")
+
+    def update(self, original: FlightRecord, replacement: FlightRecord) -> int:
+        """Update an existing record only if it still matches the reviewed version."""
+        replacement = FlightRecord.model_validate(replacement.model_dump())
+        if (original.provider, original.provider_id) != (
+            replacement.provider,
+            replacement.provider_id,
+        ):
+            raise ValueError("provider and provider_id cannot change during an update")
+        data = replacement.model_dump(mode="json")
+        for field in (
+            "departure_scheduled",
+            "arrival_scheduled",
+            "departure_actual",
+            "arrival_actual",
+            "fetched_at",
+        ):
+            value = getattr(replacement, field)
+            data[field] = utc_text(value) if value else None
+        data["codeshares"] = json.dumps(data["codeshares"])
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_unchanged(connection, original)
+            assignments = ", ".join(
+                f"{field}=:{field}" for field in data if field not in ("provider", "provider_id")
+            )
+            return connection.execute(
+                f"UPDATE flights SET {assignments} WHERE provider=:provider AND provider_id=:provider_id",
+                data,
             ).rowcount

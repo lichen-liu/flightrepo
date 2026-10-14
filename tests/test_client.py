@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -40,7 +41,7 @@ def test_local_management_roundtrip_and_reset(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         client.run(["import-json", str(source)])
     assert store.stats()["flights"] == 1
-    client.run(["delete", "fixture", "one"])
+    client.run(["delete", "fixture", "one", "--yes"])
     assert store.stats()["flights"] == 0
     client.run(["import-json", str(exported)])
     with pytest.raises(ValueError):
@@ -151,3 +152,147 @@ def test_query_limits_rejected_before_database_creation(tmp_path, monkeypatch):
             ]
         )
     assert not settings.database_path.exists()
+
+
+def route_inputs(monkeypatch, values):
+    answers = iter(values)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+
+def test_create_route_saves_connected_flights(tmp_path, monkeypatch):
+    settings = Settings(database_path=tmp_path / "route.db")
+    monkeypatch.setattr(client, "get_settings", lambda: settings)
+    route_inputs(
+        monkeypatch,
+        [
+            "yyz",
+            "yul",
+            "AC1",
+            "2026-10-17T10:00:00-04:00",
+            "2026-10-17T11:00:00-04:00",
+            "y",
+            "cdg",
+            "AC2",
+            "2026-10-17T17:00:00Z",
+            "2026-10-18T00:00:00Z",
+            "n",
+            "y",
+        ],
+    )
+    client.LocalShell().onecmd("create-route")
+    records = FlightReader(settings.database_path).all_records()
+    assert len(records) == 2
+    assert {(r.origin_iata, r.destination_iata) for r in records} == {
+        ("YYZ", "YUL"),
+        ("YUL", "CDG"),
+    }
+    assert len({r.provider_id for r in records}) == 2
+    assert all(r.provider == "manual" for r in records)
+
+
+@pytest.mark.parametrize("ending", ["cancel", "n"])
+def test_create_route_discard_does_not_create_database(tmp_path, monkeypatch, ending):
+    settings = Settings(database_path=tmp_path / "missing.db")
+    monkeypatch.setattr(client, "get_settings", lambda: settings)
+    route_inputs(
+        monkeypatch,
+        ["YYZ", "YUL", "AC1", "2026-10-17T14:00:00Z", "2026-10-17T15:00:00Z", "n", ending],
+    )
+    client.run(["create-route"])
+    assert not settings.database_path.exists()
+
+
+def test_create_route_retries_invalid_connection(tmp_path, monkeypatch, capsys):
+    settings = Settings(database_path=tmp_path / "route.db")
+    monkeypatch.setattr(client, "get_settings", lambda: settings)
+    route_inputs(
+        monkeypatch,
+        [
+            "YYZ",
+            "YUL",
+            "AC1",
+            "2026-10-17T14:00:00Z",
+            "2026-10-17T15:00:00Z",
+            "y",
+            "CDG",
+            "AC2",
+            "2026-10-17T14:30:00Z",
+            "2026-10-18T00:00:00Z",
+            "CDG",
+            "AC2",
+            "2026-10-17T17:00:00Z",
+            "2026-10-18T00:00:00Z",
+            "n",
+            "y",
+        ],
+    )
+    client.run(["create-route"])
+    assert "previous arrival" in capsys.readouterr().out
+    assert len(FlightReader(settings.database_path).all_records()) == 2
+
+
+def test_overview_empty_database_and_missing_file(tmp_path, monkeypatch, capsys):
+    settings = Settings(database_path=tmp_path / "overview.db")
+    monkeypatch.setattr(client, "get_settings", lambda: settings)
+    with pytest.raises(sqlite3.OperationalError, match="unable to open database"):
+        client.run(["overview"])
+    assert not settings.database_path.exists()
+    client.run(["stats"])
+    capsys.readouterr()
+    client.run(["overview"])
+    text = capsys.readouterr().out
+    assert "Flights: 0" in text
+    assert "No flights yet" in text
+    client.run(["overview", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert result["routes"] == 0
+    assert result["latest_fetch"] is None
+    assert result["top_routes"] == []
+
+
+def test_overview_aggregates_coverage(tmp_path, monkeypatch, capsys):
+    settings = Settings(database_path=tmp_path / "overview.db")
+    monkeypatch.setattr(client, "get_settings", lambda: settings)
+    source = tmp_path / "flights.json"
+    source.write_text(
+        json.dumps(
+            [
+                dict(
+                    provider="manual",
+                    provider_id=str(index),
+                    flight_number="AC1",
+                    airline_iata="AC",
+                    origin_iata=origin,
+                    destination_iata=destination,
+                    departure_scheduled=f"2026-10-{17 + index}T14:00:00Z",
+                    arrival_scheduled=f"2026-10-{17 + index}T15:00:00Z",
+                    fetched_at="2026-10-14T12:00:00Z",
+                    status=status,
+                )
+                for index, (origin, destination, status) in enumerate(
+                    [
+                        ("YYZ", "YUL", "scheduled"),
+                        ("YYZ", "YUL", "cancelled"),
+                        ("YUL", "CDG", "scheduled"),
+                    ]
+                )
+            ]
+        )
+    )
+    client.run(["import-json", str(source)])
+    capsys.readouterr()
+    client.run(["overview", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert result["flights"] == 3
+    assert result["routes"] == 2
+    assert result["flight_airports"] == result["missing_airports"] == 3
+    assert result["airlines"] == 1
+    assert result["providers"] == {"manual": 3}
+    assert result["statuses"] == {"cancelled": 1, "scheduled": 2}
+    assert result["top_routes"][0] == {
+        "origin_iata": "YYZ",
+        "destination_iata": "YUL",
+        "flights": 2,
+    }
+    assert result["first_departure"].startswith("2026-10-17")
+    assert result["last_departure"].startswith("2026-10-19")
