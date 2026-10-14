@@ -108,7 +108,7 @@ def verified(path, item):
     return bool(expected) and saved.get("url") == item["url"] and sha256_file(path) == expected
 
 
-def download_asset(client, item, output):
+def download_asset(client, item, output, *, before_write=None):
     path = output / item["date"] / item["name"]
     path.parent.mkdir(parents=True, exist_ok=True)
     if verified(path, item):
@@ -132,6 +132,8 @@ def download_asset(client, item, output):
                 raise ValueError(f"Unexpected HTTP status {response.status_code}")
             with partial.open(mode) as target:
                 for chunk in response.iter_bytes(1024 * 1024):
+                    if before_write is not None:
+                        before_write(len(chunk))
                     if offset + len(chunk) > item["bytes"]:
                         raise ValueError("Download exceeds published asset size")
                     if shutil.disk_usage(output).free < len(chunk) + RESERVE_BYTES:
@@ -187,7 +189,9 @@ def validate_asset(item):
         raise ValueError("Invalid SHA-256")
 
 
-def download_manifest(manifest, output, client=None, *, budget_bytes=MAX_BUDGET_BYTES):
+def download_manifest(
+    manifest, output, client=None, *, budget_bytes=MAX_BUDGET_BYTES, before_write=None
+):
     if not 0 < budget_bytes <= MAX_BUDGET_BYTES:
         raise ValueError("Download budget must be at most 20 GiB")
     seen = set()
@@ -230,7 +234,7 @@ def download_manifest(manifest, output, client=None, *, budget_bytes=MAX_BUDGET_
     )
     try:
         for number, item in enumerate(manifest["assets"], 1):
-            result = download_asset(client, item, output)
+            result = download_asset(client, item, output, before_write=before_write)
             print(f"{number}/{len(manifest['assets'])} {result}: {item['name']}", flush=True)
     finally:
         if owns:

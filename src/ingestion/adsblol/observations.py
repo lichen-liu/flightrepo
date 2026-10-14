@@ -108,9 +108,8 @@ class JoinedFiles:
         return b"".join(chunks)
 
 
-def summarize_archives(paths, day, rules):
-    """Do not extract members; metadata-only catalogues omit heatmaps and all tracks."""
-    stats, observations = Counter(), []
+def archive_traces(paths):
+    """Yield one bounded aircraft member at a time; never extract tar paths to disk."""
     with ExitStack() as stack:
         files = [stack.enter_context(path.open("rb")) for path in paths]
         archive = stack.enter_context(tarfile.open(fileobj=JoinedFiles(files), mode="r|"))
@@ -119,21 +118,28 @@ def summarize_archives(paths, day, rules):
                 r"(?:\./)?traces/[0-9a-f]{2}/trace_full_[~0-9a-f]+\.json", member.name
             ):
                 continue
-            stats["traces"] += 1
             if member.size > MAX_TRACE_BYTES:
                 raise ValueError("Trace exceeds compressed size limit; day not committed")
             with archive.extractfile(member) as source:
                 compressed = source.read()
-            stats["compressed_trace_bytes"] += len(compressed)
             with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
                 raw = source.read(MAX_TRACE_BYTES + 1)
             if len(raw) > MAX_TRACE_BYTES:
                 raise ValueError("Trace exceeds decompressed size limit; day not committed")
-            observation, reason = summarize_trace(json.loads(raw), day, rules)
-            stats[reason] += 1
-            if observation is not None:
-                stats["retained_compressed_trace_bytes"] += len(compressed)
-                stats["positions"] += observation.positions
-                observations.append(observation)
+            yield json.loads(raw), len(compressed)
+
+
+def summarize_archives(paths, day, rules):
+    """Do not extract members; metadata-only catalogues omit heatmaps and all tracks."""
+    stats, observations = Counter(), []
+    for data, compressed_bytes in archive_traces(paths):
+        stats["traces"] += 1
+        stats["compressed_trace_bytes"] += compressed_bytes
+        observation, reason = summarize_trace(data, day, rules)
+        stats[reason] += 1
+        if observation is not None:
+            stats["retained_compressed_trace_bytes"] += compressed_bytes
+            stats["positions"] += observation.positions
+            observations.append(observation)
     stats["summary_json_bytes"] = sum(len(o.model_dump_json().encode()) for o in observations)
     return observations, dict(stats)

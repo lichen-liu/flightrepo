@@ -110,17 +110,20 @@ Store the few-character code on that flight leg and return it with search result
    airports, departure/arrival evidence and `aircraft_type_code`. The type comes
    from the same aircraft's observations for this movement, not an unrelated
    aircraft with a reused callsign.
-6. Discard the position data after processing. Index origin and departure time
-   for search; also index route/date as required by actual queries.
+6. Discard the position data after processing. Retain simple identity keys and
+   departure-date partitions. Additional serving indexes can be considered later
+   against measured query latency and their storage cost.
 
 A user search reads these local rows for the origin and departure window. The
 routing engine follows onward rows and checks airport continuity, connection
 times and the arrival horizon. Each resulting itinerary contains its legs and
 their stored aircraft type codes. No external lookup is needed for a result.
 
-Calling this compact flight database a catalogue is reasonable, but its contents
-must be the searchable flight facts. A catalogue containing only aircraft IDs,
-dates and external file URLs cannot power the search.
+Here, a catalogue means a small **key → downloadable itinerary URL** map.
+ADSB.lol's archive URLs address raw daily tar parts; the known-aircraft byte-range
+probe addresses position observations. Neither exposes independently downloadable
+itinerary records. That shortcut is unavailable for this source, so compact
+itinerary legs are extracted offline and retained locally.
 
 The current engine expects scheduled departure and arrival timestamps. ADSB.lol
 does not supply them. Before accepting these inferred legs into the serving
@@ -129,11 +132,13 @@ connection semantics—for example, arrival's upper bound plus minimum connectio
 time must precede departure's lower bound. Filling the scheduled fields with
 inferred takeoff and landing times would misrepresent the evidence.
 
-The normalized itinerary-to-search path is implemented and tested. The full
-ADSB-to-normalized-itinerary pipeline is not implemented or validated in this PR.
-Cross-midnight continuity, deduplication, callsign assignment, endpoint validation,
-coverage measurement and observed-time search remain required work. These
-observations supply historical movements, not future schedules or availability.
+The normalized itinerary-to-search path is implemented and tested. A separate
+offline daily extractor now produces compact observed itinerary-leg candidates,
+with restart-safe cross-midnight state, stable identities, endpoint checks and
+atomic daily receipts. These outputs are not inserted into scheduled serving
+fields. Independent accuracy/coverage validation and an observed-time serving
+contract remain required. The data describes historical movements, without
+future schedules or availability.
 
 ## Storage and download cost
 
@@ -151,22 +156,51 @@ Commit validated, deduplicated flight legs and a day completion receipt
 atomically, then remove that day's verified archive parts and advance to the
 next day. Failures leave the day resumable rather than marked complete. Serving
 must continue to distinguish observed movement times from scheduled/gate times.
-This end-to-end daily leg processor is planned; the existing whole-day probe
-produces aircraft-day summaries and does not yet implement this pipeline.
+`scripts/extract_adsblol_itineraries.py` implements this offline workflow. The
+older `probe_adsblol.py` remains a research summary tool, separate from extraction.
+
+```sh
+PYTHONPATH=src python scripts/extract_adsblol_itineraries.py catalogs/adsblol-2025.json \
+  --airports /path/to/airports.csv --filter fixtures/adsblol-commercial-filter.json \
+  --data-root var/adsblol-itineraries --download
+```
+
+The output `itineraries.db` stores three leg columns: identity key, departure
+date and compact itinerary JSON. It has **no additional SQL search indexes**;
+primary keys enforce unique identities. JSON includes callsign, airport pair,
+type code and observed timing bounds, together with inference provenance. It
+does not retain ICAO address or position samples on itinerary rows. Address is
+used internally to deduplicate identities and to track unfinished movements.
+Pending state stores airport/time evidence and callsign counts, not positions.
+
+Days are processed consecutively. A retry skips committed days without downloading
+their raw files again. Interrupted days keep their inputs and roll back their
+records/receipt/state, so rerunning the same command resumes safely. Changing
+airport/filter configuration requires a separate data root. The final day's
+`pending_airborne` count records unresolved arrivals; use `--boundary-manifest`
+with the next-year inventory to process January 1 while retaining only the
+selected year's departures. Completed movements with ambiguous airports,
+callsign changes, stale observations, unknown/excluded types or coverage gaps
+are not presented as accepted itinerary legs.
 
 Reserve roughly **4 GiB for one raw day and 1 GiB for write/processing headroom**,
 leaving a starting target of **15 GiB for durable flight facts**. These are
 planning allowances, not measured peak WAL/transaction usage. The worker must
 account for all retained facts, raw/partial downloads and temporary files within
-the same 20 GiB total, and pause before exceeding it. Durable flight facts cannot
+the same 20 GiB total, and pause when the budget cannot accommodate the next IO.
+`--budget-gib` selects a smaller allowance. Optional `--policy-db /path/flights.db`
+reads the existing admin quota dynamically during download writes and processing
+checks, so `cache quota` from another process applies without a restart. The
+worker also accounts for that database/cache if it is outside its data root.
+Durable flight facts cannot
 be LRU-retired if they are their only copy; the backend cache's LRU policy applies
 only to recoverable payloads. Raw files are disposable after the daily commit.
 
-Store each flight leg once. Origin/departure and route/departure indexes serve
-search; itineraries are assembled from those legs at query time instead of
-storing every possible connection combination. Coverage/calendar metadata is a
-small derived index over committed legs. Extra gzip copies of the same local
-database are unnecessary when the indexed facts fit the budget.
+Store each itinerary leg once; connections are assembled at query time instead
+of storing every possible combination. Scheduled serving retains its existing
+indexes, while offline extraction uses simple keys. Coverage/calendar metadata
+can be derived from the committed legs when observed-time serving is connected.
+Extra gzip copies of the same local database are unnecessary when facts fit the budget.
 
 ### Measured cost per flight leg
 
@@ -202,8 +236,34 @@ and airport metadata have their own response overhead.
 
 At the proposed profile, a 15 GiB facts allowance projects to about 27 million
 legs. This is a capacity estimate, not a count of usable 2025 flights. A complete
-day of validated leg extraction is still required to estimate year coverage,
-working-space peaks and final database size.
+day of independent accuracy validation is still required to estimate year coverage
+and decide whether the inferred evidence is sufficient for serving.
+
+### Complete-day offline extraction proof
+
+The new extractor processed the complete preferred December 30 archive:
+**3,196,867,584 bytes (2.977 GiB)**, containing 61,215 aircraft members. It retained
+**2,138 conservative itinerary-leg candidates** with 39 aircraft type codes.
+The committed SQLite file occupies **2,445,312 bytes (2.33 MiB)**, including
+configuration, receipts and the current midnight carry state. Both raw archive
+parts were deleted automatically after commit. Repeating the command returned
+`already_committed` without downloading anything.
+
+The itinerary table and its identity index occupy 1,077,248 bytes:
+**504 bytes per retained leg**, with mean compact JSON length 361 bytes. At that
+measured layout, 20 million similar legs would occupy approximately **9.39 GiB**
+before shared metadata and working space. This is a per-record capacity estimate,
+not a projection of how many usable legs exist in 2025.
+
+The filter excludes unknown/unlisted types and uses configured commercial callsign
+prefixes. Extraction also rejects discontinuous observations, missing/ambiguous
+endpoints and changing callsigns. Its 2,138 accepted candidates are a **partial,
+unverified movement dataset**, not complete airline coverage or scheduled flights.
+The day ended with 4,469 airborne carry states, of which 854 have origin evidence;
+these are not additional completed itineraries. Independent reference checks and
+the observed-time serving contract remain outstanding. The measured receipt,
+type counts and storage breakdown are recorded in
+[`catalogs/adsblol-extraction-pilot.json`](../catalogs/adsblol-extraction-pilot.json).
 
 ### Raw archive volume and earlier benchmark
 
