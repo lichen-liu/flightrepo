@@ -7,7 +7,7 @@ python3 installation/install.py
 ```
 
 The installer builds and installs a wheel into a dedicated virtual environment at
-`~/Library/Application Support/Flyji`. It downloads build and application
+`~/Library/Application Support/fyi.boboji.fly`. It downloads build and application
 dependencies, copies the serving/control scripts, and checks the installed app.
 It does not start either process or configure the public hostname.
 
@@ -18,12 +18,12 @@ installation does not fetch provider data or build a real flight database.
 
 | Location | Contents |
 |---|---|
-| `Flyji/venv/` | Installed application and dependencies |
-| `Flyji/manage.py`, `serve.py` | Process control and loopback server |
-| `Flyji/settings.json` | Hostname, port and explicit database path |
-| `Flyji/installation.json` | Source/build and dependency receipt |
-| `Flyji/jobs/`, `logs/` | Manual job definitions and operational logs |
-| `Flyji/tunnel-token` | Added separately through the hidden terminal prompt |
+| `fyi.boboji.fly/venv/` | Installed application and dependencies |
+| `fyi.boboji.fly/manage.py`, `serve.py` | Process control and loopback server |
+| `fyi.boboji.fly/settings.json` | Hostname, port and explicit database path |
+| `fyi.boboji.fly/installation.json` | Source/build and dependency receipt |
+| `fyi.boboji.fly/jobs/`, `logs/` | Manual job definitions and operational logs |
+| `fyi.boboji.fly/tunnel-token` | Added separately through the hidden terminal prompt |
 | `REPO/var/hosted/flights.db` | Persistent synthetic schedule data |
 
 The runtime is owner-only. Editing the checkout does not change its installed app
@@ -48,10 +48,16 @@ For a custom runtime outside the checkout, set the same absolute directory for
 installation and later commands:
 
 ```sh
-export FLYJI_RUNTIME_DIR="/absolute/private/path/Flyji"
+export FLYJI_RUNTIME_DIR="/absolute/private/path/fyi.boboji.fly"
 python3 installation/install.py
 ```
 
 The installer and launcher also accept `--runtime-dir PATH` instead of the
 environment variable; use the same path for each command. Only one Flyji instance
 can be managed per login session. The hosted database still lives under the project.
+
+Existing installations under `~/Library/Application Support/Flyji` can continue
+using that directory by setting `FLYJI_RUNTIME_DIR` to its absolute path for both
+installation and deployment commands. The new default does not move existing
+settings or tunnel tokens automatically. Stop the existing instance before
+installing in a different directory.

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-flyji_runtime="${FLYJI_RUNTIME_DIR-$HOME/Library/Application Support/Flyji}"
+flyji_runtime="${FLYJI_RUNTIME_DIR-$HOME/Library/Application Support/fyi.boboji.fly}"
 flyji_need_runtime=false
 flyji_command=""
 for flyji_argument in "$@"; do

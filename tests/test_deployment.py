@@ -98,6 +98,35 @@ def test_status_reports_configured_port(tmp_path, scripts, monkeypatch, capsys, 
     assert "PID: 123; process: python" in output if running else "PID: none" in output
 
 
+def test_default_runtime_uses_reverse_domain_directory(tmp_path, scripts, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("FLYJI_RUNTIME_DIR", raising=False)
+    root = tmp_path / "Library/Application Support/fyi.boboji.fly"
+    assert scripts.manage.runtime_root() == root
+    assert scripts.install.runtime_root() == root
+    assert scripts.serve.RUNTIME_ROOT.name == "fyi.boboji.fly"
+
+    (root / "venv/bin").mkdir(parents=True)
+    python = root / "venv/bin/python"
+    python.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n')
+    python.chmod(0o700)
+    (root / "manage.py").touch()
+    result = subprocess.run(
+        [str(REPO / "deployment/flyji"), "status"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == [str(python), str(root / "manage.py"), "status"]
+
+
+def test_runtime_environment_override_is_preserved(tmp_path, scripts, monkeypatch):
+    root = tmp_path / "custom-runtime"
+    monkeypatch.setenv("FLYJI_RUNTIME_DIR", str(root))
+    assert scripts.manage.runtime_root() == root
+    assert scripts.install.runtime_root() == root
+
+
 def test_synthetic_seed_is_absent_only_and_preserves_modified_facts(installed, scripts):
     database = Path(scripts.serve.read_settings(installed)["database_path"])
     with closing(sqlite3.connect(database)) as connection, connection:
