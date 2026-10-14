@@ -76,6 +76,28 @@ def installed(tmp_path, scripts):
     return root
 
 
+@pytest.mark.parametrize("running", [False, True])
+def test_status_reports_configured_port(tmp_path, scripts, monkeypatch, capsys, running):
+    root = runtime(tmp_path / "runtime", tmp_path / "flights.db")
+    settings = json.loads((root / "settings.json").read_text())
+    settings["port"] = 9123
+    private_file(root / "settings.json", json.dumps(settings).encode())
+    monkeypatch.setattr(
+        scripts.manage,
+        "launchctl",
+        lambda *args: SimpleNamespace(
+            returncode=0 if running else 1, stdout="\tstate = running\n\tpid = 123\n"
+        ),
+    )
+    monkeypatch.setattr(scripts.manage, "process_name", lambda pid: "python")
+
+    scripts.manage.status(root)
+
+    output = capsys.readouterr().out
+    assert "http://127.0.0.1:9123/ (configured port: 9123)" in output
+    assert "PID: 123; process: python" in output if running else "PID: none" in output
+
+
 def test_synthetic_seed_is_absent_only_and_preserves_modified_facts(installed, scripts):
     database = Path(scripts.serve.read_settings(installed)["database_path"])
     with closing(sqlite3.connect(database)) as connection, connection:

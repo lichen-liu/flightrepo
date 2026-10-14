@@ -61,8 +61,8 @@ Browser → Cloudflare HTTPS → cloudflared → Uvicorn/FastAPI at 127.0.0.1:80
 
 `check` exercises the local app, catalog and a synthetic YYZ → AMS → CDG query.
 `check --public` probes the configured HTTPS hostname instead. `status` reports the
-managed processes and private log location. The app serves the packaged frontend
-and read-only API; its database, logs and credentials are not web assets.
+configured local port and URL, managed processes and private log location. The app
+serves the packaged frontend and read-only API; its database, logs and credentials are not web assets.
 
 macOS launchd supervises the two processes after an explicit `start`. It restarts
 an exited process; closing the terminal leaves them running. There is no login
