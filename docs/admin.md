@@ -145,7 +145,9 @@ flyji> ingest status
 ```
 
 Configure prompts for the archive manifest, saved airport CSV, commercial filter
-and output directory. Settings persist in the selected admin database. `ingest`
+and working directory/output database. `--output-db var/hosted/flights.db` writes
+the observed facts to that exact file; without it, output defaults to
+`DATA_ROOT/itineraries.db`. Settings persist in the selected admin database. `ingest`
 without date flags prompts for a range, suggesting three days; each job is limited
 to `FLIGHT_MAX_QUERY_DAYS` (31 by default) and returns to the shell when finished.
 Use `help ingest` for equivalent flags, including `--budget-gib` (at most 20 GiB).
@@ -162,8 +164,9 @@ airport snapshot and filter unchanged for one output directory.
 Ctrl+C stops a job: the current uncommitted day rolls back, previous daily commits
 remain, and partial downloads can resume. `ingest status` lists committed ranges,
 record counts and older days needing a one-time boundary-summary refresh.
-ADSB output contains observed itinerary candidates in its own `itineraries.db`;
-it is not yet used by scheduled journey search. See [ingestion](ingestion.md).
+ADSB output contains observed itinerary candidates in `itinerary_legs`, including
+when the output shares the admin database. It is not yet used by scheduled
+journey search. See [ingestion](ingestion.md).
 
 `ingest --source csv` prompts for a licensed CSV, airport codes and dates;
 `ingest --source aerodatabox` prompts for airports and dates and uses the configured
@@ -203,8 +206,9 @@ flight facts.
 
 ## Secondary tools
 
-- `maintenance clear-data --yes` deletes flights, airports, and transfer rules
-  transactionally while preserving the SQLite file and schema. It only permits
+- `maintenance clear-data --yes` deletes flights, airports, transfer rules, and
+  any extracted observed facts/configuration/receipts/boundary state
+  transactionally while preserving the SQLite file, schema and ingestion profiles. It only permits
   databases under this installation's `var/`. Stop ingestion if it must stay empty.
 - `inspect tables` lists table definitions. `inspect query "SELECT ..." --limit 50`
   returns columns, row arrays, and a truncation indicator. Only a single read-only

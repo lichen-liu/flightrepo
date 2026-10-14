@@ -42,6 +42,7 @@ def extract_range(
     client=None,
     max_days=None,
     departure_year=None,
+    output_db=None,
 ):
     start = date.fromisoformat(start) if isinstance(start, str) else start
     end = date.fromisoformat(end) if isinstance(end, str) else end
@@ -71,14 +72,27 @@ def extract_range(
             download=download,
             client=client,
             departure_year=departure_year,
+            output_db=output_db,
         )
 
 
-def extraction_status(root):
-    database = Path(root).resolve() / "itineraries.db"
+def extraction_status(root, output_db=None):
+    root = Path(root).resolve()
+    database = Path(output_db).resolve() if output_db else root / "itineraries.db"
+    empty = {
+        "data_root": str(root),
+        "database": str(database),
+        "records": 0,
+        "days": [],
+        "ranges": [],
+    }
     if not database.is_file():
-        return {"data_root": str(Path(root).resolve()), "records": 0, "days": [], "ranges": []}
+        return empty
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='extraction_days'"
+        ).fetchone():
+            return empty
         days = [
             row[0] for row in connection.execute("SELECT day FROM extraction_days ORDER BY day")
         ]
@@ -98,7 +112,7 @@ def extraction_status(root):
         else:
             ranges.append({"start": label, "end": label, "days": 1})
     return {
-        "data_root": str(database.parent),
+        "data_root": str(root),
         "database": str(database),
         "records": records,
         "days": days,

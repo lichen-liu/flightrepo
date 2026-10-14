@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
@@ -186,11 +186,12 @@ def directory_bytes(root):
 
 
 class ExtractionBudget:
-    def __init__(self, root, limit=MAX_BUDGET_BYTES, policy_db=None):
+    def __init__(self, root, limit=MAX_BUDGET_BYTES, policy_db=None, *, output_db=None):
         if type(limit) is not int or not 0 < limit <= MAX_BUDGET_BYTES:
             raise ValueError("Extraction budget must be positive and at most 20 GiB")
         self.root, self.limit = root, limit
         self.policy_db = Path(policy_db).resolve() if policy_db else None
+        self.database = Path(output_db).resolve() if output_db else root / "itineraries.db"
 
     def ceiling(self):
         state = policy(self.policy_db, include_catalog=False) if self.policy_db else None
@@ -200,10 +201,12 @@ class ExtractionBudget:
         return min(self.limit, quota) if quota is not None else self.limit
 
     def used(self):
-        extra = (
-            database_bytes(self.policy_db)
-            if self.policy_db is not None and not self.policy_db.is_relative_to(self.root)
-            else 0
+        # Output and policy may be the same file; count its SQLite sidecars once.
+        databases = {self.database}
+        if self.policy_db is not None:
+            databases.add(self.policy_db)
+        extra = sum(
+            database_bytes(path) for path in databases if not path.is_relative_to(self.root)
         )
         if self.policy_db is not None:
             cache = cache_directory(self.policy_db)
@@ -238,7 +241,7 @@ def cleanup_raw(root, receipt):
 def _extract_day(
     root, day, assets, airports, rules, budget, *, download=False, client=None, departure_year=None
 ):
-    database = root / "itineraries.db"
+    database = budget.database
     lookup = AirportLookup(airports)
     # Set serialization is sorted explicitly for restart-stable configuration.
     config = canonical(
@@ -310,6 +313,7 @@ def _extract_day(
     else:
         receipt = None
     budget.check(1024**2)
+    database.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(database, timeout=10)) as connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(SCHEMA)
@@ -471,6 +475,7 @@ def extract_day(
     download=False,
     client=None,
     departure_year=None,
+    output_db=None,
 ):
     day = date.fromisoformat(day) if isinstance(day, str) else day
     assets = sorted(assets, key=lambda item: item["name"])
@@ -485,8 +490,14 @@ def extract_day(
         raise ValueError("Daily archive parts are incomplete or out of order")
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    budget = ExtractionBudget(root, limit, policy_db)
-    with file_mutex(root / ".extract.lock"):
+    budget = ExtractionBudget(root, limit, policy_db, output_db=output_db)
+    # Serialize by destination as well as scratch directory when these differ.
+    lock = (
+        budget.database.with_name(budget.database.name + ".extraction.lock")
+        if output_db
+        else root / ".extract.lock"
+    )
+    with file_mutex(root / ".extract.lock"), file_mutex(lock) if output_db else nullcontext():
         return _extract_day(
             root,
             day,

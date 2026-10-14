@@ -359,6 +359,11 @@ def parser():
     ingest.add_argument("--airport-catalog", type=Path)
     ingest.add_argument("--filter", dest="filter_path", type=Path)
     ingest.add_argument("--data-root", type=Path)
+    ingest.add_argument(
+        "--output-db",
+        type=Path,
+        help="ADSB itinerary SQLite destination; defaults to DATA_ROOT/itineraries.db",
+    )
     ingest.add_argument("--boundary-manifest", type=Path)
     ingest.add_argument("--budget-gib", type=float)
     return root

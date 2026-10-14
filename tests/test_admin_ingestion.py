@@ -11,6 +11,7 @@ from test_adsblol_legs import leg_trace
 from admin import client, ingestion
 from core.config import Settings
 from ingestion.adsblol.pipeline import extract_range
+from ingestion.updater import FlightUpdater
 
 
 @pytest.fixture
@@ -59,6 +60,8 @@ def pipeline(tmp_path, monkeypatch):
         str(selected_filter),
         "--data-root",
         str(root),
+        "--output-db",
+        str(root / "itineraries.db"),
     ]
     return database, root, downloads, flags
 
@@ -166,3 +169,37 @@ def test_guided_csv_import_upserts_across_airports_and_jobs(tmp_path, monkeypatc
             "SELECT COUNT(*),aircraft_type_code FROM flights"
         ).fetchone()
     assert count == 1 and kind == "A320"
+
+
+def test_hosted_destination_holds_observed_facts_and_reset_clears_resume_state(pipeline, capsys):
+    database, root, downloads, flags = pipeline
+    flags[flags.index("--output-db") + 1] = str(database)
+    client.run(flags)
+    capsys.readouterr()
+    client.LocalShell(database).onecmd("ingest status")
+    assert json.loads(capsys.readouterr().out)["records"] == 0
+    client.LocalShell(database).onecmd("ingest --start 2025-01-03 --end 2025-01-03")
+    assert not (root / "itineraries.db").exists()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM flights").fetchone()[0] == 0
+    capsys.readouterr()
+    client.LocalShell(database).onecmd("ingest status")
+    status = json.loads(capsys.readouterr().out)
+    assert status["records"] == 1 and status["database"] == str(database)
+    FlightUpdater(database).reset()
+    with sqlite3.connect(database) as connection:
+        for table in (
+            "itinerary_legs",
+            "extraction_days",
+            "extraction_boundaries",
+            "pending_movements",
+            "extraction_config",
+            "extraction_sources",
+        ):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0
+    # No stale day receipt skips the next ingestion after clearing the target.
+    client.LocalShell(database).onecmd("ingest --start 2025-01-03 --end 2025-01-03")
+    assert len(downloads) == 2
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0] == 1

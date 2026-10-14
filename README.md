@@ -48,6 +48,7 @@ The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) suppor
 separate short jobs: `ingest configure --source adsblol`, then
 `ingest --start 2025-01-01 --end 2025-01-03`. Later jobs can overlap or backfill
 other periods; completed days are skipped and stable keys prevent duplicates.
+Configure `--output-db var/hosted/<name>.db` to select an exact hosted destination.
 
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
@@ -86,7 +87,7 @@ AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, cac
 python -m admin maintenance clear-data --yes
 ```
 
-`maintenance clear-data` clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
+`maintenance clear-data` clears flights, airport metadata, transfer rules and any observed itinerary facts/resume state transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
 
 ## Development checks
 

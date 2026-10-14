@@ -68,7 +68,12 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
     if args.ingest_action == "status":
         if source == "adsblol":
             root = args.data_root or data.get("data_root") or path.with_name(path.name + ".adsblol")
-            emit({"source": source, **extraction_status(root)})
+            emit(
+                {
+                    "source": source,
+                    **extraction_status(root, args.output_db or data.get("output_db")),
+                }
+            )
         else:
             count = 0
             if path.is_file():
@@ -120,6 +125,12 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             args.data_root,
             "Extracted data directory",
             path.with_name(path.name + ".adsblol"),
+        )
+        field(
+            "output_db",
+            args.output_db,
+            "Itinerary output SQLite file",
+            Path(data["data_root"]) / "itineraries.db",
         )
         field(
             "boundary_manifest",
@@ -191,6 +202,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             limit=int(data["budget_gib"] * 2**30),
             policy_db=path,
             max_days=settings.max_query_days,
+            output_db=data["output_db"],
         ):
             if receipt["result"] == "already_committed":
                 skipped += 1
@@ -204,7 +216,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 "end": str(end),
                 "records_inserted": inserted,
                 "days_skipped": skipped,
-                **extraction_status(data["data_root"]),
+                **extraction_status(data["data_root"], data["output_db"]),
                 "serving": "observed candidates; scheduled serving database is separate",
             }
         )

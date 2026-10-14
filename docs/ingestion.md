@@ -72,7 +72,7 @@ daily URL inventory → download/verify → read one aircraft member
 5. Atomically commit legs, state and receipt; delete verified raw parts. Failed
    days roll back and keep inputs. Restarts skip committed days and finish cleanup.
 
-`itineraries.db` contains `itinerary_legs(key, departure_date, data)` plus config,
+The output database contains `itinerary_legs(key, departure_date, data)` plus config,
 daily receipts, boundary summaries and source/licence metadata. `departure_date` uses
 the lower UTC departure bound. Primary keys prevent duplicate identities; there
 are no additional SQL search indexes. Multi-leg journeys can be assembled from
@@ -109,6 +109,14 @@ The [admin shell](admin.md#ingest-in-separate-sessions) wraps this same pipeline
 dates or accepts `--start/--end`. Default suggested jobs span three days, with a
 31-day default maximum. `ingest status` reports coverage. Each day commits
 independently; cancellation keeps prior days and a later invocation resumes.
+
+Use `--output-db var/hosted/<name>.db` in either entry point for an exact SQLite
+destination; `--data-root` remains its disposable download/working directory.
+The default is `DATA_ROOT/itineraries.db`. The output may share the selected admin
+file without turning observed bounds into scheduled flight facts. Quota accounting
+includes output and SQLite sidecars once, even when it is also the policy file.
+`maintenance clear-data --yes` clears observed records and resume state too;
+confirm the destination and stop ingestion before clearing a real database.
 
 The **20 GiB** cap includes output, raw/partial files and SQLite sidecars.
 `--budget-gib` lowers it; `--policy-db /path/flights.db` reads the initialized

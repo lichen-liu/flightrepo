@@ -12,7 +12,7 @@ import pytest
 from test_adsblol import asset, rules
 from test_adsblol_legs import AIRPORTS, leg_trace
 
-from core.itinerary_cache import set_quota
+from core.itinerary_cache import database_bytes, set_quota
 from ingestion.adsblol import extraction
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.movements import AirportLookup, reduce_movement
@@ -189,6 +189,25 @@ def test_parallel_repeated_day_commits_only_once(tmp_path):
             receipts = list(pool.map(ingest, range(2)))
     assert sorted(receipt["result"] for receipt in receipts) == ["already_committed", "committed"]
     assert len(requests) == 1 and len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_external_output_database_is_budgeted_once_when_it_also_provides_policy(tmp_path):
+    root, target = tmp_path / "scratch", tmp_path / "hosted" / "flights.db"
+    FlightUpdater(target).initialize()
+    receipt, item = run(root, date(2025, 1, 1), [leg_trace()], output_db=target, policy_db=target)
+    assert receipt["counts"]["records_inserted"] == 1
+    assert not (root / "itineraries.db").exists()
+    budget = extraction.ExtractionBudget(root, policy_db=target, output_db=target)
+    assert budget.used() == extraction.directory_bytes(root) + database_bytes(target)
+    resumed = extract_day(
+        root, "2025-01-01", [item], AIRPORTS, rules(), output_db=target, policy_db=target
+    )
+    assert resumed["result"] == "already_committed"
+    set_quota(target, 0)
+    with pytest.raises(OSError, match="quota"):
+        run(root, date(2025, 1, 2), [], output_db=target, policy_db=target)
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0] == 1
 
 
 def test_conflicting_identity_rolls_back_refresh_without_replacing_existing_record(tmp_path):

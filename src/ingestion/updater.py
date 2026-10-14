@@ -107,6 +107,21 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM itinerary_cache_deleted")
             connection.execute("UPDATE itinerary_cache_policy SET source_url='' WHERE id=1")
             connection.execute("UPDATE itinerary_catalog_state SET url=NULL, data=NULL WHERE id=1")
+            # A hosted file may also hold observed itinerary facts and their resume state.
+            tables = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            for table in (
+                "itinerary_legs",
+                "extraction_days",
+                "pending_movements",
+                "extraction_boundaries",
+                "extraction_config",
+                "extraction_sources",
+            ):
+                if table in tables:
+                    connection.execute(f'DELETE FROM "{table}"')
 
     def create_airport(self, airport: Airport) -> None:
         """Insert one validated airport without replacing existing metadata."""

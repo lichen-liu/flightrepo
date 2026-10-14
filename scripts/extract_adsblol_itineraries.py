@@ -15,6 +15,9 @@ def main():
     parser.add_argument("--airports", type=Path, required=True, help="OurAirports CSV snapshot")
     parser.add_argument("--filter", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, default=Path("var/adsblol-itineraries"))
+    parser.add_argument(
+        "--output-db", type=Path, help="SQLite destination; defaults to DATA_ROOT/itineraries.db"
+    )
     parser.add_argument("--start", type=date.fromisoformat)
     parser.add_argument("--end", type=date.fromisoformat)
     parser.add_argument("--budget-gib", type=float, default=20)
@@ -49,6 +52,7 @@ def main():
         policy_db=args.policy_db,
         download=args.download,
         departure_year=year,
+        output_db=args.output_db,
     ):
         # Keep source receipts in the DB; print compact progress, not all URLs.
         print(
