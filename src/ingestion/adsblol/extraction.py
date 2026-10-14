@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import Counter
 from contextlib import closing, nullcontext
@@ -17,6 +18,7 @@ from ingestion.adsblol.archive import (
     validate_asset,
     verified,
 )
+from ingestion.adsblol.diagnostics import LOGGER, Diagnostics
 from ingestion.adsblol.movements import (
     AirportLookup,
     LeadingMovement,
@@ -109,12 +111,14 @@ def receipt_scope(receipt, saved_config):
     return [year] if year is not None else None
 
 
-def save_leg(connection, leg, counters):
+def save_leg(connection, leg, counters, *, diagnostics=None):
     identity = f"observed-itinerary-v1:{leg.icao_hex}:{leg.departure_lower.isoformat()}"
     key = hashlib.blake2b(identity.encode(), digest_size=16).hexdigest()
     encoded = canonical(leg.model_dump(mode="json", exclude={"icao_hex"}))
     old = connection.execute("SELECT data FROM itinerary_legs WHERE key=?", (key,)).fetchone()
     if old is not None and old[0] != encoded:
+        if diagnostics is not None:
+            diagnostics.count("invalid_records", "conflicting_itinerary_identity")
         raise ValueError("Conflicting itinerary identity; day not committed")
     inserted = connection.execute(
         "INSERT OR IGNORE INTO itinerary_legs VALUES (?,?,?)",
@@ -131,7 +135,7 @@ def boundary_parts(raw):
     return leading, tail
 
 
-def reconcile_boundaries(connection, hex_id, day, rules, counters):
+def reconcile_boundaries(connection, hex_id, day, rules, counters, *, diagnostics=None):
     prior, expected = [], day - timedelta(days=1)
     for label, raw in connection.execute(
         "SELECT day,data FROM extraction_boundaries WHERE icao_hex=? AND day<? ORDER BY day DESC",
@@ -156,7 +160,9 @@ def reconcile_boundaries(connection, hex_id, day, rules, counters):
         if current != expected:
             break
         leading, tail = boundary_parts(raw)
-        candidate, carry = advance_boundary(hex_id, carry, leading, tail, rules)
+        candidate, carry = advance_boundary(
+            hex_id, carry, leading, tail, rules, diagnostics=diagnostics
+        )
         if candidate is not None:
             origin_day = str(candidate.departure_lower.date())
             receipt = connection.execute(
@@ -169,7 +175,7 @@ def reconcile_boundaries(connection, hex_id, day, rules, counters):
                 else None
             )
             if scope is None or candidate.departure_lower.year in scope:
-                save_leg(connection, candidate, counters)
+                save_leg(connection, candidate, counters, diagnostics=diagnostics)
                 counters["boundary_legs_completed"] += 1
         # The first ground observation makes subsequent tail independent of earlier days.
         if (
@@ -239,7 +245,19 @@ def cleanup_raw(root, receipt):
 
 
 def _extract_day(
-    root, day, assets, airports, rules, budget, *, download=False, client=None, departure_year=None
+    root,
+    day,
+    assets,
+    airports,
+    rules,
+    budget,
+    counters,
+    diagnostics,
+    *,
+    download=False,
+    client=None,
+    departure_year=None,
+    refresh_diagnostics=False,
 ):
     database = budget.database
     lookup = AirportLookup(airports)
@@ -295,7 +313,13 @@ def _extract_day(
                 or departure_year is not None
                 and departure_year in previous_scope
             )
-            if scope_complete and (receipt.get("boundary_version") == 1 or not download):
+            if (
+                not refresh_diagnostics
+                and scope_complete
+                and (receipt.get("boundary_version") == 1 or not download)
+            ):
+                diagnostics.committed = True
+                diagnostics.phase = "cleanup"
                 cleanup_raw(root, receipt)
                 if sources != SOURCE_ROWS:
                     budget.check(16384)
@@ -323,6 +347,7 @@ def _extract_day(
         if saved_config is not None and not compatible_config(saved_config[0], config):
             raise ValueError("Extraction configuration changed; use a separate data root")
         output = root / "raw"
+        diagnostics.phase = "download"
         if download:
             other = budget.used() - directory_bytes(output) if output.exists() else budget.used()
             download_manifest(
@@ -346,15 +371,7 @@ def _extract_day(
         ]
         start_us = int(datetime.combine(day, time.min, UTC).timestamp()) * 1_000_000
         end_us = start_us + 86_400_000_000
-        counters, seen = (
-            Counter(
-                records_inserted=0,
-                records_already_present=0,
-                legs_completed=0,
-                boundary_legs_completed=0,
-            ),
-            set(),
-        )
+        seen = set()
         with connection:
             connection.execute("BEGIN IMMEDIATE")
             record_sources(connection)
@@ -378,23 +395,37 @@ def _extract_day(
                     )
             affected = set()
             current_tails = []
-            for data, compressed_bytes in archive_traces(paths):
+            diagnostics.phase = "archive_scan"
+            for data, compressed_bytes in archive_traces(paths, diagnostics=diagnostics):
                 counters["aircraft_members"] += 1
                 counters["raw_member_bytes"] += compressed_bytes
                 hex_id = data.get("icao")
-                if hex_id in seen:
-                    raise ValueError("Duplicate aircraft member; day not committed")
-                seen.add(hex_id)
-                leading = LeadingMovement(aircraft_type_code=data.get("t") or "")
+                diagnostics.aircraft_id = hex_id if isinstance(hex_id, str) else None
+                diagnostics.observation_index = None
+                if isinstance(hex_id, str) and re.fullmatch(r"[0-9a-f]{6}", hex_id):
+                    if hex_id in seen:
+                        diagnostics.count("invalid_records", "duplicate_aircraft_member")
+                        raise ValueError("Duplicate aircraft member; day not committed")
+                    seen.add(hex_id)
+                kind = data.get("t")
+                leading = LeadingMovement(aircraft_type_code=kind if isinstance(kind, str) else "")
+                diagnostics.phase = "reduce_movement"
                 legs, state, reason = reduce_movement(
-                    data, None, lookup, rules, start_us, end_us, leading=leading
+                    data,
+                    None,
+                    lookup,
+                    rules,
+                    start_us,
+                    end_us,
+                    leading=leading,
+                    diagnostics=diagnostics,
                 )
                 counters[reason] += 1
                 for leg in legs:
                     if departure_year is not None and leg.departure_lower.year != departure_year:
                         counters["legs_outside_departure_year"] += 1
                         continue
-                    save_leg(connection, leg, counters)
+                    save_leg(connection, leg, counters, diagnostics=diagnostics)
                     counters["legs_completed"] += 1
                     if counters["legs_completed"] % 100 == 0:
                         budget.check(1024**2)
@@ -419,6 +450,23 @@ def _extract_day(
                     current_tails.append((hex_id, state.model_dump_json()))
                 if counters["aircraft_members"] % 100 == 0:
                     budget.check(1024**2)
+                if counters["aircraft_members"] % 1000 == 0:
+                    LOGGER.info(
+                        "%s",
+                        canonical(
+                            {
+                                "event": "day_progress",
+                                "day": str(day),
+                                "committed": False,
+                                "counts_provisional": True,
+                                "counts": dict(counters),
+                                "diagnostics": diagnostics.summary(),
+                            }
+                        ),
+                    )
+                diagnostics.phase = "archive_scan"
+                diagnostics.aircraft_id = None
+                diagnostics.observation_index = None
             if last is None or str(day) >= last:
                 connection.execute("DELETE FROM pending_movements")
                 connection.executemany("INSERT INTO pending_movements VALUES (?,?)", current_tails)
@@ -447,18 +495,27 @@ def _extract_day(
                 "INSERT INTO extraction_days VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET receipt=excluded.receipt",
                 (str(day), selection, canonical(receipt)),
             )
+            diagnostics.phase = "reconcile_boundaries"
             for index, hex_id in enumerate(sorted(affected), 1):
-                reconcile_boundaries(connection, hex_id, day, rules, counters)
+                diagnostics.aircraft_id = hex_id
+                reconcile_boundaries(
+                    connection, hex_id, day, rules, counters, diagnostics=diagnostics
+                )
                 if index % 100 == 0:
                     budget.check(1024**2)
             counters["legs_completed"] += counters["boundary_legs_completed"]
             receipt["counts"] = dict(counters)
+            receipt["diagnostics"] = diagnostics.summary()
             connection.execute(
                 "UPDATE extraction_days SET receipt=? WHERE day=?", (canonical(receipt), str(day))
             )
             budget.check(1024**2)
+            diagnostics.phase = "commit"
+        diagnostics.committed = True
+        diagnostics.phase = "checkpoint"
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         budget.check()
+    diagnostics.phase = "cleanup"
     cleanup_raw(root, receipt)
     return {**receipt, "result": "committed", "database_bytes": database.stat().st_size}
 
@@ -476,6 +533,7 @@ def extract_day(
     client=None,
     departure_year=None,
     output_db=None,
+    refresh_diagnostics=False,
 ):
     day = date.fromisoformat(day) if isinstance(day, str) else day
     assets = sorted(assets, key=lambda item: item["name"])
@@ -498,14 +556,70 @@ def extract_day(
         else root / ".extract.lock"
     )
     with file_mutex(root / ".extract.lock"), file_mutex(lock) if output_db else nullcontext():
-        return _extract_day(
-            root,
-            day,
-            assets,
-            airports,
-            rules,
-            budget,
-            download=download,
-            client=client,
-            departure_year=departure_year,
+        counters = Counter(
+            records_inserted=0,
+            records_already_present=0,
+            legs_completed=0,
+            boundary_legs_completed=0,
         )
+        diagnostics = Diagnostics()
+        LOGGER.info(
+            "%s",
+            canonical({"event": "day_started", "day": str(day), "database": str(budget.database)}),
+        )
+        try:
+            receipt = _extract_day(
+                root,
+                day,
+                assets,
+                airports,
+                rules,
+                budget,
+                counters,
+                diagnostics,
+                download=download,
+                client=client,
+                departure_year=departure_year,
+                refresh_diagnostics=refresh_diagnostics,
+            )
+        except (Exception, KeyboardInterrupt) as error:
+            LOGGER.error(
+                "%s",
+                canonical(
+                    {
+                        "event": "day_failed",
+                        "day": str(day),
+                        "database": str(budget.database),
+                        "phase": diagnostics.phase,
+                        "committed": diagnostics.committed,
+                        "counts_provisional": not diagnostics.committed,
+                        "records_applied": counters["records_inserted"]
+                        if diagnostics.committed
+                        else 0,
+                        "aircraft_id": diagnostics.aircraft_id,
+                        "observation_index": diagnostics.observation_index,
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                        "counts": dict(counters),
+                        "diagnostics": diagnostics.summary(),
+                    }
+                ),
+            )
+            raise
+        LOGGER.info(
+            "%s",
+            canonical(
+                {
+                    "event": "day_finished",
+                    "day": str(day),
+                    "result": receipt["result"],
+                    "committed": True,
+                    "counts_historical": receipt["result"] == "already_committed",
+                    "records_applied": counters["records_inserted"],
+                    "counts": receipt["counts"],
+                    "diagnostics": receipt.get("diagnostics"),
+                    "diagnostics_missing": "diagnostics" not in receipt,
+                }
+            ),
+        )
+        return receipt

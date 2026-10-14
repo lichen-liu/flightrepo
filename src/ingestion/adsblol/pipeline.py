@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
+from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.filters import CommercialFilter
 from ingestion.adsblol.legs import airport_points
@@ -43,6 +44,7 @@ def extract_range(
     max_days=None,
     departure_year=None,
     output_db=None,
+    refresh_diagnostics=False,
 ):
     start = date.fromisoformat(start) if isinstance(start, str) else start
     end = date.fromisoformat(end) if isinstance(end, str) else end
@@ -73,6 +75,7 @@ def extract_range(
             client=client,
             departure_year=departure_year,
             output_db=output_db,
+            refresh_diagnostics=refresh_diagnostics,
         )
 
 
@@ -102,6 +105,21 @@ def extraction_status(root, output_db=None):
             for row in connection.execute("SELECT day,receipt FROM extraction_days")
             if json.loads(row[1]).get("boundary_version") != 1
         ]
+        reports = [
+            (label, json.loads(raw))
+            for label, raw in connection.execute(
+                "SELECT day,receipt FROM extraction_days ORDER BY day"
+            )
+        ]
+    totals, missing, latest = Diagnostics(), [], None
+    for label, report in reports:
+        diagnostic = report.get("diagnostics")
+        if not diagnostic or diagnostic.get("version") != 1:
+            missing.append(label)
+            continue
+        for group, values in diagnostic["counts"].items():
+            totals.groups[group].update(values)
+        latest = {"day": label, "counts": report["counts"], "diagnostics": diagnostic}
     ranges = []
     for label in days:
         if ranges and date.fromisoformat(label) == date.fromisoformat(
@@ -118,4 +136,10 @@ def extraction_status(root, output_db=None):
         "days": days,
         "ranges": ranges,
         "legacy_days_needing_boundary_refresh": sorted(legacy),
+        "diagnostics": {
+            "days_reported": len(reports) - len(missing),
+            "days_missing_diagnostics": missing,
+            "totals": totals.summary(),
+            "latest_day_report": latest,
+        },
     }

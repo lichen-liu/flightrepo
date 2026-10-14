@@ -118,6 +118,37 @@ includes output and SQLite sidecars once, even when it is also the policy file.
 `maintenance clear-data --yes` clears observed records and resume state too;
 confirm the destination and stop ingestion before clearing a real database.
 
+## Observability
+
+Daily receipts persist versioned aggregate diagnostics after raw cleanup;
+`ingest status` totals the latest successful receipt for each day and shows the
+latest report. Reasons distinguish excluded aircraft (type/military/identity),
+ignored samples (stale/invalid/outside-day/duplicate), interrupted airborne
+fragments (coverage gaps, invalid samples), and rejected landing candidates
+(missing/ambiguous endpoints, short duration, missing/changing/unselected
+callsign). Idle ground samples are not counted as rejected flights. Previous/next
+day deferrals and boundary joins/rejections have separate counters.
+
+These units are **aircraft members, sample rows and observed fragments/events**,
+not verified flights or loss percentages. A single real flight can produce
+multiple fragments. Deferrals are historical snapshots and can resolve later;
+accepted candidates can still be outside the selected departure-year scope.
+No raw position payloads are retained for diagnostics.
+
+Entry points emit JSON events on stderr: `day_started`, `day_progress` every
+1,000 members, `day_finished`, and `day_failed`. Progress is provisional;
+failed days report `committed`, `records_applied`, phase and available aircraft/
+row context. Rollbacks apply zero records even if provisional insertion counters
+were positive; checkpoint/cleanup failures can occur after a successful commit.
+Failed diagnostics are in logs, not a successful receipt. For a retained log:
+`python -m admin --db FILE ingest ... 2>> var/ingestion.log`.
+
+Old receipts without diagnostics remain unknown. `--refresh-diagnostics`
+explicitly reprocesses selected days using stable keys; the offline script also
+needs `--download` if raw inputs were removed. Normal repeats skip processing and
+label logged receipt counts as historical. Coverage still needs comparison with
+a trusted flight list; these diagnostics cannot prove lossless extraction.
+
 The **20 GiB** cap includes output, raw/partial files and SQLite sidecars.
 `--budget-gib` lowers it; `--policy-db /path/flights.db` reads the initialized
 admin DB's live `cache quota` and includes its storage, capped by the CLI limit.

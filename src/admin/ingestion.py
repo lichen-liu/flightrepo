@@ -203,6 +203,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
             policy_db=path,
             max_days=settings.max_query_days,
             output_db=data["output_db"],
+            refresh_diagnostics=args.refresh_diagnostics,
         ):
             if receipt["result"] == "already_committed":
                 skipped += 1

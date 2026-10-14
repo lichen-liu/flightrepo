@@ -163,10 +163,23 @@ airport snapshot and filter unchanged for one output directory.
 
 Ctrl+C stops a job: the current uncommitted day rolls back, previous daily commits
 remain, and partial downloads can resume. `ingest status` lists committed ranges,
-record counts and older days needing a one-time boundary-summary refresh.
+record counts, aggregate extraction diagnostics, the latest daily report, and
+older days needing a boundary-summary/diagnostics refresh.
 ADSB output contains observed itinerary candidates in `itinerary_legs`, including
 when the output shares the admin database. It is not yet used by scheduled
 journey search. See [ingestion](ingestion.md).
+
+Daily receipts show exclusion/rejection reasons, quality interruptions, ignored
+observations and overnight deferrals. Structured JSON logs on stderr report start,
+progress every 1,000 aircraft members, completion and failures. Failure logs include
+phase, aircraft ID/row index when available, and whether output was committed.
+Provisional counts on a rolled-back day do not represent saved records. These are
+aircraft/sample/segment events, not a measured count of missing real flights.
+`ingest --start DATE --end DATE --refresh-diagnostics` explicitly reprocesses
+selected days, downloading deleted raw inputs again while deduplicating legs.
+Older receipts without diagnostics are reported as unknown; normal repeats skip
+the day and do not inflate aggregates. Reports are historical processing snapshots;
+an overnight deferral can later resolve without changing the earlier snapshot.
 
 `ingest --source csv` prompts for a licensed CSV, airport codes and dates;
 `ingest --source aerodatabox` prompts for airports and dates and uses the configured

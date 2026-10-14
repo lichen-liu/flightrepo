@@ -7,12 +7,15 @@ import json
 import re
 import shutil
 import tarfile
+import zlib
 from contextlib import ExitStack
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+
+from ingestion.adsblol.diagnostics import count
 
 RESERVE_BYTES = 2**30
 MAX_BUDGET_BYTES = 20 * 2**30
@@ -38,25 +41,42 @@ class JoinedFiles:
         return b"".join(chunks)
 
 
-def archive_traces(paths):
+def archive_traces(paths, *, diagnostics=None):
     """Yield one bounded aircraft member at a time; never extract tar paths to disk."""
     with ExitStack() as stack:
         files = [stack.enter_context(path.open("rb")) for path in paths]
         archive = stack.enter_context(tarfile.open(fileobj=JoinedFiles(files), mode="r|"))
         for member in archive:
+            count(diagnostics, "archive_members", "examined")
             if not member.isfile() or not re.fullmatch(
                 r"(?:\./)?traces/[0-9a-f]{2}/trace_full_[~0-9a-f]+\.json", member.name
             ):
+                count(diagnostics, "archive_members", "ignored_non_trace")
                 continue
+            count(diagnostics, "archive_members", "aircraft_trace")
             if member.size > MAX_TRACE_BYTES:
+                count(diagnostics, "invalid_records", "oversized_compressed_member")
                 raise ValueError("Trace exceeds compressed size limit; day not committed")
             with archive.extractfile(member) as source:
                 compressed = source.read()
-            with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
-                raw = source.read(MAX_TRACE_BYTES + 1)
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
+                    raw = source.read(MAX_TRACE_BYTES + 1)
+            except (OSError, EOFError, zlib.error):
+                count(diagnostics, "invalid_records", "invalid_gzip_member")
+                raise
             if len(raw) > MAX_TRACE_BYTES:
+                count(diagnostics, "invalid_records", "oversized_decompressed_member")
                 raise ValueError("Trace exceeds decompressed size limit; day not committed")
-            yield json.loads(raw), len(compressed)
+            try:
+                data = json.loads(raw)
+            except (ValueError, UnicodeError):
+                count(diagnostics, "invalid_records", "invalid_json_member")
+                raise
+            if not isinstance(data, dict):
+                count(diagnostics, "invalid_records", "invalid_member_shape")
+                raise ValueError("Aircraft member must be a JSON object")
+            yield data, len(compressed)
 
 
 def days_in_year(year):

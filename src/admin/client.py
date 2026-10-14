@@ -32,6 +32,7 @@ from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
+from ingestion.adsblol.diagnostics import configure_logging
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
 
@@ -366,6 +367,11 @@ def parser():
     )
     ingest.add_argument("--boundary-manifest", type=Path)
     ingest.add_argument("--budget-gib", type=float)
+    ingest.add_argument(
+        "--refresh-diagnostics",
+        action="store_true",
+        help="reprocess selected ADSB days to refresh diagnostic receipts; may download raw inputs again",
+    )
     return root
 
 
@@ -605,6 +611,7 @@ class LocalShell(cmd.Cmd):
 
 
 def main(arguments=None):
+    configure_logging()
     try:
         run(sys.argv[1:] if arguments is None else arguments)
     except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as error:

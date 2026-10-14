@@ -6,10 +6,12 @@ import math
 from datetime import date, timedelta
 from pathlib import Path
 
+from ingestion.adsblol.diagnostics import configure_logging
 from ingestion.adsblol.pipeline import extract_range, inventory
 
 
 def main():
+    configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--airports", type=Path, required=True, help="OurAirports CSV snapshot")
@@ -25,6 +27,11 @@ def main():
         "--policy-db", type=Path, help="optional initialized admin DB providing a live quota"
     )
     parser.add_argument("--download", action="store_true", help="download missing daily raw inputs")
+    parser.add_argument(
+        "--refresh-diagnostics",
+        action="store_true",
+        help="reprocess selected days and refresh their diagnostic receipts",
+    )
     parser.add_argument(
         "--boundary-manifest",
         type=Path,
@@ -53,6 +60,7 @@ def main():
         download=args.download,
         departure_year=year,
         output_db=args.output_db,
+        refresh_diagnostics=args.refresh_diagnostics,
     ):
         # Keep source receipts in the DB; print compact progress, not all URLs.
         print(
