@@ -153,13 +153,13 @@ def test_airport_catalog_cli_roundtrip(tmp_path, monkeypatch, capsys):
     }
     source = tmp_path / "catalog.json"
     source.write_text(json.dumps(catalog))
-    client.run(["import-airports", str(source)])
+    client.run(["airports", "import", str(source)])
     capsys.readouterr()
     client.run(["airports", "--query", "LHR"])
     airport = json.loads(capsys.readouterr().out)
     assert len(airport) == 1 and airport[0]["iata"] == "LHR"
     exported = tmp_path / "exported.json"
-    client.run(["export-airports", str(exported)])
+    client.run(["airports", "export", str(exported)])
     data = json.loads(exported.read_text())
     assert data["transfers"] == catalog["transfers"]
     assert sorted(data["airports"], key=lambda a: a["iata"]) == sorted(
@@ -167,5 +167,5 @@ def test_airport_catalog_cli_roundtrip(tmp_path, monkeypatch, capsys):
     )
     source.write_text(json.dumps({"wrong": []}))
     with pytest.raises(ValueError, match="airports array"):
-        client.run(["import-airports", str(source)])
+        client.run(["airports", "import", str(source)])
     assert FlightReader(settings.database_path).airport_catalog() == data

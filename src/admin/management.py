@@ -3,6 +3,7 @@
 import sqlite3
 
 from core.models import FlightRecord
+from core.routing.models import RouteSearchRequest
 from core.storage import SQLiteConnection
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
@@ -119,8 +120,6 @@ def query_database(path, sql, limit):
 
 
 def route_request():
-    from core.routing.models import RouteSearchRequest
-
     print("Search stored flights. Timestamps require Z or an offset; cancel aborts.")
     while True:
         try:
@@ -130,7 +129,7 @@ def route_request():
                 "departure_start": ask("Departure window start"),
                 "departure_end": ask("Departure window end (exclusive)"),
                 "horizon_end": ask("Arrival deadline"),
-                "via_airport": ask("Via airport (optional)", "-"),
+                "via_airport": ask("Via airports in order (space separated; optional)", "-"),
                 "avoid_airports": ask("Avoid airports (space separated)", "-"),
                 "max_legs": ask("Maximum legs", "3"),
                 "minimum_connection_minutes": ask("Minimum connection minutes", "45"),
@@ -140,9 +139,10 @@ def route_request():
                 ),
                 "limit": ask("Maximum results", "20"),
                 "allow_airport_change": yes_no("Allow same-city airport changes?"),
-                "trace": yes_no("Include routing trace?"),
             }
-            data["via_airport"] = None if data["via_airport"] == "-" else data["via_airport"]
+            data["via_airport"] = (
+                None if data["via_airport"] == "-" else data["via_airport"].split()
+            )
             data["avoid_airports"] = (
                 [] if data["avoid_airports"] == "-" else data["avoid_airports"].split()
             )

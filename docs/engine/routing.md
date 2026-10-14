@@ -76,18 +76,18 @@ The search, local-time search and rebuild endpoints accept `via_airport` as eith
 
 The browser asks for departure dates only. Local-time search resolves that window in the origin's timezone and defaults to an arrival horizon seven elapsed days after its end. Destination timezone metadata is optional for this default. Explicit `arrival_by_local` remains supported by the local API and requires destination timezone metadata. A 31-day window is an elapsed-time bound; an inclusive 31-date range spanning a fall-back clock change can exceed it and is rejected.
 
-Legacy `GET /v1/itineraries` retains its list shape and default fewest-legs ranking. It now delegates to the shared engine. It accepts optional `horizon_end`; the documented default is **end + 7 days**, an inclusive arrival bound, independent of the connection allowance. This replaces the old erroneous minute-to-hour fetch-horizon coupling without assuming flight durations equal layover bounds. If a capped search cannot establish the list ranking, it returns **409 `incomplete_search`** with diagnostics and directs clients to the richer POST endpoint. This is an intentional compatibility behavior change. CLI `itineraries --horizon` supplies the same explicit arrival bound.
+Legacy `GET /v1/itineraries` retains its list shape and default fewest-legs ranking. It now delegates to the shared engine. It accepts optional `horizon_end`; the documented default is **end + 7 days**, an inclusive arrival bound, independent of the connection allowance. This replaces the old erroneous minute-to-hour fetch-horizon coupling without assuming flight durations equal layover bounds. If a capped search cannot establish the list ranking, it returns **409 `incomplete_search`** with diagnostics and directs clients to the richer POST endpoint. This is an intentional compatibility behavior change. The unified CLI `search --horizon` supplies an explicit arrival bound and always returns the richer search result with diagnostics.
 
 Naive/mixed-offset query times now return 422 at the HTTP boundary for flights/routes/itineraries, instead of leaking a Python comparison/reader error. Flight imports reject malformed airport codes and empty provider identities. Existing valid legacy flight rows remain queryable without airport metadata.
 
-The updater initializes the additive catalog/index schema. For an existing installation, run `.venv/bin/python -m admin stats` once before using the new reader. All local DBs and replay/debug JSON remain under ignored `var/`.
+The updater initializes the additive catalog/index schema. For an existing installation, run `.venv/bin/python -m admin maintenance init` once before using the new reader. All local DBs and replay/debug JSON remain under ignored `var/`.
 
 ## Try locally
 
 ```sh
 .venv/bin/python scripts/seed_connection_demo.py
-FLIGHT_DATABASE_PATH=var/connections-demo.db .venv/bin/python -m admin search-itineraries var/route-search-request.json --snapshot-out var/routing-replay.json
-.venv/bin/python -m admin replay-routing var/routing-replay.json
+FLIGHT_DATABASE_PATH=var/connections-demo.db .venv/bin/python -m admin search --request var/route-search-request.json --snapshot-out var/routing-replay.json
+.venv/bin/python -m admin debug replay var/routing-replay.json
 ```
 
 The seed creates the separate twelve-flight demo DB and both request examples, leaving normal flight facts intact. Change ranking, arrival horizon, avoidance, `trace` or `limits` in `var/route-search-request.json`. For a budget experiment use `"limits": {"max_candidates": 1}` and inspect `diagnostics`.
@@ -95,8 +95,8 @@ The seed creates the separate twelve-flight demo DB and both request examples, l
 For continuation replay:
 
 ```sh
-FLIGHT_DATABASE_PATH=var/connections-demo.db .venv/bin/python -m admin rebuild var/connection-request.json --snapshot-out var/connection-replay.json
-.venv/bin/python -m admin replay-routing var/connection-replay.json
+FLIGHT_DATABASE_PATH=var/connections-demo.db .venv/bin/python -m admin debug continue-route var/connection-request.json --snapshot-out var/connection-replay.json
+.venv/bin/python -m admin debug replay var/connection-replay.json
 ```
 
 Add the exact `lgw-ams-overnight` demo choice to the rebuild request to inspect the next-day final flight. Replay prints `matches_saved_result`; modifying the saved facts/result is detectable. Files are internal debugging data, not another storage service.

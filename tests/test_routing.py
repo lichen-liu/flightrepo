@@ -680,7 +680,7 @@ def test_replay_cli_never_opens_database(tmp_path, monkeypatch, capsys):
         "get_settings",
         lambda: (_ for _ in ()).throw(AssertionError("DB settings should not be read")),
     )
-    admin.run(["replay-routing", str(saved)])
+    admin.run(["debug", "replay", str(saved)])
     assert json.loads(capsys.readouterr().out)["matches_saved_result"]
 
 
@@ -1593,5 +1593,5 @@ def test_ordered_via_replay_preserves_list_and_detects_changed_order(tmp_path, m
     for i, saved in enumerate(documents):
         path = tmp_path / f"ordered-replay-{i}.json"
         path.write_text(json.dumps(saved))
-        admin.run(["replay-routing", str(path)])
+        admin.run(["debug", "replay", str(path)])
         assert json.loads(capsys.readouterr().out)["matches_saved_result"]

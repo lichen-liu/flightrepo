@@ -94,7 +94,9 @@ def main():
         if args.database is None:
             # Exercise the installed CLI and initialize only a temporary, empty DB.
             command = environment_path / ("Scripts/flyji.exe" if os.name == "nt" else "bin/flyji")
-            subprocess.run([str(command), "stats"], cwd=directory, env=environment, check=True)
+            subprocess.run(
+                [str(command), "maintenance", "init"], cwd=directory, env=environment, check=True
+            )
         run("-c", PROBE)
     report = {"wheel": wheel.name, "installed_package_probe_passed": True}
     if args.output:

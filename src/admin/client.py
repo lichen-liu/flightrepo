@@ -16,7 +16,6 @@ import httpx
 from admin.management import ask, delete_flight, edit_flight, query_database, route_request, yes_no
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
-from core.itineraries import build_itineraries
 from core.models import FlightRecord, FlightStatus, IngestRequest
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
@@ -57,10 +56,10 @@ def output(value):
     print(json.dumps(value, default=encode, indent=2))
 
 
-def reset_database(path):
+def clear_database(path):
     path = path.resolve()
     if not path.is_relative_to(LOCAL_DATA_DIR.resolve()):
-        raise ValueError("reset only supports data files under the project's var directory")
+        raise ValueError("clear-data only supports data files under the project's var directory")
     FlightUpdater(path).reset()
     return FlightReader(path).stats()
 
@@ -68,6 +67,7 @@ def reset_database(path):
 def create_route(path):
     """Collect a connected sequence, then atomically save its flight facts."""
     print(f"Database: {path.resolve()}")
+    print("This saves connected flight records; journeys are calculated from them.")
     print("Enter one flight per leg. Timestamps need Z or an offset such as -04:00.")
     print("Type cancel at any prompt to discard the entire route.")
 
@@ -119,7 +119,7 @@ def create_route(path):
 
 
 def print_overview(summary):
-    print(f"Database: {summary['data_file']}")
+    print(f"Database: {summary['data_file']} ({summary['journal_mode']} mode)")
     print(
         f"Flights: {summary['flights']:,}   Routes: {summary['routes']:,}   "
         f"Airlines: {summary['airlines']:,}"
@@ -146,131 +146,175 @@ def print_overview(summary):
 
 
 def parser():
-    root = argparse.ArgumentParser(description="Flyji local development client")
+    root = argparse.ArgumentParser(
+        description="Flyji local database admin. With no command, start the interactive shell."
+    )
     root.add_argument(
         "--db", type=Path, help="SQLite file; overrides FLIGHT_DATABASE_PATH and .env"
     )
-    root.set_defaults(command="shell")
-    commands = root.add_subparsers(dest="command")
-    commands.add_parser("shell", help="interactive local client")
-    commands.add_parser("stats", help="data file counts and location")
-    overview = commands.add_parser("overview", help="at-a-glance database coverage and freshness")
+    commands = root.add_subparsers(dest="command", metavar="COMMAND")
+    db = commands.add_parser("db", help="show or select a SQLite database")
+    db.add_argument("target", type=Path, nargs="?")
+    db.add_argument("--create", action="store_true", help="explicitly initialize the Flyji schema")
+    overview = commands.add_parser(
+        "overview", help="database coverage, counts and fetch timestamps"
+    )
     overview.add_argument("--json", action="store_true", help="print structured JSON")
-    commands.add_parser("create-route", help="enter and save a route interactively, leg by leg")
-    commands.add_parser("tables", help="list SQLite tables and their definitions")
-    sql = commands.add_parser("query", help="run a bounded read-only SQL SELECT")
-    sql.add_argument("sql")
-    sql.add_argument("--limit", type=query_limit, default=20)
-    browse = commands.add_parser("list-flights", help="browse flights without a date window")
-    browse.add_argument("--origin", type=airport_code)
-    browse.add_argument("--destination", type=airport_code)
-    browse.add_argument("--provider")
-    browse.add_argument("--status", choices=list(FlightStatus))
-    browse.add_argument("--limit", type=query_limit, default=20)
-    for name in ("show", "edit", "update"):
-        record = commands.add_parser(
+    commands.add_parser("create-route", help="enter connected flight records, preview and save")
+
+    flights = commands.add_parser("flights", help="browse flight records with optional filters")
+    flights.add_argument("--origin", type=airport_code)
+    flights.add_argument("--destination", type=airport_code)
+    flights.add_argument("--provider")
+    flights.add_argument(
+        "--status", choices=list(FlightStatus), help="default: all statuses, including cancelled"
+    )
+    flights.add_argument("--start", type=timestamp, help="inclusive scheduled departure cutoff")
+    flights.add_argument("--end", type=timestamp, help="exclusive scheduled departure cutoff")
+    flights.add_argument("--limit", type=query_limit, default=20)
+
+    flight = commands.add_parser(
+        "flight", help="show, edit or delete one flight by provider and ID"
+    )
+    actions = flight.add_subparsers(dest="flight_action", required=True)
+    for name in ("show", "edit", "delete"):
+        record = actions.add_parser(
             name,
             help={
-                "show": "view a flight by provider and ID",
-                "edit": "edit a flight interactively",
-                "update": "replace an existing flight from a single JSON object",
+                "show": "view a flight record",
+                "edit": "edit interactively or replace from JSON",
+                "delete": "preview and confirm deletion of one flight",
             }[name],
         )
         record.add_argument("provider")
         record.add_argument("provider_id")
-        if name == "update":
-            record.add_argument("path", type=Path)
-    reset = commands.add_parser("reset", help="clear the local SQLite database")
-    reset.add_argument("--yes", action="store_true", help="confirm deletion")
-    for name in ("flights", "routes", "itineraries"):
-        query = commands.add_parser(name)
-        query.add_argument("--start", required=True, type=timestamp)
-        query.add_argument("--end", required=True, type=timestamp)
-        query.add_argument("--origin", required=name == "itineraries")
-        query.add_argument("--destination", required=name == "itineraries")
-        query.add_argument("--limit", type=query_limit, default=20)
-        if name == "flights":
-            query.add_argument("--include-cancelled", action="store_true")
-        if name == "itineraries":
-            query.add_argument("--max-legs", type=int, choices=(1, 2, 3), default=2)
-            query.add_argument("--min-connection", type=int, default=45)
-            query.add_argument("--max-connection", type=int, default=360)
-            query.add_argument(
-                "--horizon",
-                type=timestamp,
-                help="inclusive arrival cutoff; default end + 7 days",
+        if name == "edit":
+            record.add_argument(
+                "--file",
+                type=Path,
+                help="replace from a complete FlightRecord JSON object without prompts",
             )
-    for name in ("import-json", "export-json"):
-        command = commands.add_parser(name)
-        command.add_argument("path", type=Path)
-    metadata = commands.add_parser(
-        "import-airports", help="upsert airport and directed transfer metadata JSON"
-    )
-    metadata.add_argument("path", type=Path)
-    export_metadata = commands.add_parser(
-        "export-airports", help="export the airport and directed transfer catalog JSON"
-    )
-    export_metadata.add_argument("path", type=Path)
-    airport_query = commands.add_parser("airports", help="find airports by exact code or name")
-    airport_query.add_argument("--query", default="")
-    airport_query.add_argument("--city")
-    airport_query.add_argument("--limit", type=query_limit, default=100)
-    rebuild = commands.add_parser(
-        "rebuild", help="calculate a plan from a request JSON; no plan is saved"
-    )
-    rebuild.add_argument("path", type=Path)
-    rebuild.add_argument(
-        "--snapshot-out",
-        type=Path,
-        help="save request, scoped facts and result for offline replay",
-    )
+        if name == "delete":
+            record.add_argument("--yes", action="store_true", help="skip preview and confirmation")
+
     search = commands.add_parser(
-        "search-itineraries", help="rank routes from request JSON with diagnostics"
+        "search", help="search journeys using prompts, flags or --request FILE"
     )
-    search.add_argument("path", type=Path)
-    search.add_argument("--snapshot-out", type=Path)
-    wizard = commands.add_parser(
-        "search-route", help="guided advanced routing search of stored flights"
+    search.add_argument(
+        "--request", type=Path, help="full RouteSearchRequest JSON; exclusive with search flags"
     )
-    wizard.add_argument("--snapshot-out", type=Path)
-    search_flags = commands.add_parser(
-        "search", help="advanced routing query with command-line options"
+    search.add_argument("--origin")
+    search.add_argument("--destination")
+    search.add_argument("--start", type=timestamp)
+    search.add_argument("--end", type=timestamp)
+    search.add_argument("--horizon", type=timestamp)
+    search.add_argument("--via", nargs="+", help="required intermediate airports, in order")
+    search.add_argument("--avoid", nargs="+", help="airports to avoid")
+    search.add_argument("--max-legs", type=int)
+    search.add_argument("--min-connection", type=int)
+    search.add_argument("--max-connection", type=int)
+    search.add_argument("--allow-airport-change", action="store_true", default=None)
+    search.add_argument(
+        "--ranking", choices=("fewest_legs", "shortest_elapsed", "earliest_arrival")
     )
-    search_flags.add_argument("--origin", required=True)
-    search_flags.add_argument("--destination", required=True)
-    search_flags.add_argument("--start", required=True, type=timestamp)
-    search_flags.add_argument("--end", required=True, type=timestamp)
-    search_flags.add_argument("--horizon", required=True, type=timestamp)
-    search_flags.add_argument("--via")
-    search_flags.add_argument("--avoid", nargs="*", default=[])
-    search_flags.add_argument("--max-legs", type=int, default=3)
-    search_flags.add_argument("--min-connection", type=int, default=45)
-    search_flags.add_argument("--max-connection", type=int, default=360)
-    search_flags.add_argument("--allow-airport-change", action="store_true")
-    search_flags.add_argument(
-        "--ranking",
-        choices=("fewest_legs", "shortest_elapsed", "earliest_arrival"),
-        default="fewest_legs",
+    search.add_argument("--limit", type=int)
+    search.add_argument(
+        "--trace", action="store_true", default=None, help="include developer diagnostic events"
     )
-    search_flags.add_argument("--limit", type=int, default=20)
-    search_flags.add_argument("--trace", action="store_true")
-    search_flags.add_argument("--snapshot-out", type=Path)
-    replay_command = commands.add_parser(
-        "replay-routing", help="recalculate a saved snapshot without opening a DB"
+    search.add_argument("--snapshot-out", type=Path, help="save facts and results for debug replay")
+
+    airports = commands.add_parser(
+        "airports", help="find airports, or import/export the airport catalog"
+    )
+    airports.add_argument("--query", default="")
+    airports.add_argument("--city")
+    airports.add_argument("--limit", type=query_limit, default=100)
+    catalog = airports.add_subparsers(dest="airport_action")
+    for name in ("import", "export"):
+        action = catalog.add_parser(name, help=f"{name} airport and directed transfer JSON")
+        action.add_argument("path", type=Path)
+
+    routes = commands.add_parser(
+        "routes", help="summarize direct airport pairs in a departure window"
+    )
+    routes.add_argument("--start", required=True, type=timestamp)
+    routes.add_argument("--end", required=True, type=timestamp)
+    routes.add_argument("--origin", type=airport_code)
+    routes.add_argument("--destination", type=airport_code)
+    routes.add_argument("--limit", type=query_limit, default=20)
+    for name in ("import-json", "export-json"):
+        batch = commands.add_parser(name, help=f"{name.split('-')[0]} a batch of flight records")
+        batch.add_argument("path", type=Path)
+
+    inspect = commands.add_parser("inspect", help="advanced: SQLite tables and read-only SQL")
+    inspections = inspect.add_subparsers(dest="inspection", required=True)
+    inspections.add_parser("tables", help="list tables and their definitions")
+    sql = inspections.add_parser("query", help="run one bounded SQL SELECT, including CTEs")
+    sql.add_argument("sql")
+    sql.add_argument("--limit", type=query_limit, default=20)
+
+    maintenance = commands.add_parser("maintenance", help="initialize schema or clear local data")
+    operations = maintenance.add_subparsers(dest="maintenance_action", required=True)
+    operations.add_parser("init", help="explicitly initialize or upgrade the Flyji schema")
+    clear = operations.add_parser(
+        "clear-data", help="delete all flights, airports and transfers; keep schema"
+    )
+    clear.add_argument("--yes", action="store_true", help="confirm deletion")
+
+    debug = commands.add_parser(
+        "debug", help="developer: reproduce or recalculate routing decisions"
+    )
+    diagnostics = debug.add_subparsers(dest="debug_action", required=True)
+    replay_command = diagnostics.add_parser(
+        "replay", help="reproduce saved facts/request and compare results; no DB access"
     )
     replay_command.add_argument("path", type=Path)
-    delete = commands.add_parser("delete", help="delete one flight by provider and ID")
-    delete.add_argument("provider")
-    delete.add_argument("provider_id")
-    delete.add_argument(
-        "--yes", action="store_true", help="skip the flight preview and confirmation"
+    continuation = diagnostics.add_parser(
+        "continue-route",
+        help="recalculate remaining journey after a retained prefix; save no flights",
     )
-    ingest = commands.add_parser("ingest", help="fetch from AeroDataBox or import licensed CSV")
+    continuation.add_argument("path", type=Path, help="RebuildRequest JSON")
+    continuation.add_argument("--snapshot-out", type=Path)
+
+    ingest = commands.add_parser(
+        "ingest", help="manual provider/CSV import; collection workflow is pending"
+    )
     ingest.add_argument("--airports", nargs="+", required=True)
     ingest.add_argument("--start", type=date.fromisoformat, required=True)
     ingest.add_argument("--end", type=date.fromisoformat, required=True)
     ingest.add_argument("--csv", type=Path)
     return root
+
+
+def search_request(args):
+    fields = {
+        "origin": "origin",
+        "destination": "destination",
+        "start": "departure_start",
+        "end": "departure_end",
+        "horizon": "horizon_end",
+        "via": "via_airport",
+        "avoid": "avoid_airports",
+        "max_legs": "max_legs",
+        "min_connection": "minimum_connection_minutes",
+        "max_connection": "maximum_connection_minutes",
+        "allow_airport_change": "allow_airport_change",
+        "ranking": "ranking",
+        "limit": "limit",
+        "trace": "trace",
+    }
+    data = {
+        field: getattr(args, flag)
+        for flag, field in fields.items()
+        if getattr(args, flag) is not None
+    }
+    if args.request:
+        if data:
+            raise ValueError(
+                "--request cannot be combined with search flags; edit the request JSON instead"
+            )
+        return RouteSearchRequest.model_validate_json(args.request.read_text())
+    return RouteSearchRequest.model_validate(data) if data else route_request()
 
 
 async def ingest_records(args, updater):
@@ -296,179 +340,131 @@ async def ingest_records(args, updater):
 
 def run(arguments, *, database_path=None):
     args = parser().parse_args(arguments)
-    if args.command == "replay-routing":
+    # Replay is intentionally independent of database settings and files.
+    if args.command == "debug" and args.debug_action == "replay":
         output(replay(read_json(args.path)))
         return
     path = (args.db or database_path or get_settings().database_path).expanduser().resolve()
-    if args.command in (None, "shell"):
+    if args.command is None:
         LocalShell(path).cmdloop()
-        return
-    if args.command == "create-route":
-        create_route(path)
-        return
-    if args.command == "overview":
-        summary = FlightReader(path).overview()
-        if args.json:
-            output(summary)
+    elif args.command == "db":
+        target = args.target.expanduser().resolve() if args.target is not None else path
+        if args.create:
+            FlightUpdater(target).initialize()
+        if args.target is not None or args.create:
+            query_database(target, "SELECT name FROM sqlite_schema LIMIT 1", 1)
+        print(f"Database: {target}")
+        return target
+    elif args.command == "maintenance":
+        if args.maintenance_action == "init":
+            FlightUpdater(path).initialize()
+            output({"initialized": path})
         else:
-            print_overview(summary)
-        return
-    if args.command in ("query", "tables"):
+            if not args.yes:
+                raise ValueError(
+                    "clear-data deletes all flights, airports and transfers; supply --yes to confirm"
+                )
+            output(clear_database(path))
+    elif args.command == "create-route":
+        create_route(path)
+    elif args.command == "overview":
+        summary = FlightReader(path).overview()
+        output(summary) if args.json else print_overview(summary)
+    elif args.command == "inspect":
         sql = (
             args.sql
-            if args.command == "query"
+            if args.inspection == "query"
             else ("SELECT name, sql FROM sqlite_schema WHERE type='table' ORDER BY name")
         )
-        output(query_database(path, sql, args.limit if args.command == "query" else 1000))
-        return
-    store = FlightReader(path)
-    if args.command == "list-flights":
+        output(query_database(path, sql, args.limit if args.inspection == "query" else 1000))
+    elif args.command == "flights":
+        if args.start is not None and args.end is not None and args.end <= args.start:
+            raise ValueError("end must follow start")
         output(
-            store.list_flights(
+            FlightReader(path).list_flights(
                 origin=args.origin,
                 destination=args.destination,
                 provider=args.provider,
                 status=args.status,
+                start=args.start,
+                end=args.end,
                 limit=args.limit,
             )
         )
-        return
-    if args.command == "show":
-        output(store.flight(args.provider, args.provider_id))
-        return
-    if args.command == "edit":
-        edit_flight(path, args.provider, args.provider_id, output)
-        return
-    if args.command == "update":
-        original = store.flight(args.provider, args.provider_id)
-        replacement = FlightRecord.model_validate(read_json(args.path))
-        output({"updated": FlightUpdater(path).update(original, replacement)})
-        return
-    if args.command == "delete":
-        delete_flight(path, args.provider, args.provider_id, args.yes, output)
-        return
-    if args.command in ("search", "search-itineraries", "search-route"):
-        if args.command == "search-route":
-            request = route_request()
-            if request is None:
-                return
+    elif args.command == "flight":
+        if args.flight_action == "show":
+            output(FlightReader(path).flight(args.provider, args.provider_id))
+        elif args.flight_action == "delete":
+            delete_flight(path, args.provider, args.provider_id, args.yes, output)
+        elif args.file is None:
+            edit_flight(path, args.provider, args.provider_id, output)
         else:
-            request = (
-                RouteSearchRequest(
-                    origin=args.origin,
-                    destination=args.destination,
-                    departure_start=args.start,
-                    departure_end=args.end,
-                    horizon_end=args.horizon,
-                    via_airport=args.via,
-                    avoid_airports=args.avoid,
-                    max_legs=args.max_legs,
-                    minimum_connection_minutes=args.min_connection,
-                    maximum_connection_minutes=args.max_connection,
-                    allow_airport_change=args.allow_airport_change,
-                    ranking=args.ranking,
-                    limit=args.limit,
-                    trace=args.trace,
-                )
-                if args.command == "search"
-                else RouteSearchRequest.model_validate_json(args.path.read_text())
-            )
-        snapshot = store.routing_snapshot(request)
+            original = FlightReader(path).flight(args.provider, args.provider_id)
+            replacement = FlightRecord.model_validate(read_json(args.file))
+            output({"updated": FlightUpdater(path).update(original, replacement)})
+    elif args.command == "search":
+        request = search_request(args)
+        if request is None:
+            return
+        snapshot = FlightReader(path).routing_snapshot(request)
         result = search_routes(request, snapshot)
         if args.snapshot_out:
             write_json(args.snapshot_out, replay_document("search", request, snapshot, result))
         output(result)
-        return
-    if args.command == "reset":
-        if not args.yes:
-            raise ValueError("reset deletes local flight data; supply --yes to confirm")
-        output(reset_database(path))
-        return
-    # Reject malformed imports before creating or changing the database.
-    records = airports = transfers = None
-    if args.command == "import-json":
+    elif args.command == "routes":
+        if args.end <= args.start:
+            raise ValueError("end must follow start")
+        output(
+            FlightReader(path).routes(
+                args.start, args.end, args.origin, args.destination, args.limit
+            )
+        )
+    elif args.command == "import-json":
         data = read_json(args.path)
         if not isinstance(data, list):
             raise ValueError("flight import must be a JSON array")
         records = [FlightRecord.model_validate(row) for row in data]
-    elif args.command == "import-airports":
-        data = read_json(args.path)
-        if (
-            not isinstance(data, dict)
-            or not isinstance(data.get("airports"), list)
-            or not isinstance(data.get("transfers", []), list)
-        ):
-            raise ValueError(
-                "airport catalog must contain an airports array and optional transfers array"
-            )
-        airports = [Airport.model_validate(row) for row in data["airports"]]
-        transfers = [AirportTransfer.model_validate(row) for row in data.get("transfers", [])]
-    elif args.command in ("flights", "routes", "itineraries"):
-        if args.end <= args.start:
-            raise ValueError("end must follow start")
-        if args.command == "itineraries" and args.limit > 100:
-            raise ValueError("itinerary limit must be between 1 and 100")
-
-    updater = FlightUpdater(path)
-    if args.command in ("stats", "import-json", "import-airports", "ingest"):
+        updater = FlightUpdater(path)
         updater.initialize()
-    if args.command == "stats":
-        output(store.stats())
-    elif args.command == "import-json":
         output({"upserted": updater.upsert(records)})
     elif args.command == "export-json":
-        write_json(args.path, [row.model_dump(mode="json") for row in store.all_records()])
-        output({"exported_to": args.path})
-    elif args.command == "import-airports":
-        updater.update_airports(airports, transfers)
-        output({"airports": len(airports), "transfers": len(transfers)})
-    elif args.command == "export-airports":
-        write_json(args.path, store.airport_catalog())
+        write_json(
+            args.path, [row.model_dump(mode="json") for row in FlightReader(path).all_records()]
+        )
         output({"exported_to": args.path})
     elif args.command == "airports":
-        output(store.airports(args.city, args.query, args.limit))
-    elif args.command == "rebuild":
+        if args.airport_action == "import":
+            data = read_json(args.path)
+            if (
+                not isinstance(data, dict)
+                or not isinstance(data.get("airports"), list)
+                or not isinstance(data.get("transfers", []), list)
+            ):
+                raise ValueError(
+                    "airport catalog must contain an airports array and optional transfers array"
+                )
+            airports = [Airport.model_validate(row) for row in data["airports"]]
+            transfers = [AirportTransfer.model_validate(row) for row in data.get("transfers", [])]
+            updater = FlightUpdater(path)
+            updater.initialize()
+            updater.update_airports(airports, transfers)
+            output({"airports": len(airports), "transfers": len(transfers)})
+        elif args.airport_action == "export":
+            write_json(args.path, FlightReader(path).airport_catalog())
+            output({"exported_to": args.path})
+        else:
+            output(FlightReader(path).airports(args.city, args.query, args.limit))
+    elif args.command == "debug":
         request = RebuildRequest.model_validate_json(args.path.read_text())
-        snapshot = store.rebuild_snapshot(request)
+        snapshot = FlightReader(path).rebuild_snapshot(request)
         result = rebuild_from_snapshot(request, snapshot)
         if args.snapshot_out:
             write_json(args.snapshot_out, replay_document("rebuild", request, snapshot, result))
         output(result)
     elif args.command == "ingest":
+        updater = FlightUpdater(path)
+        updater.initialize()
         output(asyncio.run(ingest_records(args, updater)))
-    else:
-        if args.command == "flights":
-            output(
-                store.search(
-                    args.start,
-                    args.end,
-                    args.origin,
-                    args.destination,
-                    args.include_cancelled,
-                    args.limit,
-                )
-            )
-        elif args.command == "routes":
-            output(store.routes(args.start, args.end, args.origin, args.destination, args.limit))
-        else:
-            if args.min_connection < 0 or args.max_connection < args.min_connection:
-                raise ValueError("invalid connection duration range")
-            if args.origin.upper() == args.destination.upper():
-                raise ValueError("origin and destination must differ")
-            output(
-                build_itineraries(
-                    store,
-                    args.origin.upper(),
-                    args.destination.upper(),
-                    args.start,
-                    args.end,
-                    args.max_legs,
-                    args.min_connection,
-                    args.max_connection,
-                    args.limit,
-                    horizon_end=args.horizon,
-                )
-            )
 
 
 class LocalShell(cmd.Cmd):
@@ -482,7 +478,9 @@ class LocalShell(cmd.Cmd):
 
     def default(self, line):
         try:
-            run(shlex.split(line), database_path=self.database_path)
+            selected = run(shlex.split(line), database_path=self.database_path)
+            if isinstance(selected, Path):
+                self.database_path = selected
         except SystemExit:
             pass
         except (EOFError, KeyboardInterrupt):
@@ -492,40 +490,18 @@ class LocalShell(cmd.Cmd):
 
     def do_db(self, line):
         """db [PATH] [--create]: show or switch the selected database."""
-        command = argparse.ArgumentParser(prog="db")
-        command.add_argument("path", type=Path, nargs="?")
-        command.add_argument("--create", action="store_true")
-        try:
-            args = command.parse_args(shlex.split(line))
-            if args.path is not None:
-                path = args.path.expanduser().resolve()
-                if args.create:
-                    FlightUpdater(path).initialize()
-                query_database(path, "SELECT name FROM sqlite_schema LIMIT 1", 1)
-                self.database_path = path
-            print(f"Database: {self.database_path}")
-        except SystemExit:
-            pass
-        except (ValueError, OSError, sqlite3.Error) as error:
-            print(f"Error: {error}")
+        self.default("db " + line)
 
     def emptyline(self):
         pass
 
     def do_help(self, arg):
-        if arg == "db":
-            print(self.do_db.__doc__)
-            return
         if arg:
             self.default(arg + " --help")
             return
         parser().print_help()
-        print(
-            "Use COMMAND --help for options. Edit exported JSON and import-json to update flights."
-        )
-        print(
-            "db [PATH] [--create] shows or switches the database. Start with overview or list-flights."
-        )
+        print("Use help COMMAND for options. Start with db, overview, flights or search.")
+        print("help maintenance, help inspect and help debug show secondary tools. quit exits.")
 
     def do_quit(self, arg):
         return True
@@ -537,7 +513,7 @@ class LocalShell(cmd.Cmd):
 
 def main(arguments=None):
     try:
-        run((sys.argv[1:] if arguments is None else arguments) or ["shell"])
+        run(sys.argv[1:] if arguments is None else arguments)
     except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1)

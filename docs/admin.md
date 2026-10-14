@@ -1,17 +1,15 @@
 # Local database administration
 
-The admin shell manages local SQLite files. Choose the database when starting:
+Start the shell with `python -m admin` or the installed `flyji` command. Use
+`python -m admin --db /absolute/path/to/flights.db` to select a file. Every shell
+command also works directly, for example `python -m admin --db var/flights.db overview`.
 
-```sh
-python -m admin --db /absolute/path/to/flights.db
-# Equivalent installed entry point:
-flyji --db /absolute/path/to/flights.db
-```
+`help` lists the main commands; `help flight`, `help airports`, `help maintenance`,
+`help inspect`, and `help debug` explain each group. `help flight edit` shows
+options for an individual action. `quit` exits. Starting the shell does not
+initialize a database.
 
-Database selection precedence is `--db`, then the shell's selected file, then
-`FLIGHT_DATABASE_PATH` / `.env`, then the project's `var/flights.db`. Put `--db`
-before the command. Relative paths resolve from your current directory; `~` is
-expanded. The shell displays the selected absolute path when it starts.
+## Select or initialize a database
 
 ```text
 flyji> db
@@ -20,119 +18,165 @@ flyji> db var/new-flights.db --create
 flyji> overview
 ```
 
-`db PATH` verifies that an existing SQLite file can be opened before switching.
-A failed switch keeps the old selection. `--create` explicitly initializes the
-Flyji schema, including parent directories. `stats` also initializes it for
-compatibility. Reads and exports do not create files or modify schemas.
-`--db PATH COMMAND` inside the shell selects another file for that command only.
+Selection precedence is a command's `--db` option, the shell's selected file,
+`FLIGHT_DATABASE_PATH` / `.env`, then the project's `var/flights.db`. Put `--db`
+before the command. Relative paths resolve from the current directory; `~` is
+expanded. The shell displays the selected absolute path when it starts.
 
-`tables` and `query` can inspect any SQLite database. Flight management,
-`overview`, and routing need the Flyji schema; run `stats` once to initialize or
-upgrade a Flyji database. General schema migrations and arbitrary SQL writes
-are outside these tools.
+`db` prints the selected path. `db PATH` verifies an existing SQLite file before
+switching; failure keeps the old selection. `db PATH --create` explicitly
+initializes the Flyji schema and selects it. A command inside the shell can use
+`--db PATH COMMAND` to target another file without changing the shell selection.
 
-## Overview and inspection
+`maintenance init` explicitly initializes or upgrades the schema at the selected
+path, including parent directories. It leaves existing records intact. Reads,
+exports, and `overview` never create a missing file or modify a schema. Flight
+management and routing require the Flyji schema; `inspect` works with any SQLite
+schema.
+
+## Inspect stored facts
 
 ```text
 flyji> overview
 flyji> overview --json
-flyji> tables
-flyji> list-flights --origin YYZ --limit 10
-flyji> list-flights --provider manual --status scheduled
-flyji> show manual FLIGHT_ID
-flyji> query "SELECT origin_iata, destination_iata, COUNT(*) AS flights FROM flights GROUP BY origin_iata, destination_iata" --limit 50
+flyji> flights --origin YYZ --limit 10
+flyji> flights --provider manual --status scheduled
+flyji> flights --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
+flyji> flight show manual FLIGHT_ID
+flyji> airports --query YYZ
+flyji> routes --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
 
-`overview` shows flights, directed routes, airlines, airports used in flights,
-airport catalog size, transfer rules, missing airport metadata, schedule range,
-fetch range, provider/status counts, and the top five routes by stored flight
-count. All overview counts include cancelled flights. An airline count uses
-non-null `airline_iata` values; manually entered flights without an airline code
-are not counted as airlines. Fetch timestamps describe imported facts, rather
-than proving current provider coverage.
+`overview` shows counts, directed routes, airlines, catalog coverage, transfer
+rules, missing airport metadata, departure/fetch ranges, provider/status counts,
+the five busiest direct pairs by stored flight count, and SQLite journal mode.
+All counts include cancelled flights. Fetch timestamps describe the stored
+records; they do not establish complete or current provider coverage. Airline
+counts include only non-null airline codes.
 
-`list-flights` includes cancelled flights and sorts by departure and identity.
-It accepts optional origin, destination, provider, and status filters without
-requiring dates. For a date window use the existing `flights` command; it excludes
-cancelled flights unless `--include-cancelled` is supplied. Both commands return
-`provider` and `provider_id`, which identify records for subsequent operations.
+`flights` is the single flight browser. All filters are optional, and all statuses
+are included by default, with or without dates. Use `--status` to select one
+status. Results are ordered by departure, provider, and ID. `--start` is inclusive
+and `--end` is exclusive; either can be used alone. The default limit is 20 and
+the maximum is 1,000. Returned provider/ID pairs identify individual records.
 
-`query` accepts one quoted SQL SELECT, including CTEs. Results contain `columns`,
-row arrays, and `truncated`; duplicate column names remain distinct. The default
-limit is 20 rows, with a maximum of 1,000. It opens SQLite read-only and rejects
-writes, PRAGMA commands, database attachment, and extension loading. The result
-limit bounds returned rows, rather than the work required by a complex query.
+`routes` summarizes direct airport pairs. `search` finds complete journeys with
+connections. These commands answer different questions.
 
-## Create, update, and delete
+## Create, edit, and delete flights
 
 ```text
 flyji> create-route
-flyji> edit manual FLIGHT_ID
-flyji> delete manual FLIGHT_ID
+flyji> flight edit manual FLIGHT_ID
+flyji> flight delete manual FLIGHT_ID
 ```
 
-`create-route` prompts for the origin, then each leg's destination, flight number,
-and scheduled departure/arrival. Timestamps require `Z` or an offset. Each next
-leg starts at the previous destination and cannot depart before the previous
-arrival. The full route is previewed in UTC before all flight records are saved
-in one transaction. IDs are generated under provider `manual`; view them with
-`list-flights`. These are flight facts, not stored named journeys. Routing still
-applies connection constraints to them.
+`create-route` enters a connected sequence of flight facts. Each leg has a
+destination, flight number, and scheduled departure/arrival with `Z` or an offset.
+Each next leg starts at the previous destination and cannot depart before the
+previous arrival. The full sequence is previewed in UTC before all records are
+saved in one transaction. IDs are generated under provider `manual`; use `flights`
+to see them. This command does not store a named journey; search connection rules
+still apply to these flights.
 
-`edit` shows the original record and prompts for its flight number, airline,
-airports, scheduled/actual times, status, and comma-separated codeshares. Enter
-keeps the displayed value; `-` clears airline, actual times, or codeshares. The
-provider, ID, and fetch timestamp are preserved. Invalid input cannot be saved;
-the wizard lets you re-enter the fields. Review the replacement before saving.
+`flight edit` keeps a field when you press Enter. `-` clears an optional airline,
+actual timestamp, or codeshare list. It validates and previews the replacement
+before saving. Identity and fetch time are preserved in interactive editing.
+For scripts, `flight edit PROVIDER ID --file FILE` replaces an existing flight
+from a single complete FlightRecord JSON object, with no prompts. Its identity
+must match. Both modes refuse to overwrite a record changed during review.
 
-`delete` previews the selected record and asks for confirmation. Scripts can use
-`delete PROVIDER ID --yes` to skip the prompt. Both edits and deletes refuse to
-write if the record changed or disappeared while being reviewed.
+`flight delete` previews and confirms deletion of one flight; scripts can use
+`--yes` to skip prompts. It also rejects a flight changed during review. Type
+`cancel`, press Ctrl+C, or send EOF during a wizard to discard pending changes.
+Save/delete prompts default to no. Cancelling route creation does not create a
+new database file.
 
-Type `cancel`, press Ctrl+C, or send EOF during a wizard to discard its pending
-changes. Save/delete prompts default to no. Cancelling route creation does not
-create a new database file.
+## Batch and catalog files
 
-For scripted updates, save a single complete `FlightRecord` JSON object and run:
-
-```sh
-python -m admin --db var/flights.db update manual FLIGHT_ID var/edited-flight.json
+```text
+flyji> import-json var/flights.json
+flyji> export-json var/flights-export.json
+flyji> airports import var/airports.json
+flyji> airports export var/airport-catalog.json
 ```
 
-`update` validates the object, requires an existing matching provider/ID, and
-replaces its other fields. To create or upsert batches, continue using
-`import-json`; `export-json`, `import-airports`, and `export-airports` remain
-available. `reset --yes` clears the database only under the project's `var/`.
+Flight batch files are arrays of FlightRecord objects. Imports upsert matching
+provider/ID records and retain omitted records. Catalog files contain `airports`
+and optional directed `transfers`, including names, timezones, coordinates and
+same-city transfer allowances. Imports validate the complete batch before writing.
+Keep working files under `var/`.
 
-## Routing queries
+## Search journeys
 
-Use `search-route` for guided prompts: origin, destination, departure window,
-arrival deadline, optional via/avoided airports, maximum legs, connection bounds,
-ranking, result limit, airport changes, and tracing. This command queries the
-stored flights without fetching or saving new ones.
-
-The equivalent command with flags is:
+`search` without input flags launches guided prompts. It accepts ordered via
+and avoided airports, leg/connection bounds, ranking, an arrival deadline, and
+optional airport changes. The equivalent direct command is:
 
 ```sh
 python -m admin --db var/flights.db search \
-  --origin YYZ --destination CDG --via YUL --avoid JFK \
+  --origin YYZ --destination CDG --via LHR AMS --avoid JFK \
   --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z \
   --horizon 2026-10-19T00:00:00Z --max-legs 3 \
-  --min-connection 45 --max-connection 360 \
-  --ranking earliest_arrival --trace --snapshot-out var/search-replay.json
+  --min-connection 45 --max-connection 360 --ranking earliest_arrival
 ```
 
-Supported rankings are `fewest_legs`, `shortest_elapsed`, and `earliest_arrival`.
-Use `--allow-airport-change` to permit catalogued same-city transfer rules.
-Results include diagnostics: check `exhaustive` and termination reasons when a
-search stops at a budget limit. Departure end is exclusive; the arrival deadline
-is inclusive. `search-route` also accepts `--snapshot-out`.
+Use `search --request FILE` for a full RouteSearchRequest JSON, including custom
+engine budgets. A request file cannot be mixed with search input flags. Add
+`--snapshot-out FILE` to any input mode to capture facts, request, and result.
+`--trace` adds developer diagnostic events when using flags; request files can
+also enable tracing. Guided search uses the engine defaults for tracing/budgets.
 
-`search-itineraries REQUEST.json` supports the full typed request, including
-custom engine budgets. `rebuild REQUEST.json` recalculates a journey with a
-retained prefix. Both support snapshots; `replay-routing SNAPSHOT.json`
-recalculates offline and reports whether the result matches. See the
-[routing engine guide](engine/routing.md) for request shapes and limitations.
+Rankings are `fewest_legs`, `shortest_elapsed`, and `earliest_arrival`. Departure
+end is exclusive and the arrival deadline is inclusive. Airport changes require
+catalogued same-city transfer rules. Results consistently contain `query`,
+`items`, `diagnostics`, and airport metadata. Check `diagnostics.exhaustive` and
+termination reasons when budgets stop a search. Search never fetches or saves
+flight facts.
 
-Provider data collection and automatic refresh are deferred. This workflow
-creates, inspects, edits, and queries the local facts you already have.
+## Secondary tools
+
+- `maintenance clear-data --yes` deletes flights, airports, and transfer rules
+  transactionally while preserving the SQLite file and schema. It only permits
+  databases under this installation's `var/`. Stop ingestion if it must stay empty.
+- `inspect tables` lists table definitions. `inspect query "SELECT ..." --limit 50`
+  returns columns, row arrays, and a truncation indicator. Only a single read-only
+  SELECT is allowed, including CTEs; writes, PRAGMA, database attachment, and
+  extension loading are rejected. The row limit bounds output, not query work.
+- `debug continue-route REQUEST.json` calculates the remaining journey after a
+  retained prefix using a RebuildRequest; it saves no flight records. It supports
+  `--snapshot-out FILE`.
+- `debug replay SNAPSHOT.json` repeats a captured routing calculation and checks
+  whether the result matches. It opens no database and never restores records.
+  This is a developer tool for reproducing unexpected routing decisions.
+- `ingest` remains the manual AeroDataBox/CSV importer. Provider collection and
+  automatic refresh work remain deferred; this cleanup does not change ingestion.
+
+See the [routing engine guide](engine/routing.md) for request shapes and limits.
+
+## Command changes
+
+Duplicate entry points have been removed. Update existing scripts as follows:
+
+| Previous command | Replacement |
+|---|---|
+| `shell` | Run `python -m admin` with no command |
+| `stats` | `overview --json`; initialization is `maintenance init` |
+| `list-flights` | `flights` |
+| `show PROVIDER ID` | `flight show PROVIDER ID` |
+| `edit PROVIDER ID` | `flight edit PROVIDER ID` |
+| `update PROVIDER ID FILE` | `flight edit PROVIDER ID --file FILE` |
+| `delete PROVIDER ID` | `flight delete PROVIDER ID` |
+| `reset --yes` | `maintenance clear-data --yes` |
+| `import-airports FILE` | `airports import FILE` |
+| `export-airports FILE` | `airports export FILE` |
+| `search-route` | `search` with no input flags |
+| `search-itineraries FILE` | `search --request FILE` |
+| `itineraries ...` | `search ... --horizon TIME`; results include diagnostics |
+| `rebuild FILE` | `debug continue-route FILE` |
+| `replay-routing FILE` | `debug replay FILE` |
+| `tables` / `query SQL` | `inspect tables` / `inspect query SQL` |
+
+Unlike the former dated `flights` command, the unified browser includes cancelled
+flights by default. Use `--status scheduled` when you want only scheduled records.
+HTTP API contracts and the website's routing engine remain unchanged.
