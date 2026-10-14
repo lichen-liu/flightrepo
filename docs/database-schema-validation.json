@@ -1,0 +1,92 @@
+{
+  "kind": "disposable schema design validation; not a live migration or serving implementation",
+  "captured_at": "2026-10-14T21:11:56.796425+00:00",
+  "sqlite_version": "3.53.4",
+  "source_snapshot": {
+    "table": "itinerary_legs",
+    "rows": 1324,
+    "sha256": "b1a15cc2e18c3902f78d17a89988fe8758947fbe1742e81c7c8dffe2c0f28229",
+    "access": "read-only"
+  },
+  "checks_passed": [
+    "snapshot identities/count preserved",
+    "all observed bounds preserve exact UTC microseconds",
+    "no invented schedules or flight numbers",
+    "observed-only visibility",
+    "foreign key and integrity checks",
+    "duplicate source identity",
+    "unknown airport FK",
+    "same airport endpoints",
+    "partial observed bounds",
+    "reversed departure bounds",
+    "arrival before departure",
+    "invalid aircraft type",
+    "invalid status",
+    "backwards refresh timestamps",
+    "STRICT rejects text timestamp",
+    "cancelled excluded from search/calendar",
+    "tombstone excludes retained row",
+    "multiple time bases retained without query double counting",
+    "actual event semantics required",
+    "origin/window query uses proposed routing index",
+    "global window uses proposed departure index",
+    "WAL readers see old snapshot then complete daily commit",
+    "batch source mismatch rejected",
+    "failed attempt cannot claim applied rows",
+    "running attempt cannot claim finish timestamp",
+    "invalid configuration JSON rejected"
+  ],
+  "space_probe": {
+    "synthetic_copies": 100,
+    "rows": 132400,
+    "page_size_bytes": 4096,
+    "description": "Same observed field distribution, fresh 32-character source keys, VACUUMed disposable DBs. No raw inputs, receipts, WAL or working reserve included.",
+    "legacy_objects_bytes": {
+      "itinerary_legs": 60416000,
+      "sqlite_autoindex_itinerary_legs_1": 5435392
+    },
+    "proposed_objects_bytes": {
+      "flight_legs": 21749760,
+      "sqlite_autoindex_flight_legs_1": 5586944,
+      "flight_legs_observed_origin": 2768896,
+      "flight_legs_observed_departure": 2236416
+    },
+    "legacy_bytes_per_leg": 497.37,
+    "proposed_bytes_per_leg_including_identity_and_two_query_indexes": 244.28
+  },
+  "origin_query_plan": [
+    "CO-ROUTINE searchable_legs",
+    "COMPOUND QUERY",
+    "LEFT-MOST SUBQUERY",
+    "SEARCH f USING INDEX flight_legs_scheduled_origin (origin_iata=? AND departure_scheduled_us>? AND departure_scheduled_us<?)",
+    "CORRELATED SCALAR SUBQUERY 7",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "UNION ALL",
+    "SEARCH f USING INDEX flight_legs_actual_origin (origin_iata=? AND departure_actual_us>? AND departure_actual_us<?)",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "UNION ALL",
+    "SEARCH f USING INDEX flight_legs_observed_origin (origin_iata=? AND departure_observed_lower_us>? AND departure_observed_lower_us<?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "SCAN searchable_legs"
+  ],
+  "global_query_plan": [
+    "CO-ROUTINE searchable_legs",
+    "COMPOUND QUERY",
+    "LEFT-MOST SUBQUERY",
+    "SEARCH f USING INDEX flight_legs_scheduled_departure (departure_scheduled_us>? AND departure_scheduled_us<?)",
+    "CORRELATED SCALAR SUBQUERY 7",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "UNION ALL",
+    "SEARCH f USING INDEX flight_legs_actual_departure (departure_actual_us>? AND departure_actual_us<?)",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "UNION ALL",
+    "SEARCH f USING INDEX flight_legs_observed_departure (departure_observed_lower_us>? AND departure_observed_lower_us<?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+    "SCAN searchable_legs"
+  ],
+  "schema_sha256": "0608edf9e373b4b3031f189aba0b34a047fe408d917b3f78c2d13ad0a701e77b"
+}

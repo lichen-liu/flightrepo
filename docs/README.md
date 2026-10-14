@@ -5,5 +5,6 @@
 - [Routing engine](engine/routing.md): constraints, ranking, limits and replay.
 - [Local admin shell](admin.md): database switching, overview, queries, flight editing and routing.
 - [Ingestion pipeline](ingestion.md): data sources/licences, raw format, daily extraction, storage and statistics.
+- [Shared database schema proposal](database-schema.md): consumer contract, time evidence, deduplication and migration.
 - [On-demand itinerary storage](itinerary-cache.md): backend downloads, live admin quota changes and lazy LRU retirement.
 - [Development checks](../README.md#development-checks): Python, frontend, packaging and browser tests.
