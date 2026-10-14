@@ -44,6 +44,11 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
 
 The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Offline observed itinerary candidates remain separate from the scheduled serving database.
 
+The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) supports
+separate short jobs: `ingest configure --source adsblol`, then
+`ingest --start 2025-01-01 --end 2025-01-03`. Later jobs can overlap or backfill
+other periods; completed days are skipped and stable keys prevent duplicates.
+
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
 ## Use your local data

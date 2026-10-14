@@ -67,13 +67,13 @@ daily URL inventory → download/verify → read one aircraft member
    between first and last airborne observations. Reject stale/missing positions,
    changing callsigns, unknown types and ambiguous endpoints.
 4. Save identity, airport pair, callsign, type, departure/arrival bounds and
-   provenance. Carry airport/time/callsign state across midnight; discard positions,
-   speeds and tracks.
+   provenance. Retain compact per-day airport/time/callsign boundary summaries
+   for later adjacent backfills; discard positions, speeds and tracks.
 5. Atomically commit legs, state and receipt; delete verified raw parts. Failed
    days roll back and keep inputs. Restarts skip committed days and finish cleanup.
 
 `itineraries.db` contains `itinerary_legs(key, departure_date, data)` plus config,
-daily receipts, pending state and source/licence metadata. `departure_date` uses
+daily receipts, boundary summaries and source/licence metadata. `departure_date` uses
 the lower UTC departure bound. Primary keys prevent duplicate identities; there
 are no additional SQL search indexes. Multi-leg journeys can be assembled from
 individual legs, without storing every connection combination.
@@ -95,10 +95,20 @@ PYTHONPATH=src python scripts/extract_adsblol_itineraries.py catalogs/adsblol-20
   --data-root var/adsblol-2025 --download
 ```
 
-`--start/--end YYYY-MM-DD` selects a consecutive range; rerun to resume.
-Changed filters/coordinates or an earlier start require a new data root.
+`--start/--end YYYY-MM-DD` selects one job's range. Rerun, overlap, skip periods
+or backfill earlier dates in the same root; completed days skip downloads and
+stable keys prevent duplicate legs. Adjacent periods reconnect overnight evidence
+from summaries, including when arrival days were ingested first. Changed
+filters/coordinates require a new data root. Older outputs refresh missing
+boundary summaries when a day is requested again with `--download`.
 `--boundary-manifest` supplies next-year inputs for January 1 arrivals;
 otherwise the final receipt reports unresolved airborne state.
+
+The [admin shell](admin.md#ingest-in-separate-sessions) wraps this same pipeline:
+`ingest configure --source adsblol` saves paths once, then `ingest` prompts for
+dates or accepts `--start/--end`. Default suggested jobs span three days, with a
+31-day default maximum. `ingest status` reports coverage. Each day commits
+independently; cancellation keeps prior days and a later invocation resumes.
 
 The **20 GiB** cap includes output, raw/partial files and SQLite sidecars.
 `--budget-gib` lowers it; `--policy-db /path/flights.db` reads the initialized
@@ -119,7 +129,7 @@ The [December 30 pilot report](../catalogs/adsblol-extraction-pilot.json) record
 | Raw archive | 61,215 aircraft-day members | 2.98 GiB |
 | Commercial fixed-wing subset, earlier filter probe | 13,241 aircraft-days | 0.97 GiB compressed traces; not retained |
 | Complete inferred legs | 2,138 legs, 39 aircraft types | 1.03 MiB including identity index; **504 bytes/leg** |
-| Entire output | Legs, config, receipts, source notices and current carry state | 2.34 MiB; zero raw archive parts left |
+| Entire pilot output, before per-day boundary summaries | Legs, config, receipts, source notices and current carry state | 2.34 MiB; zero raw archive parts left |
 
 The earlier subset contained 36.8 million position samples. Aircraft-days are
 not flight legs. This partial pilot does not establish full airline coverage.
@@ -133,7 +143,8 @@ holds 32 million while reserving 5 GiB for processing. Capacity scenarios:
 | 50,000 | 2.3 years | 1.8 years |
 | 100,000 | 1.2 years | 10.5 months |
 
-These extrapolations exclude growth in index/metadata overhead. Raw transfer
+These extrapolations exclude growth in index/metadata overhead, including the
+new per-day boundary summaries needed for out-of-order backfills. Raw transfer
 cost and extraction accuracy are separate from final storage size.
 
 ## Other ingestion paths

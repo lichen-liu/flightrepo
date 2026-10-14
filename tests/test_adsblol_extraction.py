@@ -4,6 +4,7 @@ import io
 import json
 import sqlite3
 import tarfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 
 import httpx
@@ -102,6 +103,111 @@ def test_midnight_carry_survives_restart_without_positions(tmp_path):
     assert receipt["pending_airborne"] == 0
 
 
+def test_out_of_order_backfill_joins_midnight_without_redownloading_arrival_day(tmp_path):
+    first, second = midnight_traces()
+    run(tmp_path, date(2025, 1, 2), [second])
+    assert rows(tmp_path, "itinerary_legs") == []
+    receipt, item = run(tmp_path, date(2025, 1, 1), [first])
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+    assert receipt["counts"]["records_inserted"] == 1
+    assert not list((tmp_path / "raw").rglob("*.tar"))
+    extract_day(tmp_path, "2025-01-01", [item], AIRPORTS, rules())
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_backfill_after_a_gap_never_joins_unobserved_days(tmp_path):
+    first, second = midnight_traces()
+    run(tmp_path, date(2025, 1, 1), [first])
+    second["timestamp"] += 86400
+    run(tmp_path, date(2025, 1, 3), [second])
+    assert rows(tmp_path, "itinerary_legs") == []
+
+
+@pytest.mark.parametrize("order", [(1, 2, 3), (3, 1, 2), (3, 2, 1), (1, 3, 2)])
+def test_boundary_summary_propagates_through_a_whole_airborne_day(tmp_path, order):
+    first, last = midnight_traces()
+    last["timestamp"] += 86400
+    middle = leg_trace()
+    middle["timestamp"] += 86400
+    middle["trace"] = [
+        [offset, 40.5, -70.5, 20000, 400, 0, 0, 0, {"flight": "UAL123"}]
+        for offset in [*range(0, 86400, 100), 86390]
+    ]
+    traces = {1: first, 2: middle, 3: last}
+    for number in order:
+        run(tmp_path, date(2025, 1, number), [traces[number]])
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+    assert rows(tmp_path, "itinerary_legs")[0][1] == "2025-01-01"
+    assert not list((tmp_path / "raw").rglob("*.tar"))
+
+
+def test_existing_day_can_expand_to_another_year_scope_without_duplicates(tmp_path):
+    first, second = midnight_traces()
+    first["timestamp"] = int(datetime(2025, 12, 31, tzinfo=UTC).timestamp())
+    second["timestamp"] = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+    flight = leg_trace()
+    flight["icao"] = "b5ea5c"
+    flight["timestamp"] = second["timestamp"]
+    run(tmp_path, date(2025, 12, 31), [first], departure_year=2025)
+    run(tmp_path, date(2026, 1, 1), [second, flight], departure_year=2025)
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+    receipt, _ = run(tmp_path, date(2026, 1, 1), [second, flight], departure_year=2026)
+    assert len(rows(tmp_path, "itinerary_legs")) == 2
+    assert receipt["counts"]["records_inserted"] == 1
+
+
+def test_boundary_refresh_deduplicates_existing_v1_records(tmp_path):
+    _, item = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        receipt = json.loads(
+            connection.execute("SELECT receipt FROM extraction_days").fetchone()[0]
+        )
+        receipt.pop("boundary_version")
+        connection.execute("UPDATE extraction_days SET receipt=?", (json.dumps(receipt),))
+    receipt, _ = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    assert receipt["counts"]["records_inserted"] == 0
+    assert receipt["counts"]["records_already_present"] == 1
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_parallel_repeated_day_commits_only_once(tmp_path):
+    item, content = daily_input(date(2025, 1, 1), [leg_trace()])
+    requests = []
+
+    def transport(request):
+        requests.append(request.url)
+        return httpx.Response(200, content=content)
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+
+        def ingest(_):
+            return extract_day(
+                tmp_path, "2025-01-01", [item], AIRPORTS, rules(), download=True, client=client
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            receipts = list(pool.map(ingest, range(2)))
+    assert sorted(receipt["result"] for receipt in receipts) == ["already_committed", "committed"]
+    assert len(requests) == 1 and len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_conflicting_identity_rolls_back_refresh_without_replacing_existing_record(tmp_path):
+    run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        receipt = json.loads(
+            connection.execute("SELECT receipt FROM extraction_days").fetchone()[0]
+        )
+        receipt.pop("boundary_version")
+        connection.execute("UPDATE extraction_days SET receipt=?", (json.dumps(receipt),))
+        record = json.loads(connection.execute("SELECT data FROM itinerary_legs").fetchone()[0])
+        record["callsign"] = "UAL999"
+        connection.execute("UPDATE itinerary_legs SET data=?", (extraction.canonical(record),))
+    previous = rows(tmp_path, "itinerary_legs"), rows(tmp_path, "extraction_days")
+    with pytest.raises(ValueError, match="Conflicting itinerary identity"):
+        run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    assert previous == (rows(tmp_path, "itinerary_legs"), rows(tmp_path, "extraction_days"))
+
+
 def test_year_boundary_retains_departure_year_without_importing_next_year_legs(tmp_path):
     first, second = midnight_traces()
     first["timestamp"] = int(datetime(2025, 12, 31, tzinfo=UTC).timestamp())
@@ -138,14 +244,14 @@ def test_committed_day_cleans_raw_after_interrupted_cleanup(tmp_path, monkeypatc
     assert len(rows(tmp_path, "itinerary_legs")) == 1
 
 
-def test_configuration_changes_and_missing_days_are_rejected(tmp_path):
+def test_configuration_changes_are_rejected_but_separate_periods_are_allowed(tmp_path):
     _, item = run(tmp_path, date(2025, 1, 1), [leg_trace()])
     with pytest.raises(ValueError, match="configuration"):
         extract_day(tmp_path, "2025-01-01", [item], AIRPORTS + [("CCC", 0, 0)], rules())
     third = leg_trace()
     third["timestamp"] += 2 * 86400
-    with pytest.raises(ValueError, match="consecutive"):
-        run(tmp_path, date(2025, 1, 3), [third])
+    run(tmp_path, date(2025, 1, 3), [third])
+    assert len(rows(tmp_path, "itinerary_legs")) == 2
 
 
 def test_partial_schema_initialization_can_be_repaired_on_restart(tmp_path):
@@ -188,8 +294,8 @@ def test_live_quota_change_aborts_uncommitted_day_without_removing_durable_facts
     run(root, date(2025, 1, 1), [leg_trace()], policy_db=policy_db)
     reducer = extraction.reduce_movement
 
-    def lower_quota(*args):
-        result = reducer(*args)
+    def lower_quota(*args, **kwargs):
+        result = reducer(*args, **kwargs)
         set_quota(policy_db, 0)
         return result
 

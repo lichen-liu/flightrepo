@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS itinerary_cache_policy (
     access_sequence INTEGER NOT NULL DEFAULT 0,
     evicted_chunks INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS ingestion_profiles (
+    source TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    last_used INTEGER NOT NULL
+);
 INSERT OR IGNORE INTO itinerary_cache_policy(id, quota_bytes) VALUES (1, 21474836480);
 CREATE TABLE IF NOT EXISTS itinerary_catalog_state (
     id INTEGER PRIMARY KEY CHECK(id=1),

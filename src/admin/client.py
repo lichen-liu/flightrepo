@@ -1,7 +1,6 @@
 """Local development client. Commands call the same core used by the API."""
 
 import argparse
-import asyncio
 import cmd
 import json
 import shlex
@@ -15,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from admin.ingestion import run_ingestion
 from admin.management import (
     ask,
     create_airport,
@@ -27,14 +27,11 @@ from admin.management import (
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
 from core.itinerary_cache import cache_status, policy, set_quota, set_source
-from core.models import FlightRecord, FlightStatus, IngestRequest
+from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
-from ingestion.providers.aerodatabox import AeroDataBoxProvider
-from ingestion.providers.csv_feed import CsvProvider
-from ingestion.service import IngestionService
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
 
@@ -349,13 +346,21 @@ def parser():
     continuation.add_argument("path", type=Path, help="RebuildRequest JSON")
     continuation.add_argument("--snapshot-out", type=Path)
 
-    ingest = commands.add_parser(
-        "ingest", help="manual provider/CSV import; collection workflow is pending"
+    ingest = commands.add_parser("ingest", help="configure, run or inspect bounded ingestion jobs")
+    ingest.add_argument(
+        "ingest_action", nargs="?", choices=("run", "configure", "status"), default="run"
     )
-    ingest.add_argument("--airports", nargs="+", required=True)
-    ingest.add_argument("--start", type=date.fromisoformat, required=True)
-    ingest.add_argument("--end", type=date.fromisoformat, required=True)
+    ingest.add_argument("--source", "--pipeline", choices=("adsblol", "csv", "aerodatabox"))
+    ingest.add_argument("--airports", nargs="+")
+    ingest.add_argument("--start", type=date.fromisoformat)
+    ingest.add_argument("--end", type=date.fromisoformat)
     ingest.add_argument("--csv", type=Path)
+    ingest.add_argument("--manifest", type=Path)
+    ingest.add_argument("--airport-catalog", type=Path)
+    ingest.add_argument("--filter", dest="filter_path", type=Path)
+    ingest.add_argument("--data-root", type=Path)
+    ingest.add_argument("--boundary-manifest", type=Path)
+    ingest.add_argument("--budget-gib", type=float)
     return root
 
 
@@ -390,28 +395,7 @@ def search_request(args):
     return RouteSearchRequest.model_validate(data) if data else route_request()
 
 
-async def ingest_records(args, updater):
-    settings = get_settings()
-    request = IngestRequest(airports=args.airports, start=args.start, end=args.end)
-    provider = (
-        CsvProvider(args.csv)
-        if args.csv
-        else AeroDataBoxProvider(
-            settings.provider_api_key,
-            settings.provider_base_url,
-            settings.provider_host,
-        )
-    )
-    try:
-        return await IngestionService(updater, provider, settings.max_query_days).ingest(
-            request.airports, request.start, request.end
-        )
-    finally:
-        if isinstance(provider, AeroDataBoxProvider):
-            await provider.aclose()
-
-
-def run(arguments, *, database_path=None):
+def run(arguments, *, database_path=None, interactive=False):
     args = parser().parse_args(arguments)
     # Replay is intentionally independent of database settings and files.
     if args.command == "debug" and args.debug_action == "replay":
@@ -568,9 +552,7 @@ def run(arguments, *, database_path=None):
             write_json(args.snapshot_out, replay_document("rebuild", request, snapshot, result))
         output(result)
     elif args.command == "ingest":
-        updater = FlightUpdater(path)
-        updater.initialize()
-        output(asyncio.run(ingest_records(args, updater)))
+        run_ingestion(args, path, get_settings(), output, interactive=interactive)
 
 
 class LocalShell(cmd.Cmd):
@@ -584,7 +566,7 @@ class LocalShell(cmd.Cmd):
 
     def default(self, line):
         try:
-            selected = run(shlex.split(line), database_path=self.database_path)
+            selected = run(shlex.split(line), database_path=self.database_path, interactive=True)
             if isinstance(selected, Path):
                 self.database_path = selected
         except SystemExit:

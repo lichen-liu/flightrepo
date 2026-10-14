@@ -134,6 +134,46 @@ and optional directed `transfers`, including names, timezones, coordinates and
 same-city transfer allowances. Imports validate the complete batch before writing.
 Keep working files under `var/`.
 
+## Ingest in separate sessions
+
+```text
+flyji> ingest configure --source adsblol
+flyji> ingest --start 2025-01-01 --end 2025-01-03
+flyji> ingest --start 2025-03-10 --end 2025-03-12
+flyji> ingest --start 2025-01-02 --end 2025-01-05
+flyji> ingest status
+```
+
+Configure prompts for the archive manifest, saved airport CSV, commercial filter
+and output directory. Settings persist in the selected admin database. `ingest`
+without date flags prompts for a range, suggesting three days; each job is limited
+to `FLIGHT_MAX_QUERY_DAYS` (31 by default) and returns to the shell when finished.
+Use `help ingest` for equivalent flags, including `--budget-gib` (at most 20 GiB).
+The selected database's live `cache quota` also limits ADSB extraction.
+
+Periods can overlap, have gaps, or be ingested in any order. Completed archive days
+are skipped without downloading again. Stable leg keys and SQLite primary keys
+prevent duplicates; conflicting evidence for an existing key fails the current
+day instead of overwriting it. Compact boundary summaries connect overnight
+flights when adjacent days are backfilled, without retaining raw tracks or
+redownloading the neighboring day. Unobserved gaps are never bridged. Keep the
+airport snapshot and filter unchanged for one output directory.
+
+Ctrl+C stops a job: the current uncommitted day rolls back, previous daily commits
+remain, and partial downloads can resume. `ingest status` lists committed ranges,
+record counts and older days needing a one-time boundary-summary refresh.
+ADSB output contains observed itinerary candidates in its own `itineraries.db`;
+it is not yet used by scheduled journey search. See [ingestion](ingestion.md).
+
+`ingest --source csv` prompts for a licensed CSV, airport codes and dates;
+`ingest --source aerodatabox` prompts for airports and dates and uses the configured
+API credentials. Both persist settings for later jobs. Records are deduplicated
+within each job and upserted by `(provider, provider_id)` across sessions, including
+when the same flight is returned for both airports. Different provider IDs and
+codeshares are retained separately. Prefer stable `provider_id` values in CSV;
+without them, identity depends on the supplied flight number, origin and departure
+timestamp. These imports write scheduled facts to the selected serving database.
+
 ## Search journeys
 
 `search` without input flags launches guided prompts. It accepts ordered via
@@ -176,8 +216,6 @@ flight facts.
 - `debug replay SNAPSHOT.json` repeats a captured routing calculation and checks
   whether the result matches. It opens no database and never restores records.
   This is a developer tool for reproducing unexpected routing decisions.
-- `ingest` remains the manual AeroDataBox/CSV importer. Provider collection and
-  automatic refresh work remain deferred; this cleanup does not change ingestion.
 
 See the [routing engine guide](engine/routing.md) for request shapes and limits.
 
