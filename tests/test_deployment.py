@@ -921,6 +921,7 @@ def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
     )
     result = scripts.serve.seed_database(root)
     assert result["seeded"] is False and result["flight_count"] == 1
+    asyncio.run(scripts.serve.check_installation(root))
     application, _ = scripts.serve.create_server(root)
     with TestClient(application, base_url="https://fly.boboji.fyi") as client:
         response = client.get("/v1/catalog")
