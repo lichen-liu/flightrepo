@@ -6,4 +6,4 @@ import sys
 from admin.client import main
 
 if __name__ == "__main__":
-    main(["reset", *sys.argv[1:]])
+    main(["maintenance", "clear-data", *sys.argv[1:]])

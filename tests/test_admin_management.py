@@ -49,7 +49,7 @@ def test_switch_database_and_per_command_override(database, tmp_path, capsys):
     assert shell.database_path == second
     shell.onecmd("overview --json")
     assert '"flights": 0' in capsys.readouterr().out
-    shell.onecmd(f'--db "{path}" list-flights')
+    shell.onecmd(f'--db "{path}" flights')
     assert '"provider_id": "first"' in capsys.readouterr().out
     assert shell.database_path == second
     shell.onecmd(f'db "{tmp_path / "missing.db"}"')
@@ -71,20 +71,20 @@ def test_db_flag_starts_shell(database, monkeypatch):
 
 
 def test_browse_and_show(database, capsys):
-    client.run(["list-flights", "--origin", "yyz", "--provider", "manual", "--status", "scheduled"])
+    client.run(["flights", "--origin", "yyz", "--provider", "manual", "--status", "scheduled"])
     assert len(json.loads(capsys.readouterr().out)) == 1
-    client.run(["list-flights", "--destination", "CDG"])
+    client.run(["flights", "--destination", "CDG"])
     assert json.loads(capsys.readouterr().out) == []
-    client.run(["show", "manual", "first"])
+    client.run(["flight", "show", "manual", "first"])
     assert json.loads(capsys.readouterr().out)["codeshares"] == ["UA1"]
     with pytest.raises(ValueError, match="not found"):
-        client.run(["show", "manual", "missing"])
+        client.run(["flight", "show", "manual", "missing"])
 
 
 def test_interactive_edit_preserves_identity_and_fetch(database, monkeypatch):
     path, original, _ = database
     answers(monkeypatch, ["AC2", "", "", "", "", "", "-", "", "landed", "UA2,UA3", "y"])
-    client.LocalShell().onecmd("edit manual first")
+    client.LocalShell().onecmd("flight edit manual first")
     saved = FlightReader(path).flight("manual", "first")
     assert saved.flight_number == "AC2"
     assert saved.departure_actual is None
@@ -111,7 +111,7 @@ def test_edit_cancellation_preserves_database(database, monkeypatch, stop):
         monkeypatch.setattr("builtins.input", interrupted)
     else:
         answers(monkeypatch, ["cancel"] if stop == "cancel" else [""] * 10 + ["n"])
-    client.run(["edit", "manual", "first"])
+    client.run(["flight", "edit", "manual", "first"])
     assert FlightReader(path).flight("manual", "first") == original
 
 
@@ -143,7 +143,7 @@ def test_invalid_edit_retries_before_save(database, monkeypatch, capsys):
             "y",
         ],
     )
-    client.run(["edit", "manual", "first"])
+    client.run(["flight", "edit", "manual", "first"])
     assert "Invalid flight" in capsys.readouterr().out
     assert FlightReader(path).flight("manual", "first").flight_number == "AC2"
 
@@ -154,19 +154,19 @@ def test_json_update_validates_and_requires_existing_identity(database, tmp_path
     data = original.model_dump(mode="json")
     data["flight_number"] = "AC2"
     source.write_text(json.dumps(data))
-    client.run(["update", "manual", "first", str(source)])
+    client.run(["flight", "edit", "manual", "first", "--file", str(source)])
     assert FlightReader(path).flight("manual", "first").flight_number == "AC2"
     data["provider_id"] = "other"
     source.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="cannot change"):
-        client.run(["update", "manual", "first", str(source)])
+        client.run(["flight", "edit", "manual", "first", "--file", str(source)])
     with pytest.raises(ValueError, match="not found"):
-        client.run(["update", "manual", "absent", str(source)])
+        client.run(["flight", "edit", "manual", "absent", "--file", str(source)])
     data["provider_id"] = "first"
     data["arrival_scheduled"] = "2026-10-17T12:00:00Z"
     source.write_text(json.dumps(data))
     with pytest.raises(ValueError):
-        client.run(["update", "manual", "first", str(source)])
+        client.run(["flight", "edit", "manual", "first", "--file", str(source)])
     assert len(FlightReader(path).all_records()) == 1
 
 
@@ -188,10 +188,10 @@ def test_update_and_delete_reject_stale_review(database):
 def test_delete_preview_decline_and_confirm(database, monkeypatch, capsys):
     path, original, _ = database
     answers(monkeypatch, ["n", "y"])
-    client.run(["delete", "manual", "first"])
+    client.run(["flight", "delete", "manual", "first"])
     assert FlightReader(path).flight("manual", "first") == original
     assert '"flight_number": "AC1"' in capsys.readouterr().out
-    client.LocalShell().onecmd("delete manual first")
+    client.LocalShell().onecmd("flight delete manual first")
     assert FlightReader(path).all_records() == []
 
 
@@ -230,21 +230,22 @@ def test_sql_rejects_non_read_operations(database, sql):
 
 
 @pytest.mark.parametrize(
-    "command", ["show", "query", "tables", "flights", "airports", "export-json"]
+    "command",
+    ["flight show", "inspect query", "inspect tables", "flights", "airports", "export-json"],
 )
 def test_reads_do_not_initialize_missing_database(tmp_path, monkeypatch, command):
     path = tmp_path / "missing.db"
     monkeypatch.setattr(client, "get_settings", lambda: Settings(database_path=path))
     extra = {
-        "show": ["manual", "first"],
-        "query": ["SELECT 1"],
-        "tables": [],
+        "flight show": ["manual", "first"],
+        "inspect query": ["SELECT 1"],
+        "inspect tables": [],
         "flights": ["--start", "2026-10-17T00:00:00Z", "--end", "2026-10-18T00:00:00Z"],
         "airports": [],
         "export-json": [str(tmp_path / "output.json")],
     }
     with pytest.raises(sqlite3.OperationalError):
-        client.run([command, *extra[command]])
+        client.run([*command.split(), *extra[command]])
     assert not path.exists()
 
 
@@ -289,7 +290,7 @@ def test_routing_flags_and_guided_search_replay(database, tmp_path, monkeypatch,
     )
     result = json.loads(capsys.readouterr().out)
     assert len(result["items"]) == 1
-    client.run(["replay-routing", str(snapshot)])
+    client.run(["debug", "replay", str(snapshot)])
     assert json.loads(capsys.readouterr().out)["matches_saved_result"]
     answers(
         monkeypatch,
@@ -307,14 +308,13 @@ def test_routing_flags_and_guided_search_replay(database, tmp_path, monkeypatch,
             "",
             "",
             "n",
-            "n",
         ],
     )
-    client.run(["search-route", "--snapshot-out", str(snapshot)])
-    assert json.loads(snapshot.read_text())["request"]["via_airport"] == "YUL"
+    client.run(["search", "--snapshot-out", str(snapshot)])
+    assert json.loads(snapshot.read_text())["request"]["via_airport"] == ["YUL"]
 
 
-def test_real_shell_create_view_edit_delete(tmp_path):
+def test_real_shell_create_browse_inspect_and_help(tmp_path):
     import os
     import subprocess
     import sys
@@ -332,11 +332,11 @@ def test_real_shell_create_view_edit_delete(tmp_path):
                 "2026-10-17T15:00:00Z",
                 "n",
                 "y",
-                "list-flights",
+                "flights",
                 "overview",
                 "db",
-                'query "SELECT COUNT(*) FROM flights"',
-                "help edit",
+                'inspect query "SELECT COUNT(*) FROM flights"',
+                "help flight edit",
                 "quit",
                 "",
             ]

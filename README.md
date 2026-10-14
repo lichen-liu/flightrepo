@@ -48,7 +48,7 @@ SQLite requires no database service. WAL mode permits separate readers and one w
 
 ```sh
 cp .env.example .env
-python -m admin stats
+python -m admin maintenance init
 uvicorn server.api:app --reload --host 127.0.0.1 --port 8001
 ```
 
@@ -56,15 +56,15 @@ The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the
 
 Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
-Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for `list-flights`, `show`, interactive `edit`, confirmed `delete`, read-only SQL `query`, and advanced routing with `search-route` prompts or `search` flags. Reads leave the database unchanged.
+Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
 
-Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `stats` to initialize a new empty database.
+Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize or upgrade a database explicitly.
 
 ```sh
 python -m admin import-json var/flights.json
-python -m admin import-airports var/airports.json
+python -m admin airports import var/airports.json
 python -m admin export-json var/flights-export.json
-python -m admin export-airports var/airport-catalog.json
+python -m admin airports export var/airport-catalog.json
 python -m admin ingest --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
 python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
@@ -76,10 +76,10 @@ To enter an entire route by hand, start `FLIGHT_DATABASE_PATH=/absolute/path/to/
 AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, caching and redistribution rights must be checked for your account. Automatic refresh is not implemented; run `ingest` separately to update the same database while readers remain connected.
 
 ```sh
-python scripts/reset_local_data.py --yes
+python -m admin maintenance clear-data --yes
 ```
 
-Reset clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
+`maintenance clear-data` clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
 
 ## Development checks
 

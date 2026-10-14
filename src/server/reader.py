@@ -51,6 +51,7 @@ class FlightReader(SQLiteConnection):
         """Aggregate database coverage in one read snapshot without loading flights."""
         with self.connect() as connection:
             connection.execute("BEGIN")
+            journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
             totals = dict(
                 connection.execute("""SELECT COUNT(*) AS flights,
                 COUNT(DISTINCT airline_iata) AS airlines,
@@ -81,7 +82,7 @@ class FlightReader(SQLiteConnection):
                 ORDER BY flights DESC, origin_iata, destination_iata LIMIT 5
             """)
             ]
-        return {"data_file": str(self.path.resolve()), **totals}
+        return {"data_file": str(self.path.resolve()), "journal_mode": journal_mode, **totals}
 
     def all_records(self) -> list[FlightRecord]:
         with self.connect() as connection:
@@ -100,9 +101,21 @@ class FlightReader(SQLiteConnection):
             raise ValueError(f"Flight not found: {provider}/{provider_id}")
         return self._record(row)
 
-    def list_flights(self, *, origin=None, destination=None, provider=None, status=None, limit=20):
+    def list_flights(
+        self,
+        *,
+        origin=None,
+        destination=None,
+        provider=None,
+        status=None,
+        start=None,
+        end=None,
+        limit=20,
+    ):
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
+        if start is not None and end is not None and end <= start:
+            raise ValueError("end must follow start")
         clauses, values = [], []
         for column, value in (
             ("origin_iata", origin),
@@ -113,6 +126,10 @@ class FlightReader(SQLiteConnection):
             if value is not None:
                 clauses.append(f"{column}=?")
                 values.append(value)
+        for operator, value in ((">=", start), ("<", end)):
+            if value is not None:
+                clauses.append(f"departure_scheduled {operator} ?")
+                values.append(utc_text(value))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
             return [

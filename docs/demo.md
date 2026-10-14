@@ -33,6 +33,6 @@ The twelve schedules, airport metadata and LHR → LGW allowance are synthetic. 
 The script seeds `var/connections-demo.db`; it does not select or reset `var/flights.db`. Both databases and their sidecars are ignored by Git. To inspect the same demo from the terminal:
 
 ```sh
-FLIGHT_DATABASE_PATH="$PWD/var/connections-demo.db" python -m admin search-itineraries var/route-search-request.json --snapshot-out var/search-replay.json
-python -m admin replay-routing var/search-replay.json
+FLIGHT_DATABASE_PATH="$PWD/var/connections-demo.db" python -m admin search --request var/route-search-request.json --snapshot-out var/search-replay.json
+python -m admin debug replay var/search-replay.json
 ```

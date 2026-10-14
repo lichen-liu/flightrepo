@@ -41,18 +41,18 @@ def test_local_management_roundtrip_and_reset(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         client.run(["import-json", str(source)])
     assert store.stats()["flights"] == 1
-    client.run(["delete", "fixture", "one", "--yes"])
+    client.run(["flight", "delete", "fixture", "one", "--yes"])
     assert store.stats()["flights"] == 0
     client.run(["import-json", str(exported)])
     with pytest.raises(ValueError):
-        client.run(["reset"])
+        client.run(["maintenance", "clear-data"])
     assert store.stats()["flights"] == 1
-    client.run(["reset", "--yes"])
+    client.run(["maintenance", "clear-data", "--yes"])
     assert store.stats()["flights"] == 0
     outside = tmp_path / "outside.json"
     outside.write_text("keep")
     with pytest.raises(ValueError):
-        client.reset_database(outside)
+        client.clear_database(outside)
     assert outside.read_text() == "keep"
 
 
@@ -68,10 +68,10 @@ def test_client_timestamp_normalizes_offsets():
         ("import-json", None),
         ("import-json", {}),
         ("import-json", [{"invalid": True}]),
-        ("import-airports", None),
-        ("import-airports", {"airports": None}),
-        ("import-airports", {"airports": [], "transfers": None}),
-        ("import-airports", {"airports": [], "transfers": {}}),
+        ("airports import", None),
+        ("airports import", {"airports": None}),
+        ("airports import", {"airports": [], "transfers": None}),
+        ("airports import", {"airports": [], "transfers": {}}),
     ],
 )
 def test_invalid_import_does_not_create_database(tmp_path, monkeypatch, command, data):
@@ -80,7 +80,7 @@ def test_invalid_import_does_not_create_database(tmp_path, monkeypatch, command,
     source = tmp_path / "input.json"
     source.write_text(json.dumps(data))
     with pytest.raises(ValueError):
-        client.run([command, str(source)])
+        client.run([*command.split(), str(source)])
     assert not settings.database_path.exists()
 
 
@@ -88,14 +88,14 @@ def test_invalid_import_does_not_create_database(tmp_path, monkeypatch, command,
     "command,data,message",
     [
         ("import-json", None, "JSON array"),
-        ("import-airports", {"airports": [], "transfers": None}, "transfers array"),
+        ("airports import", {"airports": [], "transfers": None}, "transfers array"),
     ],
 )
 def test_invalid_import_cli_has_readable_failure(tmp_path, command, data, message):
     source = tmp_path / "input.json"
     source.write_text(json.dumps(data))
     result = subprocess.run(
-        [sys.executable, "-m", "admin", command, str(source)],
+        [sys.executable, "-m", "admin", *command.split(), str(source)],
         env={**os.environ, "FLIGHT_DATABASE_PATH": str(tmp_path / "missing.db")},
         capture_output=True,
         text=True,
@@ -135,10 +135,10 @@ def test_query_limits_rejected_before_database_creation(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "get_settings", lambda: settings)
     with pytest.raises(SystemExit):
         client.run(["airports", "--limit", "1001"])
-    with pytest.raises(ValueError, match="between 1 and 100"):
+    with pytest.raises(ValueError, match="100"):
         client.run(
             [
-                "itineraries",
+                "search",
                 "--origin",
                 "YYZ",
                 "--destination",
@@ -147,6 +147,8 @@ def test_query_limits_rejected_before_database_creation(tmp_path, monkeypatch):
                 "2026-10-17T00:00:00Z",
                 "--end",
                 "2026-10-18T00:00:00Z",
+                "--horizon",
+                "2026-10-19T00:00:00Z",
                 "--limit",
                 "101",
             ]
@@ -237,7 +239,7 @@ def test_overview_empty_database_and_missing_file(tmp_path, monkeypatch, capsys)
     with pytest.raises(sqlite3.OperationalError, match="unable to open database"):
         client.run(["overview"])
     assert not settings.database_path.exists()
-    client.run(["stats"])
+    client.run(["maintenance", "init"])
     capsys.readouterr()
     client.run(["overview"])
     text = capsys.readouterr().out
