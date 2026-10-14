@@ -369,10 +369,14 @@ def parser():
     ingest.add_argument(
         "--output-db",
         type=Path,
-        help="ADSB itinerary SQLite destination; defaults to DATA_ROOT/itineraries.db",
+        help="ADSB itinerary SQLite destination; defaults to the selected admin database",
     )
     ingest.add_argument("--boundary-manifest", type=Path)
-    ingest.add_argument("--budget-gib", type=float)
+    ingest.add_argument(
+        "--budget-gib",
+        type=float,
+        help="daily raw/staging working-space budget; separate from cache quota",
+    )
     ingest.add_argument(
         "--refresh-diagnostics",
         action="store_true",

@@ -191,14 +191,14 @@ def test_parallel_repeated_day_commits_only_once(tmp_path):
     assert len(requests) == 1 and len(rows(tmp_path, "itinerary_legs")) == 1
 
 
-def test_external_output_database_is_budgeted_once_when_it_also_provides_policy(tmp_path):
+def test_external_output_database_is_excluded_from_working_budget(tmp_path):
     root, target = tmp_path / "scratch", tmp_path / "hosted" / "flights.db"
     FlightUpdater(target).initialize()
     receipt, item = run(root, date(2025, 1, 1), [leg_trace()], output_db=target, policy_db=target)
     assert receipt["counts"]["records_inserted"] == 1
     assert not (root / "itineraries.db").exists()
     budget = extraction.ExtractionBudget(root, policy_db=target, output_db=target)
-    assert budget.used() == extraction.directory_bytes(root) + database_bytes(target)
+    assert budget.used() == extraction.directory_bytes(root)
     resumed = extract_day(
         root, "2025-01-01", [item], AIRPORTS, rules(), output_db=target, policy_db=target
     )
@@ -208,6 +208,45 @@ def test_external_output_database_is_budgeted_once_when_it_also_provides_policy(
         run(root, date(2025, 1, 2), [], output_db=target, policy_db=target)
     with sqlite3.connect(target) as connection:
         assert connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_raw_working_space_can_exceed_database_quota(tmp_path, external):
+    root = tmp_path / "scratch"
+    root.mkdir()
+    target = tmp_path / "hosted.db" if external else root / "itineraries.db"
+    FlightUpdater(target).initialize()
+    set_quota(target, 1024**2)
+    # Retained raw data is deliberately larger than the persisted database limit.
+    raw = root / "raw" / "current-copy.tar"
+    raw.parent.mkdir()
+    raw.write_bytes(b"\0" * (2 * 1024**2))
+    receipt, _ = run(root, date(2025, 1, 1), [leg_trace()], output_db=target)
+    budget = extraction.ExtractionBudget(root, output_db=target)
+    assert receipt["counts"]["records_inserted"] == 1
+    assert database_bytes(target) < budget.database_ceiling() < budget.used()
+    assert budget.ceiling() == extraction.MAX_BUDGET_BYTES
+    assert raw.exists()
+    # Turning the database quota off does not remove the separate scratch guard.
+    set_quota(target, None)
+    with pytest.raises(OSError, match="working space.*budget"):
+        extraction.ExtractionBudget(root, limit=1024**2, output_db=target).check()
+
+
+def test_uncommitted_database_pages_are_checked_against_persisted_quota(tmp_path):
+    target = tmp_path / "flights.db"
+    FlightUpdater(target).initialize()
+    set_quota(target, database_bytes(target) + 512 * 1024)
+    budget = extraction.ExtractionBudget(tmp_path / "scratch", output_db=target)
+    with sqlite3.connect(target) as connection:
+        connection.execute("PRAGMA cache_size=-8192")
+        connection.execute("CREATE TABLE growth_probe(data BLOB)")
+    with pytest.raises(OSError, match="Database.*quota"), sqlite3.connect(target) as connection:
+        connection.execute("PRAGMA cache_size=-8192")
+        connection.execute("INSERT INTO growth_probe VALUES (zeroblob(2097152))")
+        budget.check_database(connection)
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM growth_probe").fetchone()[0] == 0
 
 
 def test_conflicting_identity_rolls_back_refresh_without_replacing_existing_record(tmp_path):

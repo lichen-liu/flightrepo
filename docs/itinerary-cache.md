@@ -51,6 +51,8 @@ setting: the database value is consulted on each storage boundary.
 Quota usage includes the main SQLite file, its WAL/SHM files, downloaded SQLite
 chunks and temporary chunk files, measured by file length. Source archives,
 user exports, research files and unrelated files outside this cache are excluded.
+ADSB raw archives and daily extraction staging are excluded even inside the same
+data directory; ingestion has a separate `--budget-gib` working-space limit.
 One immutable chunk is one LRU unit. A transactional increasing access sequence
 provides ordering across processes and avoids wall-clock changes or ties.
 

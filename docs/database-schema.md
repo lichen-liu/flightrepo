@@ -154,7 +154,10 @@ bounds and missing actual-event semantics. Query plans used the intended
 origin/window and global-window indexes; a two-connection WAL probe verified
 old-snapshot visibility during a write and new records after the read restarted.
 
-The 20 GiB quota includes database/WAL, disposable daily inputs and cached chunks.
+The 20 GiB quota is stored in SQLite (`itinerary_cache_policy.quota_bytes`) and
+includes database/WAL/SHM and cached itinerary chunks. Disposable daily raw inputs
+and staging use an independent `--budget-gib` working-space limit and are excluded
+from database quota accounting, including when stored in the same directory.
 Keep the existing live admin policy and next-IO LRU enforcement. Retire only
 recoverable downloads. Extracted legs, edits, tombstones, receipts and boundary
 state are durable; raw upstream archives are not a cheap per-leg fetch service.

@@ -1,4 +1,4 @@
-"""Resumable daily itinerary extraction with disposable raw inputs and a total budget."""
+"""Daily extraction with separate database quota and disposable working-space budget."""
 
 import hashlib
 import json
@@ -11,7 +11,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.file_lock import file_mutex
-from core.itinerary_cache import cache_directory, database_bytes, file_bytes, policy
+from core.itinerary_cache import (
+    cache_directory,
+    enforce_quota,
+    file_bytes,
+    policy,
+    usage_bytes,
+)
 from core.models import FlightRecord
 from core.storage import SCHEMA as SERVING_SCHEMA
 from core.storage import store_flight, utc_us
@@ -261,38 +267,66 @@ class ExtractionBudget:
     def __init__(self, root, limit=MAX_BUDGET_BYTES, policy_db=None, *, output_db=None):
         if type(limit) is not int or not 0 < limit <= MAX_BUDGET_BYTES:
             raise ValueError("Extraction budget must be positive and at most 20 GiB")
-        self.root, self.limit = root, limit
+        self.root, self.limit = Path(root).resolve(), limit
         self.policy_db = Path(policy_db).resolve() if policy_db else None
-        self.database = Path(output_db).resolve() if output_db else root / "itineraries.db"
+        self.database = Path(output_db).resolve() if output_db else self.root / "itineraries.db"
 
     def ceiling(self):
-        state = policy(self.policy_db, include_catalog=False) if self.policy_db else None
+        """The CLI limit belongs to scratch space, independent of database policy."""
+        return self.limit
+
+    def database_ceiling(self):
+        state = policy(self.policy_db or self.database, include_catalog=False)
         if self.policy_db and state is None:
             raise ValueError("Initialize the admin policy database before using --policy-db")
-        quota = state["quota_bytes"] if state else None
-        return min(self.limit, quota) if quota is not None else self.limit
+        return state["quota_bytes"] if state else None
 
     def used(self):
-        # Output and policy may be the same file; count its SQLite sidecars once.
+        """Raw/partial inputs and staging, excluding the durable database family."""
         databases = {self.database}
         if self.policy_db is not None:
             databases.add(self.policy_db)
-        extra = sum(
-            database_bytes(path) for path in databases if not path.is_relative_to(self.root)
+        excluded = {
+            item
+            for path in databases
+            for item in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"))
+        }
+        caches = [cache_directory(path) for path in databases]
+        return sum(
+            file_bytes(path)
+            for path in self.root.rglob("*")
+            if path not in excluded and not any(path.is_relative_to(cache) for cache in caches)
         )
-        if self.policy_db is not None:
-            cache = cache_directory(self.policy_db)
-            if not cache.is_relative_to(self.root):
-                extra += directory_bytes(cache)
-        return directory_bytes(self.root) + extra
+
+    def check_database(self, connection=None):
+        limit = self.database_ceiling()
+        if limit is None:
+            return
+        used = sum(usage_bytes(self.database))
+        if connection is not None:
+            # Pending pages may still be in SQLite's memory cache. Include logical
+            # growth before commit so an oversized day rolls back, rather than
+            # becoming a protected overage. WAL can add transient overhead;
+            # subsequent IO rechecks physical usage after checkpointing.
+            projected = (
+                connection.execute("PRAGMA page_count").fetchone()[0]
+                * connection.execute("PRAGMA page_size").fetchone()[0]
+            )
+            used += max(0, projected - file_bytes(self.database))
+        if used > limit:
+            raise OSError(
+                f"Database needs {used:,} bytes but quota is {limit:,}; "
+                "extraction stopped. Raise the database quota; durable legs are preserved."
+            )
 
     def check(self, reserve=0):
+        self.check_database()
         limit = self.ceiling()
         used = self.used()
         if used + reserve > limit:
             raise OSError(
-                f"Extraction needs {used + reserve:,} bytes but quota is {limit:,}; "
-                "extraction stopped. Raise the quota or free working space; durable legs are preserved."
+                f"Extraction working space needs {used + reserve:,} bytes but budget is {limit:,}; "
+                "extraction stopped. Raise --budget-gib or free working space; durable legs are preserved."
             )
         return limit - used
 
@@ -493,6 +527,7 @@ def _extract_day(
             receipt = None
     else:
         receipt = None
+    enforce_quota(database)
     budget.check(1024**2)
     database.parent.mkdir(parents=True, exist_ok=True)
     with (
@@ -586,6 +621,7 @@ def _extract_day(
         counters["candidate_records"] = counters["records_inserted"]
         counters["records_inserted"] = counters["records_already_present"] = 0
         diagnostics.phase = "prepare_commit"
+        enforce_quota(database)
         budget.check(1024**2)
         with connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -676,6 +712,7 @@ def _extract_day(
                     batch_id,
                 ),
             )
+            budget.check_database(connection)
             diagnostics.phase = "commit"
         diagnostics.committed = True
         diagnostics.phase = "checkpoint"

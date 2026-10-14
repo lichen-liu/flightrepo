@@ -22,7 +22,12 @@ def main():
     )
     parser.add_argument("--start", type=date.fromisoformat)
     parser.add_argument("--end", type=date.fromisoformat)
-    parser.add_argument("--budget-gib", type=float, default=20)
+    parser.add_argument(
+        "--budget-gib",
+        type=float,
+        default=20,
+        help="daily raw/staging working-space budget; separate from the persisted database quota",
+    )
     parser.add_argument(
         "--policy-db", type=Path, help="optional initialized admin DB providing a live quota"
     )

@@ -146,12 +146,16 @@ flyji> ingest status
 
 Configure prompts for the archive manifest, saved airport CSV, commercial filter
 and working directory/output database. `--output-db var/hosted/flights.db` writes
-the observed facts to that exact file; without it, output defaults to
-`DATA_ROOT/itineraries.db`. Settings persist in the selected admin database. `ingest`
+the observed facts to that exact file; without it, output defaults to the selected
+admin database. Settings persist in that database. `ingest`
 without date flags prompts for a range, suggesting three days; each job is limited
 to `FLIGHT_MAX_QUERY_DAYS` (31 by default) and returns to the shell when finished.
-Use `help ingest` for equivalent flags, including `--budget-gib` (at most 20 GiB).
-The selected database's live `cache quota` also limits ADSB extraction.
+Use `help ingest` for equivalent flags. `--budget-gib` (at most 20 GiB) limits
+daily raw/staging working space only. The persisted live `cache quota` separately
+limits the database, WAL/SHM and normalized itinerary cache; it excludes raw inputs
+and staging. Total disk space needs room for both limits. Extraction rechecks
+database policy before committing a day, so another admin shell can adjust it
+during parsing. No reset or restart is required for a quota change.
 
 Periods can overlap, have gaps, or be ingested in any order. Completed archive days
 are skipped without downloading again. Stable leg keys and SQLite primary keys

@@ -150,13 +150,28 @@ needs `--download` if raw inputs were removed. Normal repeats skip processing an
 label logged receipt counts as historical. Coverage still needs comparison with
 a trusted flight list; these diagnostics cannot prove lossless extraction.
 
-The **20 GiB** cap includes output, raw/partial files and SQLite sidecars.
-`--budget-gib` lowers it; `--policy-db /path/flights.db` reads the initialized
-admin DB's live `cache quota` and includes its storage, capped by the CLI limit.
-Insufficient space stops extraction without deleting legs. Allow 4 GiB for raw
-inputs and 1 GiB working space. [LRU](itinerary-cache.md) applies to recoverable
-downloads, not the only copy of extracted legs.
-Downloads also preserve 1 GiB of free filesystem space.
+There are **two independent limits**. The durable database quota defaults to
+20 GiB and is stored in `itinerary_cache_policy.quota_bytes` in SQLite. Change it
+live with `cache quota 20GiB`. It covers the output database, WAL/SHM and normalized
+itinerary cache; **raw archives and daily staging are excluded**. Extraction reads
+the output database's policy automatically. `--policy-db /path/flights.db` can
+instead provide policy from another initialized admin database. Raising or
+disabling this quota does not change the working-space limit.
+
+`--budget-gib` independently caps raw/partial archives and daily staging under
+the data root (default/max 20 GiB). It excludes the durable database and its cache,
+even when those are inside the data root. Allow about 4 GiB for one raw day and
+1 GiB for staging; downloads also preserve 1 GiB of free filesystem space. Total
+disk provision must accommodate the database **plus** this separate working space.
+
+Quota changes are checked at the next storage boundary and again before the
+daily commit, including pending SQLite page growth. A lowered quota stops new
+ingestion if durable storage already exceeds it; committed legs remain readable.
+An oversized day rolls back. SQLite WAL/checkpointing and concurrent active reads
+can temporarily exceed physical quota; subsequent IO checks usage again.
+[LRU](itinerary-cache.md) retires recoverable itinerary chunks, never the only
+copy of extracted legs. Successful days remove their verified raw input; failed
+days retain it for retry. Processing stays one archive day at a time.
 
 ## Measured statistics
 
@@ -174,8 +189,10 @@ The [December 30 pilot report](../catalogs/adsblol-extraction-pilot.json) record
 The earlier subset contained 36.8 million position samples. Aircraft-days are
 not flight legs. This partial pilot does not establish full airline coverage.
 
-At 504 bytes/leg, 20 GiB holds about 42.6 million legs; a 15 GiB facts allowance
-holds 32 million while reserving 5 GiB for processing. Capacity scenarios:
+At the pilot's 504 bytes/leg, 20 GiB holds about 42.6 million legs. If the **entire
+physical disk allowance** is 20 GiB, a 15 GiB database limit leaves 5 GiB separately
+for processing. A 20 GiB database quota itself does not reserve that workspace.
+Capacity scenarios using the older pilot's measured representation:
 
 | Retained legs/day | 20 GiB data only | 15 GiB data + 5 GiB working |
 | ---: | ---: | ---: |
@@ -186,6 +203,33 @@ holds 32 million while reserving 5 GiB for processing. Capacity scenarios:
 These extrapolations exclude growth in index/metadata overhead, including the
 new per-day boundary summaries needed for out-of-order backfills. Raw transfer
 cost and extraction accuracy are separate from final storage size.
+
+The shared typed schema's [size probe](database-schema.md#space-and-quota) measured
+244 bytes/leg including the identity and two observed-time indexes, excluding
+extraction state. A live snapshot on 2026-10-14 held 3,783 accepted legs across
+69 completed archive days: the flight table and its three indexes occupied
+0.93 MiB, while overnight boundary summaries and their index occupied 58.3 MiB.
+These conservative yields are not total airline flight counts. Keeping fields
+needed by search is inexpensive; boundary state currently dominates storage.
+
+## Recommended next steps
+
+1. Keep serving the completed days from the shared database and continue the
+   requested July–December 2023 range one day at a time. Quota accounting changes
+   do not require a reset. Readiness, calendar dates, search and admin should all
+   observe the same committed daily records.
+2. Compare a small sample of accepted/rejected days against a trusted flight
+   list. Review ground-endpoint, stale-position and observation-gap diagnostics
+   before expanding years or claiming coverage. The source supplies historical
+   observations, not future schedules.
+3. Compact overnight boundary state while preserving the adjacent-day evidence
+   needed for out-of-order backfills; test midnight joins and disjoint ingestion
+   before pruning anything. Removing searchable itinerary fields is lower value.
+4. If evidence justifies changing extraction rules or boundary representation,
+   initialize a fresh real-mode database, preserve the configured quota/profile,
+   ingest a few validation days, and verify API/calendar/search/admin against it.
+   Then reingest the requested range day by day. Stable source identities deduplicate
+   repeats. A reset without extractor changes gives the same incomplete coverage.
 
 ## Other ingestion paths
 
