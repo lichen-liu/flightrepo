@@ -1,7 +1,7 @@
 """Flight queries over the shared local itinerary database."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -13,7 +13,7 @@ from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot, flight_key
-from core.storage import SQLiteConnection, utc_text, utc_us
+from core.storage import EPOCH, SQLiteConnection, utc_text, utc_us
 from core.timezones import resolve_local
 from server.web_models import (
     AvailableDates,
@@ -447,34 +447,64 @@ class FlightReader(SQLiteConnection):
     def web_catalog(self) -> WebCatalog:
         with self.connect() as connection:
             connection.execute("BEGIN")
-            facts = dict(
-                connection.execute("""SELECT COUNT(*) flight_count,
-                COALESCE(SUM(status = 'cancelled'), 0) cancelled_count,
-                MIN(CASE WHEN status != 'cancelled' THEN departure END) first_departure,
-                MAX(CASE WHEN status != 'cancelled' THEN departure END) last_departure,
-                MIN(fetched_at) oldest_fact_refresh, MAX(fetched_at) newest_fact_refresh FROM flights""").fetchone()
+            # Aggregate typed storage directly. The compatibility view formats
+            # every timestamp; doing that for a whole archive delays startup.
+            conditions = {
+                "scheduled": "departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL",
+                "observed": "departure_observed_lower_us IS NOT NULL",
+                "actual": "departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL",
+            }
+            columns = {
+                basis: "departure_observed_lower_us"
+                if basis == "observed"
+                else f"departure_{basis}_us"
+                for basis in conditions
+            }
+            aggregates = ",".join(
+                f"COALESCE(SUM(eligible AND ({condition})),0) {basis}_count,"
+                f"MIN(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_first,"
+                f"MAX(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_last"
+                for basis, condition in conditions.items()
             )
-            review = self._review_counts(connection)
-            facts["total_record_count"] = facts["flight_count"]
-            facts["flight_count"] = review["searchable_flights"]
-            facts["needs_review_count"] = review["needs_review_count"]
+            complete = " OR ".join(f"({condition})" for condition in conditions.values())
+            facts = dict(
+                connection.execute(f"""WITH live AS (
+                SELECT f.*, status <> 'cancelled' AND (
+                    (evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
+                    OR itinerary_reviewed=1) eligible
+                FROM flight_legs f WHERE NOT EXISTS (
+                    SELECT 1 FROM flight_tombstones t
+                    WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key
+                )) SELECT COUNT(*) total_record_count,
+                COALESCE(SUM(eligible AND ({complete})),0) flight_count,
+                COALESCE(SUM((evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)
+                    AND itinerary_reviewed=0),0) needs_review_count,
+                COALESCE(SUM(status = 'cancelled'), 0) cancelled_count,
+                MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh,
+                {aggregates} FROM live""").fetchone()
+            )
+            for key in ("oldest_fact_refresh", "newest_fact_refresh"):
+                if facts[key] is not None:
+                    facts[key] = EPOCH + timedelta(microseconds=facts[key])
             facts["providers"] = [
                 r[0]
                 for r in connection.execute(
                     "SELECT DISTINCT provider FROM flights ORDER BY provider"
                 )
             ]
-            facts["time_bases"] = self._time_bases(connection)
+            facts["time_bases"] = {basis: facts.pop(f"{basis}_count") for basis in conditions}
             facts["default_time_basis"] = next(
                 (basis for basis, count in facts["time_bases"].items() if count), "scheduled"
             )
             basis = facts["default_time_basis"]
-            column = "departure_observed_lower" if basis == "observed" else f"departure_{basis}"
-            arrival = "arrival_observed_upper" if basis == "observed" else f"arrival_{basis}"
-            coverage = connection.execute(
-                f"SELECT MIN({column}),MAX({column}) FROM flights WHERE status != 'cancelled' AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1) AND {column}_us IS NOT NULL AND {arrival}_us IS NOT NULL"
-            ).fetchone()
-            facts["first_departure"], facts["last_departure"] = coverage
+            coverage = facts[f"{basis}_first"], facts[f"{basis}_last"]
+            for name in conditions:
+                facts.pop(f"{name}_first")
+                facts.pop(f"{name}_last")
+            facts["first_departure"], facts["last_departure"] = (
+                EPOCH + timedelta(microseconds=value) if value is not None else None
+                for value in coverage
+            )
             facts["sources"] = [
                 dict(row)
                 for row in connection.execute(
@@ -482,14 +512,19 @@ class FlightReader(SQLiteConnection):
                 )
             ]
             suggestion = connection.execute(
-                "SELECT origin_iata,destination_iata FROM searchable_legs WHERE time_basis=? ORDER BY departure_lower_us,source_id,source_record_key LIMIT 1",
-                (basis,),
+                f"""SELECT origin_iata,destination_iata FROM flight_legs f
+                WHERE status <> 'cancelled' AND ({conditions[basis]})
+                AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
+                    OR itinerary_reviewed=1)
+                AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
+                    WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)
+                ORDER BY {columns[basis]},source_id,source_record_key LIMIT 1""",
             ).fetchone()
             rows = list(
-                connection.execute("""WITH codes(iata) AS (
-                SELECT iata FROM airports UNION SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
-                SELECT codes.iata, a.name, a.city_id, a.timezone, a.latitude, a.longitude
-                FROM codes LEFT JOIN airports a ON a.iata=codes.iata ORDER BY CASE WHEN codes.iata IN (SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights) THEN 0 ELSE 1 END,codes.iata LIMIT 1001""")
+                connection.execute("""WITH active_codes(iata) AS (
+                SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
+                SELECT a.iata, a.name, a.city_id, a.timezone, a.latitude, a.longitude
+                FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""")
             )
         return WebCatalog(
             airports=sorted((dict(r) for r in rows[:1000]), key=lambda row: row["iata"]),
@@ -498,13 +533,18 @@ class FlightReader(SQLiteConnection):
             suggested_route=dict(suggestion) if suggestion else None,
         )
 
-    def available_dates(self, origin: str, clock: str = "local", time_basis=None) -> AvailableDates:
+    def available_dates(
+        self, origin: str, clock: str = "local", time_basis=None, *, destination=None
+    ) -> AvailableDates:
         if clock not in ("local", "UTC"):
             raise ValueError("clock must be local or UTC")
         origin = airport_code(origin)
+        destination = airport_code(destination) if destination is not None else None
         with self.connect() as connection:
             connection.execute("BEGIN")
             basis = time_basis or self._default_basis(connection)
+            if basis not in ("scheduled", "observed", "actual"):
+                raise ValueError("Unknown flight time basis")
             zone = "UTC"
             if clock == "local":
                 row = connection.execute(
@@ -518,26 +558,41 @@ class FlightReader(SQLiteConnection):
             first_column = (
                 "departure_observed_lower" if basis == "observed" else f"departure_{basis}"
             )
-            last_column = "departure_observed_upper" if basis == "observed" else first_column
             arrival_column = "arrival_observed_upper" if basis == "observed" else f"arrival_{basis}"
+            route_clause = " AND destination_iata=?" if destination is not None else ""
+            route_params = [origin, *([destination] if destination is not None else [])]
             rows = connection.execute(
-                f"SELECT {first_column},{last_column} FROM flights WHERE origin_iata=? AND status != 'cancelled' AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1) AND {first_column}_us IS NOT NULL AND {arrival_column}_us IS NOT NULL",
-                (origin,),
+                "SELECT departure_lower_us,departure_upper_us FROM searchable_legs "
+                f"WHERE origin_iata=?{route_clause} AND time_basis=?",
+                [*route_params, basis],
             )
             timezone = ZoneInfo(zone)
-            dates = sorted(
-                {
-                    datetime.fromisoformat(row[0]).astimezone(timezone).date()
-                    for row in rows
-                    if row[0] is not None
-                    and (
-                        row[1] is None
-                        or datetime.fromisoformat(row[0]).astimezone(timezone).date()
-                        == datetime.fromisoformat(row[1]).astimezone(timezone).date()
-                    )
-                }
-            )
-        return AvailableDates(origin=origin, timezone=zone, dates=dates, time_basis=basis)
+
+            def day(value):
+                return (EPOCH + timedelta(microseconds=value)).astimezone(timezone).date()
+
+            dates = sorted({day(row[0]) for row in rows if day(row[0]) == day(row[1])})
+            pending = {}
+            for row in connection.execute(
+                f"""SELECT {first_column}_us FROM flight_legs f
+                WHERE origin_iata=?{route_clause} AND status <> 'cancelled'
+                AND {first_column}_us IS NOT NULL AND {arrival_column}_us IS NOT NULL
+                AND itinerary_reviewed=0
+                AND (evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)
+                AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
+                    WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)""",
+                route_params,
+            ):
+                date = day(row[0])
+                pending[date] = pending.get(date, 0) + 1
+        return AvailableDates(
+            origin=origin,
+            destination=destination,
+            timezone=zone,
+            dates=dates,
+            time_basis=basis,
+            pending_review_dates=pending,
+        )
 
     def airports(
         self, city_id: str | None = None, query: str = "", limit: int = 500

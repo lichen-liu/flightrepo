@@ -94,6 +94,67 @@ def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
     assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
 
 
+def test_nonstop_calendar_does_not_enable_other_destinations_or_unreviewed_estimates(client, demo):
+    start = datetime.fromisoformat("2023-07-20T12:00:00Z")
+    candidates = [
+        FlightRecord(
+            provider="observations",
+            provider_id=f"candidate-{i}",
+            origin_iata="YYZ",
+            destination_iata="YVR",
+            fetched_at=start,
+            departure_observed_lower=start,
+            departure_observed_upper=start + timedelta(minutes=2),
+            arrival_observed_lower=start + timedelta(hours=5),
+            arrival_observed_upper=start + timedelta(hours=5, minutes=2),
+            evidence_kind="inferred_airport_proximity",
+        )
+        for i in range(25)
+    ]
+    other_route = candidates[0].model_copy(
+        update={
+            "provider_id": "other-route",
+            "destination_iata": "BOS",
+            "itinerary_reviewed": True,
+        }
+    )
+    demo[0].upsert([*candidates, other_route])
+    params = {"origin": "YYZ", "clock": "UTC", "time_basis": "observed"}
+    assert client.get("/v1/dates", params=params).json()["dates"] == ["2023-07-20"]
+    direct = client.get("/v1/dates", params={**params, "destination": "yvr"})
+    assert direct.status_code == 200
+    assert direct.json() == {
+        "origin": "YYZ",
+        "destination": "YVR",
+        "timezone": "UTC",
+        "time_basis": "observed",
+        "dates": [],
+        "pending_review_dates": {"2023-07-20": 25},
+    }
+    approved = candidates[0].model_copy(update={"itinerary_reviewed": True})
+    demo[0].upsert([approved])
+    available = client.get("/v1/dates", params={**params, "destination": "YVR"}).json()
+    assert available["dates"] == ["2023-07-20"]
+    assert available["pending_review_dates"] == {"2023-07-20": 24}
+    assert client.get("/v1/dates", params={**params, "destination": "bad-code"}).status_code == 422
+
+
+def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_precision(client, demo):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    updated = original.model_copy(
+        update={
+            "departure_actual": original.departure_scheduled + timedelta(microseconds=123456),
+            "arrival_actual": original.arrival_scheduled + timedelta(microseconds=654321),
+            "fetched_at": original.fetched_at + timedelta(microseconds=123456),
+        }
+    )
+    demo[0].upsert([updated])
+    catalog = client.get("/v1/catalog").json()["dataset"]
+    assert catalog["flight_count"] == catalog["total_record_count"] == 12
+    assert catalog["time_bases"] == {"scheduled": 12, "observed": 0, "actual": 1}
+    assert datetime.fromisoformat(catalog["newest_fact_refresh"]) == updated.fetched_at
+
+
 def test_aircraft_type_survives_storage_edit_and_serving(client, demo):
     record = FlightRecord.model_validate(demo[2]["flights"][0])
     record.aircraft_type_code = "A320"

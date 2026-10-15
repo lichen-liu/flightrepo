@@ -187,7 +187,7 @@ export class RouteMap {
     this.projection = p;
     s.append("title").text(
       this.legs.length
-        ? `Scheduled route ${this.legs.map((f) => f.origin_iata).join(" → ")} → ${this.legs.at(-1).destination_iata}`
+        ? `Flight route ${this.legs.map((f) => f.origin_iata).join(" → ")} → ${this.legs.at(-1).destination_iata}`
         : "World map",
     );
     s.append("path")
@@ -270,7 +270,7 @@ export class RouteMap {
     this.svg.setAttribute(
       "aria-label",
       this.legs.length
-        ? `Scheduled flight route. ${codes.join(", ")}. ${missing ? `${missing} legs lack coordinates.` : ""}`
+        ? `Flight route. ${codes.join(", ")}. ${missing ? `${missing} legs lack coordinates.` : ""}`
         : "World map. Choose a journey to display its route.",
     );
     this.info.textContent = missing

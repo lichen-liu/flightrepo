@@ -379,6 +379,14 @@ summary {
 .options-panel {
   min-width: 0;
 }
+.workspace.empty-results {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace.empty-results .map-panel,
+.workspace.empty-results .schedule-panel,
+.workspace.empty-results .journey-panel {
+  display: none;
+}
 .options-panel .panel-heading {
   margin-bottom: 8px;
 }

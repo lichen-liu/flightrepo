@@ -91,13 +91,13 @@ export class DataCalendar {
       if (!input.parentElement.contains(event.relatedTarget)) this.close();
     });
   }
-  setDates(dates) {
+  setDates(dates, { preserveEmptySelection = false } = {}) {
     this.close();
     this.dates = [...new Set(dates)].sort();
     this.available = new Set(this.dates);
     this.months = [...new Set(this.dates.map((date) => date.slice(0, 7)))];
     this.input.disabled = !this.dates.length;
-    if (!this.available.has(this.input.value))
+    if (!this.available.has(this.input.value) && !(preserveEmptySelection && !this.dates.length))
       this.input.value = this.optional ? "" : this.dates[0] || "";
   }
   open() {
