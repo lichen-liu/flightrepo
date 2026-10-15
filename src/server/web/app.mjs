@@ -24,10 +24,12 @@ const field = (name) => form.elements.namedItem(name),
 const searchLane = new RequestLane(),
   catalogLane = new RequestLane(),
   datesLane = new RequestLane(),
+  coverageLane = new RequestLane(),
   editLane = new RequestLane();
 const firstCalendar = new DataCalendar(field("date")),
   lastCalendar = new DataCalendar(field("last-date"), { optional: true });
 let datesKey = null, availableDates = new Set(), independentSearch = false;
+let coverageKey = null;
 const map = new RouteMap($("route-map"), $("map-info"));
 const state = {
   catalog: null,
@@ -89,6 +91,54 @@ function updateDatasetTag() {
   $("dataset-tag").textContent =
     `${demo ? "Demo · " : ""}${timeBasisLabel(basis)} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} awaiting itinerary review` : ""}`;
 }
+async function loadCoverage() {
+  const basis = field("time-basis").value,
+    endpoints = [["origin", "outbound"], ["destination", "inbound"]].map(([name, direction]) =>
+      ({ name, direction, code: airportCode(field(name).value) })),
+    valid = endpoints.filter(({ code }) => /^[A-Z]{3}$/.test(code)),
+    key = `${endpoints.map(({ code }) => code).join("/")}/${basis}`;
+  if (key === coverageKey) return;
+  coverageKey = key;
+  coverageLane.cancel();
+  $("retry-coverage").hidden = true;
+  $("coverage-warning").hidden = true;
+  $("coverage-scope").hidden = !valid.length;
+  $("coverage-scope").textContent = `Airport counts: searchable ${timeBasisLabel(basis).toLowerCase()} · exact airports · all loaded dates. Counts do not guarantee a route on your selected dates.`;
+  for (const { name, code } of endpoints) {
+    const element = $(`${name}-coverage`);
+    element.hidden = !/^[A-Z]{3}$/.test(code);
+    element.textContent = "Checking inbound and outbound flights…";
+  }
+  if (!valid.length) return;
+  const params = new URLSearchParams({ time_basis: basis });
+  for (const code of new Set(valid.map(({ code }) => code))) params.append("airport", code);
+  await coverageLane.run(`/v1/airport-coverage?${params}`, undefined, (result) => {
+    const warnings = [];
+    for (const { name, code, direction } of valid) {
+      const traffic = result.airports.find((item) => item.airport === code);
+      if (!traffic) {
+        $(`${name}-coverage`).textContent = "Airport coverage unavailable.";
+        $("retry-coverage").hidden = false;
+        continue;
+      }
+      $(`${name}-coverage`).textContent = `Inbound: ${traffic.inbound.toLocaleString()} · Outbound: ${traffic.outbound.toLocaleString()}`;
+      if (traffic[direction] === 0) {
+        const stored = traffic[`stored_${direction}`];
+        warnings.push(stored === 0
+          ? `No ${direction} flights loaded at ${code}.`
+          : `${code} has ${stored.toLocaleString()} stored ${direction} records, but none are searchable using ${timeBasisLabel(basis)}.`);
+      }
+    }
+    $("coverage-warning").textContent = warnings.length
+      ? `${warnings.join(" ")} A route needs searchable departures at From and arrivals at To.`
+      : "";
+    $("coverage-warning").hidden = !warnings.length;
+  }, () => {
+    for (const { name } of valid) $(`${name}-coverage`).textContent = "Airport coverage unavailable.";
+    $("retry-coverage").hidden = false;
+  });
+}
+$("retry-coverage").addEventListener("click", () => { coverageKey = null; loadCoverage(); });
 function updateSearchButton() {
   $("search-button").disabled = !!searchLane.controller ||
     datesKey !== dateKey() || !availableDates.has(field("date").value) ||
@@ -237,6 +287,7 @@ function updateZones() {
   if (missing && local)
     $("date-zones").textContent +=
       ` · timezone details not loaded for ${origin}; choose UTC or load airport data`;
+  loadCoverage();
 }
 function updateLastDates() {
   const first = field("date").value;

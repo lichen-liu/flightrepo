@@ -24,6 +24,7 @@ from core.routing.models import (
 from core.routing.results import RouteSearchResult
 from server.reader import FlightReader
 from server.web_models import (
+    AirportCoverage,
     AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
@@ -117,6 +118,18 @@ def available_dates(
         return store.available_dates(
             origin, clock, time_basis, destination=destination, include_nearby=include_nearby
         )
+    except ValueError as error:
+        raise routing_http_error(error) from error
+
+
+@app.get("/v1/airport-coverage", response_model=AirportCoverage)
+def airport_coverage(
+    airport: Annotated[list[str], Query(min_length=1, max_length=2)],
+    time_basis: TimeBasis | None = None,
+    store: FlightReader = Depends(get_store),
+):
+    try:
+        return store.airport_coverage(airport, time_basis)
     except ValueError as error:
         raise routing_http_error(error) from error
 

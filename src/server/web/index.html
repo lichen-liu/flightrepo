@@ -55,11 +55,11 @@
                 autocapitalize="characters"
                 spellcheck="false"
                 data-airport-code
-                aria-describedby="origin-name"
+                aria-describedby="origin-name origin-coverage coverage-scope"
                 required
               /><span id="origin-name" class="airport-name"
                 >Three-letter airport code</span
-              ></label
+              ><span id="origin-coverage" class="airport-coverage" role="status" hidden></span></label
             >
             <button
               id="swap"
@@ -82,11 +82,11 @@
                 autocapitalize="characters"
                 spellcheck="false"
                 data-airport-code
-                aria-describedby="destination-name"
+                aria-describedby="destination-name destination-coverage coverage-scope"
                 required
               /><span id="destination-name" class="airport-name"
                 >Three-letter airport code</span
-              ></label
+              ><span id="destination-coverage" class="airport-coverage" role="status" hidden></span></label
             >
             <label
               >Departure date<input name="date" id="date" type="date" required
@@ -95,6 +95,9 @@
               Search flights
             </button>
           </div>
+          <p id="coverage-scope" class="small muted" hidden></p>
+          <p id="coverage-warning" class="small" role="status" hidden></p>
+          <button id="retry-coverage" type="button" hidden>Retry airport coverage</button>
           <p id="date-availability" class="small" role="status">Loading departure dates…</p>
           <button id="retry-dates" type="button" hidden>Retry departure dates</button>
           <div class="route-filter">

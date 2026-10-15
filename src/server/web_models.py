@@ -193,6 +193,19 @@ class WebCatalog(BaseModel):
     suggested_route: dict | None = None
 
 
+class AirportTraffic(BaseModel):
+    airport: str
+    inbound: int
+    outbound: int
+    stored_inbound: int
+    stored_outbound: int
+
+
+class AirportCoverage(BaseModel):
+    time_basis: TimeBasis
+    airports: list[AirportTraffic]
+
+
 class AvailableDates(BaseModel):
     origin: str
     destination: str | None = None

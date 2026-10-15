@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.connections import Airport, AirportTransfer
-from core.models import FlightRecord
+from core.models import FlightRecord, FlightStatus
 from core.routing.models import RoutingError
 from core.timezones import resolve_local
 from ingestion.updater import FlightUpdater
@@ -188,6 +188,74 @@ def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_preci
     assert catalog["flight_count"] == catalog["total_record_count"] == 12
     assert catalog["time_bases"] == {"scheduled": 12, "observed": 0, "actual": 1}
     assert datetime.fromisoformat(catalog["newest_fact_refresh"]) == updated.fetched_at
+
+
+def test_airport_coverage_counts_exact_airports_and_missing_directions(client, demo):
+    response = client.get("/v1/airport-coverage?airport=yyz&airport=NRT&time_basis=scheduled")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["time_basis"] == "scheduled"
+    for airport in result["airports"]:
+        code = airport["airport"]
+        inbound = sum(f["destination_iata"] == code for f in demo[2]["flights"])
+        outbound = sum(f["origin_iata"] == code for f in demo[2]["flights"])
+        assert airport == {
+            "airport": code,
+            "inbound": inbound,
+            "outbound": outbound,
+            "stored_inbound": inbound,
+            "stored_outbound": outbound,
+        }
+    assert result["airports"][0]["inbound"] == 0
+    assert result["airports"][1]["outbound"] == 0
+    assert client.get("/v1/airport-coverage?airport=XYZ").json()["airports"] == [
+        {
+            "airport": "XYZ",
+            "inbound": 0,
+            "outbound": 0,
+            "stored_inbound": 0,
+            "stored_outbound": 0,
+        }
+    ]
+    assert len(client.get("/v1/airport-coverage?airport=YYZ&airport=yyz").json()["airports"]) == 1
+    assert client.get("/v1/airport-coverage?airport=bad-code").status_code == 422
+    assert client.get("/v1/airport-coverage?airport=YYZ&time_basis=bad").status_code == 422
+    assert client.get("/v1/airport-coverage?airport=YYZ&airport=NRT&airport=LHR").status_code == 422
+    assert client.get("/v1/airport-coverage").status_code == 422
+
+
+def test_airport_coverage_distinguishes_stored_from_searchable_without_counting_deleted(
+    client, demo
+):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [
+            original.model_copy(update={"provider_id": "review-needed"}),
+            original.model_copy(
+                update={"provider_id": "cancelled", "status": FlightStatus.CANCELLED}
+            ),
+        ]
+    )
+    with demo[0].connect() as connection:
+        connection.execute(
+            "UPDATE flights SET review_reasons=? WHERE provider_id='review-needed'",
+            (json.dumps(["test review"]),),
+        )
+    observed = client.get("/v1/airport-coverage?airport=YYZ&time_basis=observed").json()
+    assert observed["airports"][0]["stored_outbound"] == 3
+    assert observed["airports"][0]["outbound"] == 0
+    scheduled = client.get("/v1/airport-coverage?airport=YYZ&time_basis=scheduled").json()
+    assert scheduled["airports"][0]["stored_outbound"] == 3
+    assert scheduled["airports"][0]["outbound"] == 1
+    with demo[0].connect() as connection:
+        connection.execute(
+            "INSERT INTO flight_tombstones(source_id,source_record_key,deleted_us) "
+            "SELECT source_id,source_record_key,last_seen_us FROM flight_legs "
+            "WHERE source_record_key='cancelled'"
+        )
+    assert (
+        client.get("/v1/airport-coverage?airport=YYZ").json()["airports"][0]["stored_outbound"] == 2
+    )
 
 
 def test_aircraft_type_survives_storage_edit_and_serving(client, demo):

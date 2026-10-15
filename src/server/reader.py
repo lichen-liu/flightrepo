@@ -17,6 +17,8 @@ from core.routing.snapshot import RoutingSnapshot, flight_key
 from core.storage import EPOCH, SQLiteConnection, utc_text, utc_us
 from core.timezones import resolve_local
 from server.web_models import (
+    AirportCoverage,
+    AirportTraffic,
     AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
@@ -539,6 +541,46 @@ class FlightReader(SQLiteConnection):
             airports_truncated=len(rows) > 1000,
             dataset=facts,
             suggested_route=dict(suggestion) if suggestion else None,
+        )
+
+    def airport_coverage(self, airports: list[str], time_basis=None) -> AirportCoverage:
+        """Exact-airport counts across all loaded dates, separate from route availability."""
+        codes = list(dict.fromkeys(airport_code(code) for code in airports))
+        if not 1 <= len(codes) <= 2:
+            raise ValueError("Choose one or two airports for coverage.")
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            basis = time_basis or self._default_basis(connection)
+            if basis not in ("scheduled", "observed", "actual"):
+                raise ValueError("Unknown flight time basis")
+            placeholders = ",".join("?" for _ in codes)
+            totals = ",".join(
+                "COALESCE(SUM(destination_iata=?),0),COALESCE(SUM(origin_iata=?),0)" for _ in codes
+            )
+            params = [code for code in codes for _ in range(2)] + codes + codes
+            where = f"(origin_iata IN ({placeholders}) OR destination_iata IN ({placeholders}))"
+            stored = connection.execute(
+                f"SELECT {totals} FROM flight_legs f WHERE {where} AND NOT EXISTS "
+                "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
+                "AND t.source_record_key=f.source_record_key)",
+                params,
+            ).fetchone()
+            searchable = connection.execute(
+                f"SELECT {totals} FROM searchable_legs WHERE {where} AND time_basis=?",
+                [*params, basis],
+            ).fetchone()
+        return AirportCoverage(
+            time_basis=basis,
+            airports=[
+                AirportTraffic(
+                    airport=code,
+                    inbound=searchable[2 * index],
+                    outbound=searchable[2 * index + 1],
+                    stored_inbound=stored[2 * index],
+                    stored_outbound=stored[2 * index + 1],
+                )
+                for index, code in enumerate(codes)
+            ],
         )
 
     @staticmethod

@@ -151,6 +151,69 @@ check("calendar disables gaps, repairs unavailable links, and handles origins wi
   await expect(page.locator("#search-button")).toBeDisabled();
 });
 
+check("airport counts show missing inbound and outbound coverage before searching", async (page) => {
+  await page.route("**/v1/catalog", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.dataset.time_bases.observed = 1;
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("#origin-coverage")).toHaveText("Inbound: 0 · Outbound: 1");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound:");
+  await expect(page.locator("#coverage-scope")).toContainText("exact airports · all loaded dates");
+  await expect(page.locator("#coverage-warning")).toBeHidden();
+  await page.getByLabel("To", { exact: true }).fill("XYZ");
+  await expect(page.locator("#destination-coverage")).toHaveText("Inbound: 0 · Outbound: 0");
+  await expect(page.locator("#coverage-warning")).toContainText("No inbound flights loaded at XYZ.");
+  await page.getByRole("button", { name: "Swap origin and destination" }).click();
+  await expect(page.locator("#coverage-warning")).toContainText("No outbound flights loaded at XYZ.");
+  await page.getByLabel("From", { exact: true }).fill("YYZ");
+  await page.getByLabel("To", { exact: true }).fill("CDG");
+  await expect(page.locator("#coverage-warning")).toBeHidden();
+  await page.getByLabel("Flight times").selectOption("observed");
+  await expect(page.locator("#coverage-warning")).toContainText("stored outbound records, but none are searchable using Observed historical legs");
+  await expect(page.locator("#coverage-warning")).not.toContainText("No outbound flights loaded at YYZ");
+});
+
+check("airport coverage failures stay unknown and can be retried", async (page) => {
+  let fail = true;
+  await page.route("**/v1/airport-coverage?*", (route) => fail
+    ? route.fulfill({ status: 503, json: { detail: "Unavailable" } })
+    : route.continue());
+  await open(page);
+  await expect(page.locator("#origin-coverage")).toHaveText("Airport coverage unavailable.");
+  await expect(page.locator("#coverage-warning")).toBeHidden();
+  await expect(page.locator("#search-button")).toBeEnabled();
+  fail = false;
+  await page.getByRole("button", { name: "Retry airport coverage" }).click();
+  await expect(page.locator("#origin-coverage")).toHaveText("Inbound: 0 · Outbound: 1");
+  await expect(page.locator("#retry-coverage")).toBeHidden();
+});
+
+check("late airport coverage cannot overwrite a changed destination", async (page) => {
+  await open(page);
+  let release, started;
+  const gate = new Promise((resolve) => { release = resolve; }),
+    intercepted = new Promise((resolve) => { started = resolve; });
+  await page.route("**/v1/airport-coverage?*", async (route) => {
+    if (!new URL(route.request().url()).searchParams.getAll("airport").includes("NRT"))
+      return route.continue();
+    started();
+    await gate;
+    await route.fulfill({ json: { time_basis: "scheduled", airports: [
+      { airport: "YYZ", inbound: 0, outbound: 1, stored_inbound: 0, stored_outbound: 1 },
+      { airport: "NRT", inbound: 0, outbound: 0, stored_inbound: 0, stored_outbound: 0 },
+    ] } });
+  });
+  await page.getByLabel("To", { exact: true }).fill("NRT");
+  await intercepted;
+  await page.getByLabel("To", { exact: true }).fill("CDG");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
+  release();
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
+  await expect(page.locator("#coverage-warning")).toBeHidden();
+});
+
 check("date availability failures remain disabled until a retry succeeds", async (page) => {
   let fail = true;
   await page.route("**/v1/dates?*", (route) => fail
