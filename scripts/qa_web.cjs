@@ -260,7 +260,7 @@ check("availability and counts follow the selected flight times without duplicat
   await search(page);
   await expect(page.locator("#applied-query")).toContainText("Observed historical legs");
   await times.selectOption("actual");
-  await expect(availability).toContainText("No departures loaded for YYZ · Reported actual times");
+  await expect(availability).toContainText("No departures loaded for YYZ or airports within 100 km · Reported actual times");
   await expect(page.locator("#date")).toBeDisabled();
   await expect(page.locator("#date")).toHaveValue("");
   await expect(page.locator("#search-button")).toBeDisabled();
@@ -330,7 +330,7 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await expect(calendar).toBeHidden();
 }, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-check("linked search loads route dates before catalog metadata without losing inputs", async (page) => {
+check("linked search loads origin dates before catalog metadata without losing inputs", async (page) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   await page.route("**/v1/catalog", async (route) => {
@@ -343,7 +343,8 @@ check("linked search loads route dates before catalog metadata without losing in
   });
   await page.route("**/v1/dates?*", async (route) => {
     const params = new URL(route.request().url()).searchParams;
-    assert.equal(params.get("destination"), "YVR");
+    assert.equal(params.get("destination"), null);
+    assert.equal(params.get("include_nearby"), "true");
     await route.fulfill({ json: {
       origin: "YYZ", destination: "YVR", timezone: "UTC", time_basis: "observed",
       dates: [],
@@ -351,8 +352,8 @@ check("linked search loads route dates before catalog metadata without losing in
   });
   try {
     await page.goto(`${base}?origin=YYZ&destination=YVR&date=2023-07-20&stops=0&input-clock=UTC&time-basis=observed`);
-    await expect(page.locator("#date-availability")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
-    await expect(page.locator("#options")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
+    await expect(page.locator("#date-availability")).toContainText("No departures loaded for YYZ or airports within 100 km");
+    await expect(page.locator("#options")).toContainText("No departures loaded for YYZ or airports within 100 km");
     await expect(page.locator("#applied-query")).toContainText("2023-07-20");
     await expect(page.locator("#date")).toBeDisabled();
     await expect(page.locator("#date")).toHaveValue("2023-07-20");
@@ -364,32 +365,40 @@ check("linked search loads route dates before catalog metadata without losing in
   }
   await expect(page.locator("#dataset-tag")).toContainText("Observed historical legs");
   await expect(page.getByLabel("To", { exact: true })).toHaveValue("YVR");
-  await expect(page.locator("#options")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
+  await expect(page.locator("#options")).toContainText("No departures loaded for YYZ or airports within 100 km");
 });
 
-check("nonstop date availability follows destination and stop-count changes", async (page) => {
+check("calendar includes nearby departures and stays independent of destination and stops", async (page) => {
   const destinations = [];
   await page.route("**/v1/dates?*", async (route) => {
     const params = new URL(route.request().url()).searchParams,
       destination = params.get("destination");
     destinations.push(destination);
+    assert.equal(params.get("include_nearby"), "true");
     await route.fulfill({ json: {
-      origin: "YYZ", ...(destination ? { destination } : {}), timezone: "UTC",
-      dates: destination === "CDG" ? [] : ["2026-10-17"],
+      origin: "YYZ", timezone: "UTC", departure_airports: ["YYZ", "YTZ"],
+      nearby_radius_km: 100, dates: ["2026-10-17", "2026-10-19"],
     } });
   });
   await result(page, searchPath, () => page.goto(
     `${base}?origin=YYZ&destination=LHR&date=2026-10-17&stops=0&input-clock=UTC&time-basis=scheduled`,
   ));
-  await expect(page.locator("#date-availability")).toContainText("YYZ → LHR nonstop");
+  await expect(page.locator("#date-availability")).toContainText("from YYZ and nearby airports (YTZ; within 100 km)");
+  await expect(page.locator("#date-availability")).toContainText("do not guarantee a route");
+  await expect(page.locator("#date-availability")).toContainText("Search starts at YYZ");
   await page.getByLabel("To", { exact: true }).fill("CDG");
-  await expect(page.locator("#date-availability")).toContainText("No loaded nonstop departure dates for YYZ → CDG");
-  await expect(page.locator("#search-button")).toBeDisabled();
+  await expect(page.locator("#date")).toHaveValue("2026-10-17");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await chooseDate(page, "date", "2026-10-19");
   await page.locator("#search-details > summary").click();
   await page.getByLabel("Maximum stops").selectOption("2");
   await expect(page.locator("#date-availability")).toContainText("from YYZ");
   await expect(page.locator("#search-button")).toBeEnabled();
-  assert.deepEqual(destinations, ["LHR", "CDG", null]);
+  await expect(page.locator("#date")).toHaveValue("2026-10-19");
+  const data = await search(page);
+  assert.equal(data.query.origin, "YYZ");
+  assert.equal(data.query.destination, "CDG");
+  assert.deepEqual(destinations, [null]);
 });
 async function exported(page) {
   const pending = page.waitForEvent("download");

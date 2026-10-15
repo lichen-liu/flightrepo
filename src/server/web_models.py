@@ -199,6 +199,8 @@ class AvailableDates(BaseModel):
     timezone: str
     dates: list[date]
     time_basis: TimeBasis = "scheduled"
+    departure_airports: list[str] | None = None
+    nearby_radius_km: int | None = None
 
     @model_serializer(mode="wrap")
     def legacy_schedule(self, handler):
@@ -207,4 +209,7 @@ class AvailableDates(BaseModel):
             data.pop("time_basis", None)
         if self.destination is None:
             data.pop("destination", None)
+        if self.departure_airports is None:
+            data.pop("departure_airports", None)
+            data.pop("nearby_radius_km", None)
         return data

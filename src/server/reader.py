@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta
+from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -540,8 +541,37 @@ class FlightReader(SQLiteConnection):
             suggested_route=dict(suggestion) if suggestion else None,
         )
 
+    @staticmethod
+    def _nearby_departure_airports(connection, origin, radius_km=100):
+        """Calendar coverage only; route searches still use their exact origin."""
+        rows = connection.execute(
+            "SELECT iata,latitude,longitude FROM airports "
+            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        ).fetchall()
+        center = next((row for row in rows if row[0] == origin), None)
+        if center is None:
+            return [origin]
+        latitude, longitude = map(radians, center[1:])
+        nearby = []
+        for code, lat, lon in rows:
+            lat, lon = radians(lat), radians(lon)
+            haversine = (
+                sin((lat - latitude) / 2) ** 2
+                + cos(latitude) * cos(lat) * sin((lon - longitude) / 2) ** 2
+            )
+            distance = 2 * 6371 * asin(sqrt(min(1, haversine)))
+            if distance <= radius_km:
+                nearby.append(code)
+        return [origin, *sorted(set(nearby) - {origin})]
+
     def available_dates(
-        self, origin: str, clock: str = "local", time_basis=None, *, destination=None
+        self,
+        origin: str,
+        clock: str = "local",
+        time_basis=None,
+        *,
+        destination=None,
+        include_nearby=False,
     ) -> AvailableDates:
         if clock not in ("local", "UTC"):
             raise ValueError("clock must be local or UTC")
@@ -562,11 +592,15 @@ class FlightReader(SQLiteConnection):
                         "airport_metadata_missing", "Load airport timezone metadata or choose UTC."
                     )
                 zone = row[0]
+            origins = (
+                self._nearby_departure_airports(connection, origin) if include_nearby else [origin]
+            )
             route_clause = " AND destination_iata=?" if destination is not None else ""
-            route_params = [origin, *([destination] if destination is not None else [])]
+            route_params = [*origins, *([destination] if destination is not None else [])]
+            placeholders = ",".join("?" for _ in origins)
             rows = connection.execute(
-                "SELECT departure_lower_us,departure_upper_us FROM searchable_legs "
-                f"WHERE origin_iata=?{route_clause} AND time_basis=?",
+                "SELECT departure_lower_us,departure_upper_us,origin_iata FROM searchable_legs "
+                f"WHERE origin_iata IN ({placeholders}){route_clause} AND time_basis=?",
                 [*route_params, basis],
             )
             timezone = ZoneInfo(zone)
@@ -574,13 +608,24 @@ class FlightReader(SQLiteConnection):
             def day(value):
                 return (EPOCH + timedelta(microseconds=value)).astimezone(timezone).date()
 
-            dates = sorted({day(row[0]) for row in rows if day(row[0]) == day(row[1])})
+            dates, contributing_origins = set(), set()
+            for lower, upper, code in rows:
+                date = day(lower)
+                if date == day(upper):
+                    dates.add(date)
+                    contributing_origins.add(code)
         return AvailableDates(
             origin=origin,
             destination=destination,
             timezone=zone,
-            dates=dates,
+            dates=sorted(dates),
             time_basis=basis,
+            departure_airports=(
+                [code for code in origins if code in contributing_origins]
+                if include_nearby
+                else None
+            ),
+            nearby_radius_km=100 if include_nearby else None,
         )
 
     def airports(

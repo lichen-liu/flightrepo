@@ -94,7 +94,7 @@ def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
     assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
 
 
-def test_nonstop_calendar_scopes_dates_to_both_airports(client, demo):
+def test_explicit_destination_date_filter_remains_available_to_api_clients(client, demo):
     record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
         update={
             "provider_id": "different-destination",
@@ -121,6 +121,57 @@ def test_nonstop_calendar_scopes_dates_to_both_airports(client, demo):
         "2026-10-17",
     ]
     assert client.get("/v1/dates", params={**params, "destination": "bad-code"}).status_code == 422
+
+
+def test_calendar_includes_nearby_departures_to_any_destination(client, demo):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [
+            original.model_copy(
+                update={
+                    "provider_id": "nearby-late",
+                    "origin_iata": "LGW",
+                    "destination_iata": "NRT",
+                    "departure_scheduled": datetime.fromisoformat("2026-10-20T23:30:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-10-21T10:00:00Z"),
+                }
+            ),
+            original.model_copy(
+                update={
+                    "provider_id": "distant",
+                    "origin_iata": "AMS",
+                    "destination_iata": "NRT",
+                    "departure_scheduled": datetime.fromisoformat("2026-10-22T12:00:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-10-23T10:00:00Z"),
+                }
+            ),
+        ]
+    )
+    params = {"origin": "LHR", "include_nearby": True}
+    local = client.get("/v1/dates", params=params).json()
+    assert local["dates"] == ["2026-10-18", "2026-10-19", "2026-10-21"]
+    assert local["departure_airports"] == ["LHR", "LGW"]
+    assert local["nearby_radius_km"] == 100
+    assert local["timezone"] == "Europe/London"
+    utc = client.get("/v1/dates", params={**params, "clock": "UTC"}).json()
+    assert utc["dates"] == ["2026-10-18", "2026-10-19", "2026-10-20"]
+    assert client.get("/v1/dates?origin=LHR").json()["dates"] == ["2026-10-18", "2026-10-19"]
+    with demo[0].connect() as connection:
+        connection.execute("UPDATE flights SET status='cancelled' WHERE origin_iata='LHR'")
+    nearby_only = client.get("/v1/dates", params=params).json()
+    assert nearby_only["dates"] == ["2026-10-18", "2026-10-19", "2026-10-21"]
+    assert nearby_only["departure_airports"] == ["LGW"]
+
+
+def test_nearby_dates_fall_back_to_exact_origin_without_coordinates(client, demo):
+    with demo[0].connect() as connection:
+        connection.execute("UPDATE airports SET latitude=NULL,longitude=NULL WHERE iata='YYZ'")
+    data = client.get("/v1/dates?origin=YYZ&include_nearby=true").json()
+    assert data["dates"] == ["2026-10-17"]
+    assert data["departure_airports"] == ["YYZ"]
+    unknown = client.get("/v1/dates?origin=XYZ&include_nearby=true&clock=UTC").json()
+    assert unknown["dates"] == []
+    assert unknown["departure_airports"] == []
 
 
 def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_precision(client, demo):

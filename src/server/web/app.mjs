@@ -79,10 +79,7 @@ const timeBasisLabel = (basis) => ({
   observed: "Observed historical legs",
   actual: "Reported actual times",
 })[basis] || basis;
-const directDestination = () => field("stops").value === "0" &&
-  /^[A-Z]{3}$/.test(airportCode(field("destination").value))
-  ? airportCode(field("destination").value) : null;
-const dateKey = () => `${airportCode(field("origin").value)}/${field("input-clock").value}/${field("time-basis").value}/${directDestination() || ""}`;
+const dateKey = () => `${airportCode(field("origin").value)}/${field("input-clock").value}/${field("time-basis").value}`;
 function updateDatasetTag() {
   const data = state.catalog?.dataset;
   if (!data) return;
@@ -248,7 +245,7 @@ function updateLastDates() {
 async function loadDates() {
   const origin = airportCode(field("origin").value), clock = field("input-clock").value,
     basis = field("time-basis").value, key = dateKey(),
-    destination = directDestination(), requestedDate = field("date").value;
+    requestedDate = field("date").value;
   if (key === datesKey) return;
   datesKey = key;
   $("retry-dates").hidden = true;
@@ -264,18 +261,19 @@ async function loadDates() {
     return;
   }
   $("date-availability").textContent = "Loading departure dates…";
-  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${basis}${destination ? `&destination=${destination}` : ""}`, undefined, (result) => {
+  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${basis}&include_nearby=true`, undefined, (result) => {
     availableDates = new Set(result.dates);
-    firstCalendar.setDates(result.dates, { preserveEmptySelection: !!destination });
+    firstCalendar.setDates(result.dates, { preserveEmptySelection: !state.result });
     updateLastDates();
     if (clock === "local" && state.airports.has(origin)) {
       state.airports.set(origin, { ...state.airports.get(origin), timezone: result.timezone });
       updateZones();
     }
-    const scope = destination ? `${origin} → ${destination} nonstop` : `from ${origin}`;
+    const nearby = (result.departure_airports || []).filter((code) => code !== origin),
+      scope = `from ${origin}${nearby.length ? ` and nearby airports (${nearby.join(", ")}; within ${result.nearby_radius_km} km)` : ""}`;
     $("date-availability").textContent = result.dates.length
-      ? `${result.dates.length} departure dates with data ${scope} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}.${destination ? " Dates match this nonstop route." : " Dates show departures from the origin; search checks connecting routes to your destination."}`
-      : `${destination ? `No loaded nonstop departure dates for ${origin} → ${destination}` : `No departures loaded for ${origin}`} · ${timeBasisLabel(basis)} · ${result.timezone}. Try another route or flight times.`;
+      ? `${result.dates.length} departure dates with data ${scope} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}. Dates show searchable departures to any destination, regardless of stop count; they do not guarantee a route.${nearby.length ? ` Search starts at ${origin}; choose a nearby airport as From to use its flights.` : ""}`
+      : `No departures loaded for ${origin} or airports within 100 km · ${timeBasisLabel(basis)} · ${result.timezone}. Try another origin or flight times.`;
     if (requestedDate && result.dates.length && field("date").value !== requestedDate)
       $("date-availability").textContent += ` No matching departure data on ${requestedDate}; selected ${field("date").value}.`;
     if (!state.result) {
@@ -283,7 +281,7 @@ async function loadDates() {
       if (!result.dates.length) {
         $("options").innerHTML = `<p class="empty">${e($("date-availability").textContent)}</p>`;
         $("applied-query").textContent = `${origin} → ${airportCode(field("destination").value)}${requestedDate ? ` · ${requestedDate}` : ""}`;
-        $("status").textContent = "No departure dates returned for the selected route and flight times.";
+        $("status").textContent = "No departure dates returned for the origin, nearby airports and flight times.";
       } else {
         $("options").innerHTML = '<p class="empty">Choose departure dates and search to find a route.</p>';
         $("status").textContent = "Departure data loaded. Search to find a route.";
@@ -775,8 +773,7 @@ form.addEventListener("input", (event) => {
   if (!event.target.hasAttribute("data-airport-code")) return;
   normalizeAirportInput(event.target);
   updateZones();
-  if (event.target === field("origin") ||
-      (event.target === field("destination") && field("stops").value === "0")) loadDates();
+  if (event.target === field("origin")) loadDates();
   if (event.target.hasAttribute("data-airport-list")) updateViaSuggestions(true);
   closeEditor();
   if (state.result)

@@ -110,10 +110,13 @@ def available_dates(
     clock: Literal["local", "UTC"] = "local",
     time_basis: TimeBasis | None = None,
     destination: str | None = None,
+    include_nearby: bool = False,
     store: FlightReader = Depends(get_store),
 ):
     try:
-        return store.available_dates(origin, clock, time_basis, destination=destination)
+        return store.available_dates(
+            origin, clock, time_basis, destination=destination, include_nearby=include_nearby
+        )
     except ValueError as error:
         raise routing_http_error(error) from error
 
