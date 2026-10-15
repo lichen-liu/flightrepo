@@ -117,3 +117,17 @@ def test_archive_download_has_bounded_length_and_checks_digest(tmp_path):
     ) as client:
         with pytest.raises(ValueError, match="exceeds published"):
             download_manifest({"assets": [item]}, bad, client)
+
+
+def test_same_size_corrupt_download_is_not_published_as_verified(tmp_path):
+    import hashlib
+
+    item = asset(sha256=hashlib.sha256(b"a" * 100).hexdigest())
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"b" * 100))
+    ) as client:
+        with pytest.raises(ValueError, match="SHA-256 mismatch"):
+            download_manifest({"assets": [item]}, tmp_path, client)
+    path = tmp_path / item["date"] / item["name"]
+    assert not path.exists()
+    assert not path.with_name(path.name + ".verified.json").exists()

@@ -16,9 +16,13 @@ concurrency:
 
 jobs:
   pytest:
-    name: pytest (Python 3.13)
+    name: pytest (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -28,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -47,22 +51,6 @@ jobs:
         run: |
           python -m build --wheel --outdir var/wheels
           python scripts/verify_package.py var/wheels/*.whl
-
-  minimum-python:
-    name: pytest (Python 3.11)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: python -m pip install -e '.[dev]'
-      - run: python -m pytest -q
 
   browser:
     name: Browser workspace

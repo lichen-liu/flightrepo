@@ -20,6 +20,7 @@ from ingestion.updater import FlightUpdater
 
 
 def daily_input(day, traces):
+    """Build repeatable source bytes; archive identity must not depend on the clock."""
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
         for index, data in enumerate(traces):
@@ -83,6 +84,44 @@ def test_daily_extraction_keeps_only_itinerary_data_then_removes_raw_and_resumes
     resumed = extract_day(tmp_path, "2025-01-01", [item], AIRPORTS, rules())
     assert resumed["result"] == "already_committed"
     assert len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+@pytest.mark.parametrize("clock_change", [1, -86400, 365 * 86400])
+def test_repeated_day_is_independent_of_archive_generation_time(
+    tmp_path, monkeypatch, clock_change
+):
+    # Python <=3.13 defaults gzip MTIME to wall time; exercise that behavior on
+    # newer Python too. Only the compressor's clock changes, never pytest/SQLite.
+    compress = gzip.compress
+    clock = [1735689600]
+
+    def timestamped_default(data, compresslevel=9, *, mtime=None):
+        return compress(
+            data, compresslevel=compresslevel, mtime=clock[0] if mtime is None else mtime
+        )
+
+    monkeypatch.setattr(gzip, "compress", timestamped_default)
+    receipt, original = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    clock[0] += clock_change
+    resumed, regenerated = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    assert original == regenerated
+    assert resumed["result"] == "already_committed"
+    assert resumed["batch_id"] == receipt["batch_id"]
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_changed_archive_still_fails_resume_without_replacing_committed_facts(tmp_path):
+    day = date(2025, 1, 1)
+    _, original = run(tmp_path, day, [leg_trace()])
+    facts = rows(tmp_path, "itinerary_legs"), rows(tmp_path, "extraction_days")
+    changed = leg_trace()
+    changed["t"] = "B738"
+    replacement, _ = daily_input(day, [changed])
+    assert replacement["bytes"] == original["bytes"]
+    assert replacement["sha256"] != original["sha256"]
+    with pytest.raises(ValueError, match="Committed day's archive selection changed"):
+        run(tmp_path, day, [changed])
+    assert (rows(tmp_path, "itinerary_legs"), rows(tmp_path, "extraction_days")) == facts
 
 
 def midnight_traces():
