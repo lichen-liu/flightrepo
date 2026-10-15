@@ -13,9 +13,18 @@ def is_ingestion(connection):
     )
 
 
-def ingestion_path(path):
+def sqlite_file(path):
+    """Cheap identity probe; unrelated files must reach normal command guards."""
     path = Path(path)
     if not path.is_file():
+        return False
+    with path.open("rb") as handle:
+        return handle.read(16) == b"SQLite format 3\x00"
+
+
+def ingestion_path(path):
+    path = Path(path)
+    if not sqlite_file(path):
         return False
     with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as connection:
         return is_ingestion(connection)

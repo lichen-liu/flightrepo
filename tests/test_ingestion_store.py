@@ -383,3 +383,18 @@ def test_producer_refuses_existing_serving_before_network(stores, tmp_path, monk
             IngestionService(IngestionStore(serving.path), Provider(), 31).ingest(["AAA"], DAY, DAY)
         )
     assert FlightReader(serving.path).stats()["flights"] == 0
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_reset_guards_precede_schema_access_for_unrelated_files(tmp_path, confirmed):
+    sentinel = tmp_path / "outside.db"
+    sentinel.write_bytes(b"keep this file")
+    arguments = ["--db", str(sentinel), "maintenance", "clear-data"]
+    if confirmed:
+        arguments.append("--yes")
+    with pytest.raises(
+        ValueError, match="project's var directory" if confirmed else "supply --yes"
+    ):
+        admin.run(arguments)
+    assert sentinel.read_bytes() == b"keep this file"
+    assert not ingestion_path(sentinel)

@@ -28,7 +28,7 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
-from core.database_roles import ingestion_path
+from core.database_roles import ingestion_path, sqlite_file
 from core.disk_quota import policy, set_quota, storage_status
 from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
@@ -420,7 +420,7 @@ def run(arguments, *, database_path=None, interactive=False):
             destination == member
             or (destination.exists() and member.exists() and destination.samefile(member))
             for member in family
-        ) or (destination.is_file() and destination.open("rb").read(16) == b"SQLite format 3\x00"):
+        ) or sqlite_file(destination):
             raise ValueError("Export output cannot overwrite a database or its SQLite sidecars")
     if ingestion_path(path):
         reading = args.command in {
