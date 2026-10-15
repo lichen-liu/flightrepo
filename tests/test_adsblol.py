@@ -48,7 +48,7 @@ def trace(**changes):
 
 def test_reads_split_archives_without_extracting_members(tmp_path):
     stream = io.BytesIO()
-    raw = gzip.compress(json.dumps(trace()).encode())
+    raw = gzip.compress(json.dumps(trace()).encode(), mtime=0)
     with tarfile.open(fileobj=stream, mode="w") as archive:
         item = tarfile.TarInfo("./traces/5c/trace_full_a5ea5c.json")
         item.size = len(raw)

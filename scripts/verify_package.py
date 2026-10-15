@@ -66,7 +66,7 @@ def probe_ingestion(executable, directory, environment):
     excluded["icao"], excluded["dbFlags"] = "000003", 1
     with tarfile.open(archive, "w") as target:
         for data in (valid, invalid, excluded):
-            payload = gzip.compress(json.dumps(data).encode())
+            payload = gzip.compress(json.dumps(data).encode(), mtime=0)
             member = tarfile.TarInfo(f"traces/00/trace_full_{data['icao']}.json")
             member.size = len(payload)
             target.addfile(member, io.BytesIO(payload))

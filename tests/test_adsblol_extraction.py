@@ -23,7 +23,7 @@ def daily_input(day, traces):
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
         for index, data in enumerate(traces):
-            content = gzip.compress(json.dumps(data).encode())
+            content = gzip.compress(json.dumps(data).encode(), mtime=0)
             info = tarfile.TarInfo(f"traces/5c/trace_full_{index:06x}.json")
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
