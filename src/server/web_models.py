@@ -172,6 +172,8 @@ class CatalogAirport(BaseModel):
 
 class DatasetEvidence(BaseModel):
     flight_count: int
+    total_record_count: int = 0
+    needs_review_count: int = 0
     cancelled_count: int
     first_departure: datetime | None
     last_departure: datetime | None

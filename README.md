@@ -64,9 +64,10 @@ The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the
 
 Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
-Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
+Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete/approve`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
 
-Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize a database explicitly.
+Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Stored-fact counts include cancelled and unreviewed candidates; searchable and
+review totals are separate. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize a database explicitly.
 
 ```sh
 python -m admin import-json var/flights.json

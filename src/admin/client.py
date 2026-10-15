@@ -16,6 +16,7 @@ import httpx
 
 from admin.ingestion import add_ingestion_commands, run_ingestion
 from admin.management import (
+    approve_flight,
     ask,
     create_airport,
     delete_flight,
@@ -165,6 +166,9 @@ def print_overview(summary):
         f"Airport catalog: {summary['catalog_airports']:,}   "
         f"Transfer rules: {summary['transfers']:,}"
     )
+    print(
+        f"Searchable flights: {summary['searchable_flights']:,}   Awaiting itinerary review: {summary['needs_review_count']:,}"
+    )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
         ("Departures (UTC)", "first_departure", "last_departure"),
@@ -228,6 +232,11 @@ def parser():
     quota.add_argument("size", nargs="?", type=disk_quota, default=argparse.SUPPRESS)
 
     flights = commands.add_parser("flights", help="browse flight records with optional filters")
+    flights.add_argument(
+        "--needs-review",
+        action="store_true",
+        help="only uncertain itinerary estimates awaiting approval",
+    )
     flights.add_argument("--origin", type=airport_code)
     flights.add_argument("--destination", type=airport_code)
     flights.add_argument("--provider")
@@ -242,11 +251,12 @@ def parser():
         "flight", help="show, edit or delete one flight by provider and ID"
     )
     actions = flight.add_subparsers(dest="flight_action", required=True)
-    for name in ("show", "edit", "delete"):
+    for name in ("show", "edit", "delete", "approve"):
         record = actions.add_parser(
             name,
             help={
                 "show": "view a flight record",
+                "approve": "approve reviewed itinerary estimates for search; protects against re-ingestion",
                 "edit": "edit interactively or replace from JSON",
                 "delete": "preview and confirm deletion of one flight",
             }[name],
@@ -259,7 +269,7 @@ def parser():
                 type=Path,
                 help="replace from a complete FlightRecord JSON object without prompts",
             )
-        if name == "delete":
+        if name in ("delete", "approve"):
             record.add_argument("--yes", action="store_true", help="skip preview and confirmation")
 
     search = commands.add_parser(
@@ -434,6 +444,7 @@ def run(arguments, *, database_path=None, interactive=False):
         output(
             FlightReader(path).list_flights(
                 origin=args.origin,
+                needs_review=args.needs_review,
                 destination=args.destination,
                 provider=args.provider,
                 status=args.status,
@@ -445,6 +456,8 @@ def run(arguments, *, database_path=None, interactive=False):
     elif args.command == "flight":
         if args.flight_action == "show":
             output(FlightReader(path).flight(args.provider, args.provider_id))
+        elif args.flight_action == "approve":
+            approve_flight(path, args.provider, args.provider_id, args.yes, output)
         elif args.flight_action == "delete":
             delete_flight(path, args.provider, args.provider_id, args.yes, output)
         elif args.file is None:

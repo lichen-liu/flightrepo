@@ -31,6 +31,8 @@ from ingestion.adsblol.movements import (
     reduce_movement,
 )
 
+PIPELINE_VERSION = "observed-itinerary-v3"
+
 SOURCE_ROWS = [
     (
         "adsblol",
@@ -70,7 +72,7 @@ json_object('aircraft_type_code',aircraft_type_code,
     'callsign',callsign,
     'departure_lower',replace(replace(departure_observed_lower,'.000000',''),'+00:00','Z'),
     'departure_upper',replace(replace(departure_observed_upper,'.000000',''),'+00:00','Z'),
-    'destination_iata',destination_iata,'evidence','ground_brackets_and_nearby_airports',
+    'destination_iata',destination_iata,'review_reasons',json(review_reasons),'evidence',CASE WHEN evidence_kind='inferred_airport_proximity' THEN 'airport_proximity_and_time_window' ELSE 'ground_brackets_and_nearby_airports' END,
     'origin_iata',origin_iata,'status','inferred_candidate') AS data
 FROM flights WHERE provider='adsblol' AND departure_observed_lower IS NOT NULL;
 CREATE TRIGGER IF NOT EXISTS itinerary_legs_update INSTEAD OF UPDATE ON itinerary_legs
@@ -139,7 +141,9 @@ def receipt_scope(receipt, saved_config):
 
 
 def save_leg(connection, leg, counters, *, diagnostics=None):
-    identity = f"observed-itinerary-v1:{leg.icao_hex}:{leg.departure_lower.isoformat()}"
+    # Departure evidence may improve when a previous day is backfilled. Anchor
+    # the movement to its arrival observation so that refinement keeps one key.
+    identity = f"observed-itinerary-v3:{leg.icao_hex}:{leg.arrival_lower.isoformat()}"
     key = hashlib.blake2b(identity.encode(), digest_size=16).hexdigest()
     return save_candidate(
         connection,
@@ -158,12 +162,31 @@ def save_candidate(connection, key, data, counters, *, diagnostics=None):
     if protected:
         counters["records_protected"] += 1
         return False
-    encoded = canonical(data)
     old = connection.execute("SELECT data FROM itinerary_legs WHERE key=?", (key,)).fetchone()
-    if old is not None and old[0] != encoded:
-        if diagnostics is not None:
-            diagnostics.count("invalid_records", "conflicting_itinerary_identity")
-        raise ValueError("Conflicting itinerary identity; day not committed")
+    if old is not None and json.loads(old[0]) != data:
+        previous = json.loads(old[0])
+
+        def quality(value):
+            return (
+                value["evidence"] == "ground_brackets_and_nearby_airports",
+                -utc_us(datetime.fromisoformat(value["departure_upper"])),
+                utc_us(datetime.fromisoformat(value["departure_lower"])),
+                -utc_us(datetime.fromisoformat(value["arrival_upper"])),
+            )
+
+        if previous["arrival_lower"] == data["arrival_lower"]:
+            if quality(previous) > quality(data):
+                counters["records_already_present"] += 1
+                if diagnostics is not None:
+                    diagnostics.count("metadata", "weaker_reconstruction_ignored")
+                return False
+            improved = quality(data) > quality(previous)
+        else:
+            improved = False
+        if not improved:
+            if diagnostics is not None:
+                diagnostics.count("invalid_records", "conflicting_itinerary_identity")
+            raise ValueError("Conflicting itinerary identity; day not committed")
     batch = connection.execute(
         "SELECT id FROM ingestion_batches WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND state='running' ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -173,10 +196,13 @@ def save_candidate(connection, key, data, counters, *, diagnostics=None):
             provider="adsblol",
             provider_id=key,
             callsign=data["callsign"],
+            review_reasons=data.get("review_reasons", []),
             origin_iata=data["origin_iata"],
             destination_iata=data["destination_iata"],
             aircraft_type_code=data["aircraft_type_code"],
-            evidence_kind="inferred_ground_brackets",
+            evidence_kind="inferred_airport_proximity"
+            if data["evidence"] == "airport_proximity_and_time_window"
+            else "inferred_ground_brackets",
             departure_observed_lower=data["departure_lower"],
             departure_observed_upper=data["departure_upper"],
             arrival_observed_lower=data["arrival_lower"],
@@ -190,7 +216,13 @@ def save_candidate(connection, key, data, counters, *, diagnostics=None):
         counters["records_protected"] += 1
         return False
     inserted = old is None
-    counters["records_inserted" if inserted else "records_already_present"] += 1
+    counters[
+        "records_inserted"
+        if inserted
+        else "records_updated"
+        if outcome == "updated"
+        else "records_already_present"
+    ] += 1
     return bool(inserted)
 
 
@@ -376,7 +408,10 @@ def scan_day(
         )
         counters[reason] += 1
         for leg in legs:
-            if departure_year is not None and leg.departure_lower.year != departure_year:
+            if departure_year is not None and (
+                leg.departure_lower.year != departure_year
+                or leg.departure_upper.year != departure_year
+            ):
                 counters["legs_outside_departure_year"] += 1
                 continue
             save_leg(connection, leg, counters, diagnostics=diagnostics)
@@ -444,15 +479,10 @@ def _extract_day(
     # Set serialization is sorted explicitly for restart-stable configuration.
     config = canonical(
         {
-            "algorithm": "observed-itinerary-v1",
+            "algorithm": PIPELINE_VERSION,
+            "quality": rules.model_dump(),
             "airports": sorted(airports),
             "departure_year": departure_year,
-            "filter": {
-                "fixed_wing_types": sorted(rules.fixed_wing_types),
-                "callsign_prefixes": sorted(rules.callsign_prefixes),
-                # Preserve the existing v1 config shape; owner names never select legs.
-                "owner_operators": [],
-            },
         }
     )
     selection = canonical(assets)
@@ -470,7 +500,7 @@ def _extract_day(
                 else None
             )
             if saved_config is not None and not compatible_config(saved_config[0], config):
-                raise ValueError("Extraction configuration changed; use a separate data root")
+                raise ValueError("Extraction configuration changed; use a fresh output database")
             row = (
                 reader.execute(
                     "SELECT selection,receipt FROM extraction_days WHERE day=?", (str(day),)
@@ -537,7 +567,7 @@ def _extract_day(
             "SELECT data FROM extraction_config WHERE id=1"
         ).fetchone()
         if saved_config is not None and not compatible_config(saved_config[0], config):
-            raise ValueError("Extraction configuration changed; use a separate data root")
+            raise ValueError("Extraction configuration changed; use a fresh output database")
         start_us = int(datetime.combine(day, time.min, UTC).timestamp()) * 1_000_000
         end_us = start_us + 86_400_000_000
         with connection:
@@ -551,12 +581,13 @@ def _extract_day(
                 (started, sid),
             )
             batch_id = connection.execute(
-                "INSERT INTO ingestion_batches(source_id,input_start_us,input_end_us,started_us,state,pipeline_version,config_sha256,config_json,inputs_json,diagnostics_json) VALUES (?,?,?,?,'running','observed-itinerary-v1',?,?,?,'{}')",
+                "INSERT INTO ingestion_batches(source_id,input_start_us,input_end_us,started_us,state,pipeline_version,config_sha256,config_json,inputs_json,diagnostics_json) VALUES (?,?,?,?,'running',?,?,?,?, '{}')",
                 (
                     sid,
                     start_us,
                     end_us,
                     started,
+                    PIPELINE_VERSION,
                     hashlib.sha256(config.encode()).hexdigest(),
                     config,
                     canonical(assets),
@@ -618,7 +649,7 @@ def _extract_day(
             ).fetchone()[0]
             connection.executemany(
                 "INSERT INTO airports(iata,latitude,longitude,metadata_source_id) VALUES(?,?,?,?) ON CONFLICT(iata) DO UPDATE SET latitude=COALESCE(airports.latitude,excluded.latitude),longitude=COALESCE(airports.longitude,excluded.longitude),metadata_source_id=COALESCE(airports.metadata_source_id,excluded.metadata_source_id)",
-                [(code, lat, lon, airport_source) for code, lat, lon in airports],
+                [(point[0], point[1], point[2], airport_source) for point in airports],
             )
             connection.execute("INSERT OR IGNORE INTO extraction_config VALUES (1,?)", (config,))
             last = connection.execute("SELECT MAX(day) FROM extraction_days").fetchone()[0]
@@ -666,8 +697,8 @@ def _extract_day(
                 ),
                 "departure_years": scope,
                 "boundary_version": 1,
-                "time_basis": "observed_ground_transition_bounds; not scheduled or gate times",
-                "coverage": "conservative inferred legs; configured commercial/type subset",
+                "time_basis": "inferred ground brackets or airborne proximity windows; not schedules or certified actual times",
+                "coverage": "incomplete observed movement candidates; commercial service is not certified",
             }
             connection.execute(
                 "INSERT INTO extraction_days VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET receipt=excluded.receipt",
@@ -690,10 +721,11 @@ def _extract_day(
             )
             budget.check(1024**2)
             connection.execute(
-                "UPDATE ingestion_batches SET state='committed',finished_us=?,inserted_count=?,duplicate_count=?,diagnostics_json=? WHERE id=?",
+                "UPDATE ingestion_batches SET state='committed',finished_us=?,inserted_count=?,updated_count=?,duplicate_count=?,diagnostics_json=? WHERE id=?",
                 (
                     utc_us(datetime.now(UTC)),
                     counters["records_inserted"],
+                    counters["records_updated"],
                     counters["records_already_present"],
                     canonical(diagnostics.summary()),
                     batch_id,
@@ -748,6 +780,7 @@ def extract_day(
     with file_mutex(root / ".extract.lock"), file_mutex(lock) if output_db else nullcontext():
         counters = Counter(
             records_inserted=0,
+            records_updated=0,
             records_already_present=0,
             legs_completed=0,
             boundary_legs_completed=0,
@@ -799,6 +832,7 @@ def extract_day(
                         "committed": diagnostics.committed,
                         "counts_provisional": not diagnostics.committed,
                         "records_applied": counters["records_inserted"]
+                        + counters["records_updated"]
                         if diagnostics.committed
                         else 0,
                         "aircraft_id": diagnostics.aircraft_id,
@@ -820,7 +854,7 @@ def extract_day(
                     "result": receipt["result"],
                     "committed": True,
                     "counts_historical": receipt["result"] == "already_committed",
-                    "records_applied": counters["records_inserted"],
+                    "records_applied": counters["records_inserted"] + counters["records_updated"],
                     "counts": receipt["counts"],
                     "diagnostics": receipt.get("diagnostics"),
                     "diagnostics_missing": "diagnostics" not in receipt,

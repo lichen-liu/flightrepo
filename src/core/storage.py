@@ -46,6 +46,8 @@ def _compatibility_schema():
         "f.aircraft_type_code",
         "f.callsign",
         "f.evidence_kind",
+        "f.itinerary_reviewed",
+        "f.review_reasons",
         "NULLIF(f.departure_actual_kind,'unknown') AS departure_actual_kind",
         "NULLIF(f.arrival_actual_kind,'unknown') AS arrival_actual_kind",
     ]
@@ -79,6 +81,8 @@ def _compatibility_schema():
         "aircraft_type_code": "NEW.aircraft_type_code",
         "status": "COALESCE(NEW.status,'unknown')",
         "evidence_kind": "COALESCE(NEW.evidence_kind,'source_reported')",
+        "itinerary_reviewed": "COALESCE(NEW.itinerary_reviewed,0)",
+        "review_reasons": "COALESCE(NEW.review_reasons,'[]')",
         "first_seen_us": parse_time("NEW.fetched_at"),
         "last_seen_us": parse_time("NEW.fetched_at"),
         "departure_actual_kind": "CASE WHEN NEW.departure_actual IS NOT NULL THEN COALESCE(NEW.departure_actual_kind,'unknown') END",
@@ -159,6 +163,8 @@ def store_flight(connection, record, *, restore=True, local_edit=False, batch_id
         "aircraft_type_code": record.aircraft_type_code,
         "status": record.status.value,
         "evidence_kind": record.evidence_kind,
+        "itinerary_reviewed": int(record.itinerary_reviewed),
+        "review_reasons": json.dumps(record.review_reasons),
         "departure_actual_kind": (record.departure_actual_kind or "unknown")
         if record.departure_actual is not None
         else None,
@@ -193,6 +199,7 @@ def store_flight(connection, record, *, restore=True, local_edit=False, batch_id
                 else dict(row)
             )
             current["codeshares"] = json.loads(current["codeshares"])
+            current["review_reasons"] = json.loads(current["review_reasons"])
             if (
                 FlightRecord.model_validate(current).model_copy(
                     update={"fetched_at": record.fetched_at}

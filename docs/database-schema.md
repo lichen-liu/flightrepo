@@ -8,8 +8,8 @@ SQLite 3.38 or newer is required (STRICT tables and built-in JSON).
 ## Start with the consumer
 
 Ingestion, backend, calendar, routing and admin must share one flight-leg
-contract. A committed leg must be browseable and searchable without a separate
-export or pretending that an observation is a schedule. The previous split between
+contract. A committed leg must be browseable and, when its evidence is eligible, searchable
+without a separate export or pretending that an observation is a schedule. The previous split between
 `flights` and `itinerary_legs` failed this requirement, even in the same file.
 
 Store one leg per source identity. Build connecting journeys at query time.
@@ -64,9 +64,17 @@ then report counts as source leg records, not unique physical flights.
 ADSB callsigns go in `callsign`; they do not populate either commercial field.
 `aircraft_type_code` is the observed/reported ICAO type designator, not a
 registration or seat configuration. An ADSB candidate has
-`evidence_kind = inferred_ground_brackets` and `status = unknown`; detecting
-ground brackets does not certify a commercial service or an official landed
-status. Filter membership belongs in batch provenance, not a fabricated fact.
+`evidence_kind = inferred_ground_brackets` or `inferred_airport_proximity`, and
+`status = unknown`. Proximity candidates use estimated event windows and inferred
+airport endpoints; neither evidence class certifies commercial service or an
+official landed status. Inference policy belongs in batch provenance, not a
+fabricated fact. `review_reasons` retains per-record uncertainty (airborne airport
+estimate, observation gap, callsign variation). Unreviewed estimates remain in the
+fact table and export, while `searchable_legs`, API routing, calendar availability
+and pure snapshot routing exclude them. Explicit admin approval sets
+`itinerary_reviewed`, preserves the reasons/evidence, and protects the record
+against passive reingestion. Catalog counts distinguish all stored records,
+searchable legs and pending reviews.
 
 ## Time model and routing
 
@@ -78,7 +86,7 @@ airport/code normalization and the meaning of each provider's timestamps.
 | --- | --- | --- |
 | Scheduled | Nullable departure/arrival pair | A provider's published schedule; can include future dates |
 | Actual | Nullable departure/arrival pair | Provider-reported events; event semantics must be documented by the adapter |
-| Observed | Four bounds: departure lower/upper, arrival lower/upper | Inferred ground/air transitions; neither scheduled nor gate times |
+| Observed | Four bounds: departure lower/upper, arrival lower/upper | Ground/air transitions or labelled proximity estimates; neither schedules nor gate times |
 
 Actual events also record `gate_out`/`takeoff` and `gate_in`/`landing`, or explicit
 `unknown` kinds. Routing must expose these semantics; a runway arrival cannot be

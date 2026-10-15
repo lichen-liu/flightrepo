@@ -105,7 +105,9 @@ CREATE TABLE IF NOT EXISTS flight_legs (
     status TEXT NOT NULL DEFAULT 'unknown'
         CHECK(status IN ('unknown', 'scheduled', 'active', 'landed', 'cancelled')),
     evidence_kind TEXT NOT NULL
-        CHECK(evidence_kind IN ('source_reported', 'inferred_ground_brackets', 'manual')),
+        CHECK(evidence_kind IN ('source_reported', 'inferred_ground_brackets', 'inferred_airport_proximity', 'manual')),
+    review_reasons TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(review_reasons) AND json_type(review_reasons) = 'array'),
+    itinerary_reviewed INTEGER NOT NULL DEFAULT 0 CHECK(itinerary_reviewed IN (0,1)),
     departure_scheduled_us INTEGER,
     arrival_scheduled_us INTEGER,
     departure_actual_us INTEGER,
@@ -149,7 +151,7 @@ CREATE TABLE IF NOT EXISTS flight_legs (
     CHECK(departure_scheduled_us IS NOT NULL OR arrival_scheduled_us IS NOT NULL OR
           departure_actual_us IS NOT NULL OR arrival_actual_us IS NOT NULL OR
           departure_observed_lower_us IS NOT NULL),
-    CHECK(evidence_kind <> 'inferred_ground_brackets' OR
+    CHECK(evidence_kind NOT IN ('inferred_ground_brackets', 'inferred_airport_proximity') OR
           departure_observed_lower_us IS NOT NULL)
 ) STRICT;
 
@@ -207,7 +209,8 @@ SELECT f.id AS leg_id, f.source_id, f.source_record_key,
        'scheduled_departure' AS departure_event,
        'scheduled_arrival' AS arrival_event
 FROM flight_legs f
-WHERE f.status <> 'cancelled' AND f.departure_scheduled_us IS NOT NULL
+WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+    AND f.status <> 'cancelled' AND f.departure_scheduled_us IS NOT NULL
     AND f.arrival_scheduled_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key)
@@ -218,7 +221,8 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_actual_us, f.arrival_actual_us,
        f.departure_actual_kind, f.arrival_actual_kind
 FROM flight_legs f
-WHERE f.status <> 'cancelled' AND f.departure_actual_us IS NOT NULL
+WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+    AND f.status <> 'cancelled' AND f.departure_actual_us IS NOT NULL
     AND f.arrival_actual_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key)
@@ -229,6 +233,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_observed_lower_us, f.arrival_observed_upper_us,
        'ground_to_air_transition', 'air_to_ground_transition'
 FROM flight_legs f
-WHERE f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
+WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+    AND f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key);

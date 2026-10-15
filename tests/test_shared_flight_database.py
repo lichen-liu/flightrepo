@@ -34,16 +34,93 @@ def query(**changes):
     )
 
 
-def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_path, capsys):
+@pytest.mark.parametrize("airborne_only", [False, True])
+def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(
+    tmp_path, capsys, airborne_only
+):
     database = tmp_path / "hosted.db"
-    receipt, _ = run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=database)
+    data = leg_trace()
+    data["timestamp"] += 3600
+    if airborne_only:
+        data["trace"] = data["trace"][1:-1]
+        data["trace"][0][8] = {"flight": "UAL123"}
+    receipt, _ = run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
     reader = FlightReader(database)
     record = reader.all_records()[0]
     assert reader.stats()["flights"] == reader.overview()["flights"] == 1
     assert record.provider == "adsblol" and record.callsign == "UAL123"
     assert record.aircraft_type_code == "A320"
+    assert record.evidence_kind == (
+        "inferred_airport_proximity" if airborne_only else "inferred_ground_brackets"
+    )
     assert record.flight_number is None and record.departure_scheduled is None
     assert reader.flight(record.provider, record.provider_id) == record
+    if airborne_only:
+        assert reader.list_flights(needs_review=True) == [record]
+        assert reader.available_dates("AAA", "UTC").dates == []
+        assert reader.search_itineraries(query()).items == []
+        assert reader.search(query().departure_start, query().departure_end) == []
+        assert reader.routes(query().departure_start, query().departure_end) == []
+        assert search_routes(query(), RoutingSnapshot((record,))).items == []
+        assert reader.web_catalog().dataset.flight_count == 0
+        assert reader.web_catalog().dataset.total_record_count == 1
+        assert reader.web_catalog().dataset.needs_review_count == 1
+        assert reader.overview()["needs_review_count"] == 1
+        request = RebuildRequest(
+            prefix=[{"provider": record.provider, "provider_id": record.provider_id}],
+            destination="BBB",
+            horizon_end=query().horizon_end,
+            time_basis="observed",
+        )
+        with pytest.raises(ValueError, match="airports_need_review"):
+            reader.rebuild(request)
+        app.dependency_overrides[get_store] = lambda: reader
+        try:
+            with TestClient(app) as client:
+                facts = client.get("/v1/catalog").json()["dataset"]
+                assert facts["flight_count"] == 0 and facts["needs_review_count"] == 1
+                assert (
+                    client.get("/v1/dates", params={"origin": "AAA", "clock": "UTC"}).json()[
+                        "dates"
+                    ]
+                    == []
+                )
+                assert (
+                    client.post(
+                        "/v1/itineraries/search", json=query().model_dump(mode="json")
+                    ).json()["items"]
+                    == []
+                )
+        finally:
+            app.dependency_overrides.clear()
+        capsys.readouterr()
+        admin.run(["--db", str(database), "flights", "--needs-review"])
+        assert json.loads(capsys.readouterr().out)[0]["provider_id"] == record.provider_id
+        admin.run(
+            [
+                "--db",
+                str(database),
+                "flight",
+                "approve",
+                record.provider,
+                record.provider_id,
+                "--yes",
+            ]
+        )
+        record = reader.flight(record.provider, record.provider_id)
+        assert record.itinerary_reviewed and not record.needs_review
+        assert record.evidence_kind == "inferred_airport_proximity"
+        assert reader.list_flights(needs_review=True) == []
+        assert reader.web_catalog().dataset.needs_review_count == 0
+        repeated, _ = run(
+            tmp_path / "inputs",
+            date(2025, 1, 1),
+            [data],
+            output_db=database,
+            refresh_diagnostics=True,
+        )
+        assert repeated["counts"]["records_protected"] == 1
+        assert reader.flight(record.provider, record.provider_id) == record
     assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
     catalog = reader.web_catalog()
     assert catalog.dataset.default_time_basis == "observed"
@@ -222,3 +299,42 @@ def test_admin_quota_updates_during_staged_parsing(tmp_path, monkeypatch, quota,
     assert observations == [0]
     assert FlightReader(database).stats()["flights"] == int(committed)
     assert not list((tmp_path / "inputs").glob(".day-stage-*"))
+
+
+@pytest.mark.parametrize("reason", ["observation_gap", "callsign_variation"])
+def test_ground_candidates_with_uncertain_continuity_require_review(tmp_path, capsys, reason):
+    updater = FlightUpdater(tmp_path / "review.db")
+    updater.initialize()
+    record = observed("review", "AAA", "BBB", 10, 70).model_copy(
+        update={"review_reasons": [reason]}
+    )
+    updater.upsert([record])
+    reader = FlightReader(updater.path)
+    assert reader.flight("adsblol", "review") == record
+    assert reader.available_dates("AAA", "UTC").dates == []
+    assert reader.search_itineraries(query()).items == []
+    assert search_routes(query(), RoutingSnapshot((record,))).items == []
+    assert reader.overview()["needs_review_count"] == 1
+    admin.run(["--db", str(updater.path), "flight", "approve", "adsblol", "review", "--yes"])
+    assert json.loads(capsys.readouterr().out)["approved"] == 1
+    approved = reader.flight("adsblol", "review")
+    assert approved.review_reasons == [reason] and approved.itinerary_reviewed
+    assert reader.search_itineraries(query()).items[0].legs == [approved]
+    assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
+
+
+def test_review_gate_applies_even_when_estimate_also_has_schedules(tmp_path):
+    updater = FlightUpdater(tmp_path / "review.db")
+    updater.initialize()
+    record = observed("review", "AAA", "BBB", 10, 70).model_copy(
+        update={
+            "evidence_kind": "inferred_airport_proximity",
+            "departure_scheduled": query().departure_start + timedelta(hours=1),
+            "arrival_scheduled": query().departure_start + timedelta(hours=2),
+        }
+    )
+    updater.upsert([record])
+    reader = FlightReader(updater.path)
+    assert reader.web_catalog().dataset.time_bases == {"scheduled": 0, "observed": 0, "actual": 0}
+    assert reader.available_dates("AAA", "UTC", "scheduled").dates == []
+    assert reader.search_itineraries(query(time_basis="scheduled")).items == []

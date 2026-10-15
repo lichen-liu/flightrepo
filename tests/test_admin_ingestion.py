@@ -34,8 +34,8 @@ def pipeline(tmp_path, monkeypatch):
         "iata_code,latitude_deg,longitude_deg,scheduled_service,type\n"
         "AAA,40,-70,yes,large_airport\nBBB,41,-71,yes,large_airport\n"
     )
-    selected_filter = tmp_path / "filter.json"
-    selected_filter.write_text(rules().model_dump_json())
+    selected_policy = tmp_path / "policy.json"
+    selected_policy.write_text(rules().model_dump_json())
     root = tmp_path / "extracted"
 
     def transport(request):
@@ -55,8 +55,8 @@ def pipeline(tmp_path, monkeypatch):
         str(manifest),
         "--airport-catalog",
         str(airports),
-        "--filter",
-        str(selected_filter),
+        "--policy",
+        str(selected_policy),
         "--data-root",
         str(root),
         "--output-db",

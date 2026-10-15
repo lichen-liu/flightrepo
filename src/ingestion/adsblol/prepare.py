@@ -13,8 +13,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from ingestion.adsblol.archive import RESERVE_BYTES, validate_asset
-from ingestion.adsblol.filters import DEFAULT_FILTER_PATH, CommercialFilter
 from ingestion.adsblol.legs import airport_points
+from ingestion.adsblol.policy import ExtractionPolicy
 
 AIRPORT_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 
@@ -118,14 +118,15 @@ def _write(path, data):
             temporary.unlink(missing_ok=True)
 
 
-def prepare_inputs(root, start, end, *, airport_path=None, filter_path=None, client=None):
+def prepare_inputs(root, start, end, *, airport_path=None, policy_path=None, client=None):
     if end < start:
         raise ValueError("End must follow start")
     root = Path(root).expanduser().resolve()
     manifest = root / "manifest.json"
     airports = Path(airport_path) if airport_path else root / "airports.csv"
-    selected_filter = Path(filter_path) if filter_path else DEFAULT_FILTER_PATH
-    CommercialFilter.model_validate_json(selected_filter.read_text())
+    selected_policy = Path(policy_path).resolve() if policy_path else None
+    if selected_policy:
+        ExtractionPolicy.model_validate_json(selected_policy.read_text())
     if airport_path and not airports.is_file():
         raise ValueError("Configured airport CSV is missing; configure an existing snapshot")
     with (
@@ -174,6 +175,6 @@ def prepare_inputs(root, start, end, *, airport_path=None, filter_path=None, cli
     return {
         "manifest": str(manifest),
         "airport_catalog": str(airports),
-        "filter_path": str(selected_filter.resolve()),
+        "policy_path": str(selected_policy) if selected_policy else None,
         "data_root": str(root),
     }

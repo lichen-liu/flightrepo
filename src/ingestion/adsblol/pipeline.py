@@ -9,8 +9,8 @@ from pathlib import Path
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
-from ingestion.adsblol.filters import CommercialFilter
 from ingestion.adsblol.legs import airport_points
+from ingestion.adsblol.policy import ExtractionPolicy
 
 
 def inventory(path, boundary_manifest=None):
@@ -31,7 +31,7 @@ def inventory(path, boundary_manifest=None):
 def extract_range(
     manifest,
     airports_path,
-    filter_path,
+    policy_path,
     root,
     start,
     end,
@@ -61,7 +61,11 @@ def extract_range(
     if missing:
         raise ValueError("Archive inventory missing for " + ", ".join(missing))
     airports = airport_points(Path(airports_path))
-    rules = CommercialFilter.model_validate_json(Path(filter_path).read_text())
+    rules = (
+        ExtractionPolicy.model_validate_json(Path(policy_path).read_text())
+        if policy_path
+        else ExtractionPolicy()
+    )
     for day in days:
         yield extract_day(
             root,
@@ -86,6 +90,8 @@ def extraction_status(root, output_db=None):
         "data_root": str(root),
         "database": str(database),
         "records": 0,
+        "searchable_records": 0,
+        "needs_review_records": 0,
         "days": [],
         "ranges": [],
         "active_batches": [],
@@ -108,6 +114,12 @@ def extraction_status(root, output_db=None):
             row[0] for row in connection.execute("SELECT day FROM extraction_days ORDER BY day")
         ]
         records = connection.execute("SELECT COUNT(*) FROM itinerary_legs").fetchone()[0]
+        searchable = connection.execute(
+            "SELECT COUNT(DISTINCT leg_id) FROM searchable_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol')"
+        ).fetchone()[0]
+        needs_review = connection.execute(
+            "SELECT COUNT(*) FROM flights WHERE provider='adsblol' AND itinerary_reviewed=0 AND (evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)"
+        ).fetchone()[0]
         legacy = [
             row[0]
             for row in connection.execute("SELECT day,receipt FROM extraction_days")
@@ -141,6 +153,8 @@ def extraction_status(root, output_db=None):
         "data_root": str(root),
         "database": str(database),
         "records": records,
+        "searchable_records": searchable,
+        "needs_review_records": needs_review,
         "days": days,
         "ranges": ranges,
         "active_batches": active,

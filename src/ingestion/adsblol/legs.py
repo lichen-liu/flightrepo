@@ -4,13 +4,13 @@ import csv
 import math
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FlightLegCandidate(BaseModel):
     icao_hex: str
-    callsign: str
-    aircraft_type_code: str
+    callsign: str | None
+    aircraft_type_code: str | None
     origin_iata: str
     destination_iata: str
     departure_lower: datetime
@@ -19,15 +19,20 @@ class FlightLegCandidate(BaseModel):
     arrival_upper: datetime
     evidence: str = "ground_brackets_and_nearby_airports"
     status: str = "inferred_candidate"
+    review_reasons: list[str] = Field(default_factory=list)
 
 
 def airport_points(path):
     with path.open(newline="", encoding="utf-8") as source:
         return [
-            (row["iata_code"], float(row["latitude_deg"]), float(row["longitude_deg"]))
+            (
+                row["iata_code"],
+                float(row["latitude_deg"]),
+                float(row["longitude_deg"]),
+                float(row.get("elevation_ft") or 0),
+            )
             for row in csv.DictReader(source)
             if len(row["iata_code"]) == 3
-            and row["scheduled_service"] == "yes"
             and row["type"] not in {"closed", "heliport", "seaplane_base"}
         ]
 

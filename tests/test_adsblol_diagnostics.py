@@ -35,8 +35,6 @@ def diagnose(data, airports=AIRPORTS):
     "change,reason",
     [
         ({"icao": "not-icao"}, "invalid_identity"),
-        ({"t": None}, "missing_type"),
-        ({"t": "R44"}, "type_not_selected"),
         ({"dbFlags": 1}, "military"),
     ],
 )
@@ -67,9 +65,6 @@ def test_idle_ground_samples_are_not_rejected_flights():
         ("ambiguous_origin", "origin_ambiguous_airport"),
         ("missing_destination", "destination_unmatched_airport"),
         ("same_airport", "same_airport"),
-        ("missing_callsign", "missing_callsign"),
-        ("changing_callsign", "changing_callsign"),
-        ("noncommercial", "callsign_not_selected"),
         ("short", "insufficient_airborne_duration"),
     ],
 )
@@ -102,32 +97,41 @@ def test_landing_rejections_are_disjoint_per_evaluated_segment(case, reason):
     "case,reason",
     [
         ("gap", "coverage_gap"),
-        ("stale", "stale_position"),
-        ("altitude", "missing_altitude"),
-        ("position", "invalid_position"),
-        ("category", "excluded_category"),
     ],
 )
 def test_quality_interruptions_count_abandoned_fragments_separately(case, reason):
     data = leg_trace()
     if case == "gap":
         del data["trace"][3:5]
-    elif case == "stale":
-        data["trace"][3][6] = 1
-    elif case == "altitude":
-        data["trace"][3][3] = None
-    elif case == "position":
-        data["trace"][3][1] = 95
-    elif case == "category":
-        data["trace"][3][8] = {"category": "A7"}
-    (legs, _, _), counts = diagnose(data)
+    diagnostics = Diagnostics()
+    legs, _, _ = reduce_movement(
+        data,
+        None,
+        AirportLookup(AIRPORTS),
+        rules(max_gap_seconds=120),
+        1735689600000000,
+        1735689600000000 + 86400000000,
+        diagnostics=diagnostics,
+    )
+    counts = diagnostics.summary()["counts"]
     assert not legs
     assert counts["interruptions"][reason] == 1
     assert counts["abandoned_segments"][reason] == 1
     # A following partial landing is another observed fragment, not another real flight.
     assert counts["local_rejections"] == {"missing_origin_ground": 1}
-    if case != "gap":
-        assert counts["ignored_observations"][reason] == 1
+    if reason == "coverage_gap":
+        assert counts["coverage_gaps"] == {"120_to_300_seconds": 1}
+
+
+def test_reception_gap_marker_is_counted_without_abandoning_valid_evidence():
+    data = leg_trace()
+    data["trace"].insert(3, [150, 40.5, -70.5, 20000, 400, 0, 1, 0, None])
+    (legs, _, _), counts = diagnose(data)
+    assert len(legs) == 1
+    assert not counts["ignored_observations"]
+    assert counts["observations"]["reception_gap_markers"] == 1
+    assert not counts["interruptions"] and not counts["abandoned_segments"]
+    assert not counts["coverage_gaps"]
 
 
 def test_duplicate_and_out_of_day_observations_are_explicitly_ignored():

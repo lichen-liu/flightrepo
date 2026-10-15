@@ -10,11 +10,11 @@ from ingestion.adsblol.archive import (
     archive_traces,
     download_manifest,
 )
-from ingestion.adsblol.filters import CommercialFilter
+from ingestion.adsblol.policy import ExtractionPolicy
 
 
-def rules():
-    return CommercialFilter(fixed_wing_types={"A320"}, callsign_prefixes={"UAL"})
+def rules(**changes):
+    return ExtractionPolicy(**changes)
 
 
 def trace(**changes):

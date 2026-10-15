@@ -24,12 +24,12 @@ import sys
 from pathlib import Path
 import admin.client, core.config, ingestion.updater, server.api
 from fastapi.testclient import TestClient
-from ingestion.adsblol.filters import DEFAULT_FILTER_PATH, CommercialFilter
+from ingestion.adsblol.policy import ExtractionPolicy
 
 for module in (admin.client, core.config, ingestion.updater, server.api):
     assert Path(module.__file__).is_relative_to(Path(sys.prefix)), module.__file__
-assert DEFAULT_FILTER_PATH.is_relative_to(Path(sys.prefix)) and DEFAULT_FILTER_PATH.is_file()
-CommercialFilter.model_validate_json(DEFAULT_FILTER_PATH.read_text())
+assert not hasattr(ExtractionPolicy(), 'fixed_wing_types')
+assert not hasattr(ExtractionPolicy(), 'callsign_prefixes')
 with TestClient(server.api.app) as client:
     assert client.get('/').status_code == 200
     for asset in Path(server.api.WEB_ROOT).rglob('*'):
@@ -63,7 +63,7 @@ def probe_ingestion(executable, directory, environment):
     }
     invalid, excluded = copy.deepcopy(valid), copy.deepcopy(valid)
     invalid["icao"], invalid["trace"][3][1] = "000002", 95
-    excluded["icao"], excluded["t"] = "000003", None
+    excluded["icao"], excluded["dbFlags"] = "000003", 1
     with tarfile.open(archive, "w") as target:
         for data in (valid, invalid, excluded):
             payload = gzip.compress(json.dumps(data).encode())
@@ -79,13 +79,13 @@ def probe_ingestion(executable, directory, environment):
     }
     archive.with_name(name + ".verified.json").write_text(json.dumps(asset))
     manifest, airports, rules = [
-        root / filename for filename in ("manifest.json", "airports.csv", "filter.json")
+        root / filename for filename in ("manifest.json", "airports.csv", "policy.json")
     ]
     manifest.write_text(json.dumps({"year": 2025, "assets": [asset]}))
     airports.write_text(
         "iata_code,latitude_deg,longitude_deg,scheduled_service,type\nAAA,40,-70,yes,large_airport\nBBB,41,-71,yes,large_airport\n"
     )
-    rules.write_text(json.dumps({"fixed_wing_types": ["A320"], "callsign_prefixes": ["UAL"]}))
+    rules.write_text("{}")
     prefix = [str(executable), "-m", "admin", "--db", str(root / "admin.db")]
     arguments = [
         "ingest",
@@ -95,7 +95,7 @@ def probe_ingestion(executable, directory, environment):
         str(manifest),
         "--airport-catalog",
         str(airports),
-        "--filter",
+        "--policy",
         str(rules),
         "--data-root",
         str(root),
@@ -120,17 +120,17 @@ def probe_ingestion(executable, directory, environment):
         return next(event for event in events if event["event"] == "day_finished")
 
     event = finished(invoke(arguments))
-    assert event["records_applied"] == 1 and not event["counts_historical"]
+    assert event["records_applied"] == 2 and not event["counts_historical"]
     counts = event["diagnostics"]["counts"]
-    assert counts["aircraft_exclusions"] == {"missing_type": 1}
+    assert counts["aircraft_exclusions"] == {"military": 1}
     assert counts["ignored_observations"] == {"invalid_position": 1}
-    assert counts["segments"]["local_accepted"] == 1
-    assert counts["local_rejections"] == {"missing_origin_ground": 1}
+    assert counts["segments"]["local_accepted"] == 2
+    assert counts["local_rejections"] == {}
     assert not archive.exists()
     repeat = finished(invoke(arguments))
     assert repeat["counts_historical"] and repeat["records_applied"] == 0
     status = json.loads(invoke(["ingest", "adsblol", "status"]).stdout)
-    assert status["records"] == 1 and status["diagnostics"]["days_reported"] == 1
+    assert status["records"] == 2 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
 
 

@@ -312,6 +312,76 @@ def test_configuration_changes_are_rejected_but_separate_periods_are_allowed(tmp
     assert len(rows(tmp_path, "itinerary_legs")) == 2
 
 
+def test_old_filtering_algorithm_cannot_silently_skip_previously_committed_days(tmp_path):
+    _, item = run(tmp_path, date(2025, 1, 1), [leg_trace()])
+    with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        config = json.loads(connection.execute("SELECT data FROM extraction_config").fetchone()[0])
+        assert config["algorithm"] == extraction.PIPELINE_VERSION
+        assert config["quality"]["max_gap_seconds"] == 21600
+        config["algorithm"] = "observed-itinerary-v1"
+        config.pop("quality")
+        connection.execute("UPDATE extraction_config SET data=?", (json.dumps(config),))
+    previous = rows(tmp_path, "extraction_days"), rows(tmp_path, "itinerary_legs")
+    with pytest.raises(ValueError, match="fresh output database"):
+        extract_day(tmp_path, "2025-01-01", [item], AIRPORTS, rules())
+    assert previous == (rows(tmp_path, "extraction_days"), rows(tmp_path, "itinerary_legs"))
+
+
+@pytest.mark.parametrize("order", [(1, 2), (2, 1)])
+def test_stale_samples_near_midnight_do_not_erase_or_extend_boundary_evidence(tmp_path, order):
+    first, second = midnight_traces()
+    # Tail is 23:59:50; head is 00:01:30. Both remain valid across a stale spike.
+    first["trace"].append([86395, 40.5, -70.5, 10000, 300, 0, 1, 0, None])
+    second["trace"].insert(0, [10, 40.5, -70.5, 10000, 300, 0, 1, 0, None])
+    traces = {1: first, 2: second}
+    for number in order:
+        run(tmp_path, date(2025, 1, number), [traces[number]])
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+    for number in order:
+        run(tmp_path, date(2025, 1, number), [traces[number]])
+    assert len(rows(tmp_path, "itinerary_legs")) == 1
+
+
+def test_stale_midnight_samples_cannot_mask_a_long_boundary_gap(tmp_path):
+    first, second = midnight_traces()
+    first["trace"] = first["trace"][:-1]  # Last usable observation is 23:58:10.
+    first["trace"].append([86395, 40.5, -70.5, 20000, 400, 0, 1, 0, None])
+    second["trace"].insert(0, [10, 40.5, -70.5, 20000, 400, 0, 1, 0, None])
+    for row in first["trace"][:-1]:
+        row[0] -= 21600
+    run(tmp_path, date(2025, 1, 1), [first])
+    receipt, _ = run(tmp_path, date(2025, 1, 2), [second])
+    assert not rows(tmp_path, "itinerary_legs")
+
+
+@pytest.mark.parametrize("order", [(1, 2), (2, 1)])
+def test_previous_day_ground_refines_airborne_origin_without_a_duplicate(tmp_path, order):
+    first, second = leg_trace(), leg_trace()
+    first["trace"] = [[86390, 40, -70, "ground", 0, 0, 0, 0, {"flight": "UAL123"}]]
+    second["timestamp"] += 86400
+    second["trace"] = second["trace"][1:]
+    second["trace"][0][8] = {"flight": "UAL123"}
+    traces = {1: first, 2: second}
+    for number in order:
+        run(tmp_path, date(2025, 1, number), [traces[number]])
+    ((key, _, raw),) = rows(tmp_path, "itinerary_legs")
+    data = json.loads(raw)
+    assert data["evidence"] == "ground_brackets_and_nearby_airports"
+    assert data["departure_lower"] == "2025-01-01T23:59:50Z"
+    for number in (2, 1, 2):
+        receipt, _ = run(
+            tmp_path, date(2025, 1, number), [traces[number]], refresh_diagnostics=True
+        )
+        assert rows(tmp_path, "itinerary_legs")[0][0] == key
+        assert len(rows(tmp_path, "itinerary_legs")) == 1
+    assert json.loads(rows(tmp_path, "itinerary_legs")[0][2]) == data
+    with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        assert (
+            connection.execute("SELECT SUM(updated_count) FROM ingestion_batches").fetchone()[0]
+            == 1
+        )
+
+
 def test_partial_schema_initialization_can_be_repaired_on_restart(tmp_path):
     with sqlite3.connect(tmp_path / "itineraries.db") as connection:
         connection.execute(
@@ -367,19 +437,23 @@ def test_live_quota_change_aborts_uncommitted_day_without_removing_durable_facts
     assert list((root / "raw" / "2025-01-02").glob("*.tar"))
 
 
-def test_ambiguous_callsigns_stale_coverage_and_type_changes_do_not_invent_legs():
+def test_callsign_variations_and_stale_samples_do_not_discard_a_complete_movement():
     start = 1735689600000000
     data = leg_trace()
     data["trace"][3][8] = {"flight": "UAL999"}
-    assert (
-        reduce_movement(data, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000)[0]
-        == []
-    )
+    (leg,) = reduce_movement(
+        data, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000
+    )[0]
+    assert leg.callsign == "UAL999"
     data = leg_trace()
     data["trace"][3][6] = 1
     assert (
-        reduce_movement(data, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000)[0]
-        == []
+        len(
+            reduce_movement(
+                data, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000
+            )[0]
+        )
+        == 1
     )
 
 
@@ -390,7 +464,6 @@ def test_type_changes_interrupt_midnight_aircraft_assignment():
         first, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000
     )
     changed = rules()
-    changed.fixed_wing_types.add("B738")
     second["t"] = "B738"
     assert (
         reduce_movement(
@@ -410,3 +483,18 @@ def test_airport_buckets_match_across_dateline_poles_and_ambiguous_airports():
     assert lookup.match(0, 179.999) == "AAA"
     assert lookup.match(89.999, -90) == "BBB"
     assert AirportLookup(AIRPORTS + [("CCC", 40.001, -70)]).match(40, -70) is None
+
+
+@pytest.mark.parametrize("order", [(1, 2), (2, 1)])
+def test_airborne_origin_climb_can_be_confirmed_across_midnight(tmp_path, order):
+    first, second = leg_trace(), leg_trace()
+    first["trace"] = [[86300, 40, -70, 500, 150, 0, 0, 0, {"flight": "UAL123"}]]
+    second["timestamp"] += 86400
+    second["trace"] = second["trace"][2:]
+    traces = {1: first, 2: second}
+    for number in order:
+        run(tmp_path, date(2025, 1, number), [traces[number]])
+    ((key, _, raw),) = rows(tmp_path, "itinerary_legs")
+    data = json.loads(raw)
+    assert data["origin_iata"] == "AAA" and data["destination_iata"] == "BBB"
+    assert data["evidence"] == "airport_proximity_and_time_window"

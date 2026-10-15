@@ -1,3 +1,6 @@
+import copy
+
+import pytest
 from test_adsblol import rules
 
 from ingestion.adsblol.movements import AirportLookup, reduce_movement
@@ -45,24 +48,64 @@ def test_partial_and_ambiguous_legs_are_excluded():
     for removed in (0, -1):
         data = leg_trace()
         del data["trace"][removed]
-        assert candidates(data, AIRPORTS, rules()) == []
+        (leg,) = candidates(data, AIRPORTS, rules())
+        assert leg.evidence == "airport_proximity_and_time_window"
     assert candidates(leg_trace(), AIRPORTS + [("CCC", 40.001, -70.001)], rules()) == []
 
 
-def test_coverage_gaps_and_stale_points_cannot_complete_a_leg():
+def test_configured_gap_limit_still_rejects_missing_continuity():
     data = leg_trace()
-    data["trace"][3][6] = 1
-    assert candidates(data, AIRPORTS, rules()) == []
     data = leg_trace()
     del data["trace"][3:5]
-    assert candidates(data, AIRPORTS, rules()) == []
+    assert candidates(data, AIRPORTS, rules(max_gap_seconds=120)) == []
 
 
 def test_no_type_no_airports_and_military_data_do_not_create_candidates():
     data = leg_trace()
     data["t"] = None
-    assert candidates(data, AIRPORTS, rules()) == []
+    assert candidates(data, AIRPORTS, rules())[0].aircraft_type_code is None
     data = leg_trace()
     data["dbFlags"] = 1
     assert candidates(data, AIRPORTS, rules()) == []
     assert candidates(leg_trace(), [], rules()) == []
+
+
+@pytest.mark.parametrize("index", range(7))
+def test_reception_gap_marker_does_not_invalidate_newly_received_position(index):
+    data = leg_trace()
+    data["trace"][index][6] |= 1
+    assert candidates(data, AIRPORTS, rules()) == candidates(leg_trace(), AIRPORTS, rules())
+
+
+def test_reception_gap_markers_do_not_destroy_observed_ground_endpoints():
+    data = leg_trace()
+    data["trace"][0][6] = data["trace"][-1][6] = 1
+    (leg,) = candidates(data, AIRPORTS, rules())
+    assert leg.evidence == "ground_brackets_and_nearby_airports"
+
+
+def test_flagged_trace_still_contains_usable_observations():
+    data = leg_trace()
+    for row in data["trace"]:
+        row[6] |= 1
+    start = 1735689600000000
+    legs, tail, _ = reduce_movement(
+        data, None, AirportLookup(AIRPORTS), rules(), start, start + 86400000000
+    )
+    assert len(legs) == 1 and tail is None
+
+
+def test_stale_duplicate_does_not_hide_a_valid_sample_at_the_same_timestamp():
+    data = leg_trace()
+    stale = copy.deepcopy(data["trace"][3])
+    stale[6] |= 1
+    data["trace"].insert(3, stale)
+    assert candidates(data, AIRPORTS, rules()) == candidates(leg_trace(), AIRPORTS, rules())
+
+
+@pytest.mark.parametrize("kind", ["E75L", "E75S", "MD11", "A306", "SF34", "C172", None])
+def test_no_type_whitelist_and_missing_type_is_retained(kind):
+    data = leg_trace()
+    data["t"] = kind
+    (leg,) = candidates(data, AIRPORTS, rules())
+    assert leg.aircraft_type_code == kind

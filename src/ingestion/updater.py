@@ -149,6 +149,7 @@ class FlightUpdater(SQLiteConnection):
         current = dict(row) if row is not None else None
         if current is not None:
             current["codeshares"] = json.loads(current["codeshares"])
+            current["review_reasons"] = json.loads(current.get("review_reasons", "[]"))
         if current is None or FlightRecord.model_validate(current) != original:
             raise ValueError("Flight changed or was deleted; reload it before updating or deleting")
 

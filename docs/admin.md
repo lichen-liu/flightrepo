@@ -57,7 +57,8 @@ flyji> routes --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 `overview` shows counts, directed routes, airlines, catalog coverage, transfer
 rules, missing airport metadata, departure/fetch ranges, provider/status counts,
 the five busiest direct pairs by stored flight count, and SQLite journal mode.
-All counts include cancelled flights. Fetch timestamps describe the stored
+Stored-fact counts include cancelled and unreviewed candidates; searchable counts
+exclude them. Review and searchable totals are shown separately. Fetch timestamps describe the stored
 records; they do not establish complete or current provider coverage. Airline
 counts include only non-null airline codes.
 
@@ -69,6 +70,25 @@ the maximum is 1,000. Returned provider/ID pairs identify individual records.
 
 `routes` summarizes direct airport pairs. `search` finds complete journeys with
 connections. These commands answer different questions.
+
+## Review uncertain itineraries
+
+```text
+flyji> flights --needs-review --provider adsblol --limit 20
+flyji> flight show adsblol RECORD_ID
+flyji> flight edit adsblol RECORD_ID
+flyji> flight approve adsblol RECORD_ID
+```
+
+Airborne airport estimates, observation gaps over 120 seconds, and changing
+callsigns are retained with `review_reasons` for inspection/export. They cannot
+power route search, continuation planning or calendar dates until explicitly
+reviewed. Check the airports and time bounds against an independent flight source;
+edit incorrect fields before approving. Approval previews the record and defaults
+to no; scripts can supply `--yes`. It preserves inference provenance and marks
+`itinerary_reviewed`, protecting the reviewed record from passive reingestion.
+An edit alone does not approve an unreviewed estimate. Website counts distinguish
+searchable legs from candidates awaiting review.
 
 ## Create, edit, and delete flights
 
@@ -145,7 +165,7 @@ works through `python -m admin --db FILE` or the installed `flyji` command.
 | Command | Purpose |
 | --- | --- |
 | `ingest adsblol prepare` | Fetch preferred archive metadata and an immutable airport CSV; no raw flight downloads |
-| `ingest adsblol configure` | Save existing manifest, airport CSV, filter and working-directory paths |
+| `ingest adsblol configure` | Save existing manifest, airport CSV, optional quality policy and working-directory paths |
 | `ingest adsblol run` | Extract historical observed legs one UTC day at a time |
 | `ingest adsblol status` | Completed periods, accepted legs, current batch and rejection diagnostics |
 | `ingest csv configure/run/status` | Import a licensed CSV with schedules and optional actual times/type |
@@ -164,8 +184,8 @@ flyji> storage status
 ```
 
 Preparation saves generated paths in the selected database and bundles the
-commercial filter in the installed package. It reuses an existing airport CSV and
-custom filter unchanged. Missing archive periods fail without configuring the
+quality defaults in the installed package, without type/callsign whitelists. It reuses an existing airport CSV and
+optional `--policy` file unchanged. Missing archive periods fail without configuring the
 pipeline. `configure` is useful when you already have inputs. Output defaults to
 the selected admin database; `--output-db` is an explicit override. `--data-root`
 is working space, not a second serving database.
@@ -178,7 +198,7 @@ preserves prior commits. `--offline` processes only verified local raw inputs.
 limits retained departures to that UTC year. For a range ending December 31,
 `--finish-year` processes January 1 arrival evidence and excludes next-year
 departures; prepare that boundary input first. `--boundary-manifest` also accepts
-an existing adjacent-year manifest. Keep the airport snapshot/filter unchanged
+an existing adjacent-year manifest. Keep the airport snapshot/quality policy unchanged
 for an existing dataset.
 
 The live `storage quota` covers database/WAL/SHM only; `--budget-gib` independently

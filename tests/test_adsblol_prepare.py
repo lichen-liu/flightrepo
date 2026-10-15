@@ -73,11 +73,11 @@ def test_prepare_is_metadata_only_repeatable_and_preserves_custom_inputs(tmp_pat
         assert all(item["sha256"] == "a" * 64 for item in manifest["assets"])
         airport_bytes = Path(result["airport_catalog"]).read_bytes()
         requests.clear()
-        custom = tmp_path / "custom-filter.json"
-        custom.write_text('{"fixed_wing_types":["A320"],"callsign_prefixes":["UAL"]}')
-        repeated = prepare_inputs(tmp_path, first, last, filter_path=custom, client=http)
+        custom = tmp_path / "custom-policy.json"
+        custom.write_text('{"airport_radius_km":20}')
+        repeated = prepare_inputs(tmp_path, first, last, policy_path=custom, client=http)
         assert requests == []
-        assert repeated["filter_path"] == str(custom.resolve())
+        assert repeated["policy_path"] == str(custom.resolve())
         assert Path(result["airport_catalog"]).read_bytes() == airport_bytes
     assert not (tmp_path / "raw").exists() and not list(tmp_path.glob("*.db"))
 

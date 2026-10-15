@@ -16,6 +16,8 @@ class FlightIndex:
     def __init__(self, records, policy, horizon):
         grouped = defaultdict(list)
         for flight in records.values():
+            if flight.needs_review:
+                continue
             grouped[flight.origin_iata].append(flight)
         self.by_origin = {
             origin: tuple(sorted(rows, key=departure_key)) for origin, rows in grouped.items()
@@ -26,6 +28,8 @@ class FlightIndex:
         }
         reverse = defaultdict(set)
         for flight in records.values():
+            if flight.needs_review:
+                continue
             if flight.status == FlightStatus.CANCELLED or flight.arrival_upper > horizon:
                 continue
             if flight.origin_iata in policy.avoid or flight.destination_iata in policy.avoid:

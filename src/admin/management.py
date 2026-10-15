@@ -136,6 +136,25 @@ def edit_flight(path, provider, provider_id, output):
     output({"updated": FlightUpdater(path).update(original, replacement)})
 
 
+def approve_flight(path, provider, provider_id, confirmed, output):
+    original = FlightReader(path).flight(provider, provider_id)
+    if not original.needs_review:
+        raise ValueError("This flight has no pending itinerary estimates to approve")
+    if not confirmed:
+        print(f"Database: {path.resolve()}")
+        output(original)
+        print("Check both airports and time bounds; use flight edit first for corrections.")
+        try:
+            if not yes_no("Approve this itinerary for route search?"):
+                print("Approval cancelled.")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\nApproval cancelled.")
+            return
+    approved = original.model_copy(update={"itinerary_reviewed": True})
+    output({"approved": FlightUpdater(path).update(original, approved)})
+
+
 def delete_flight(path, provider, provider_id, confirmed, output):
     original = FlightReader(path).flight(provider, provider_id)
     if not confirmed:

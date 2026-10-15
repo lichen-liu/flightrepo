@@ -9,9 +9,9 @@ from pathlib import Path
 from admin.management import ask
 from core.disk_quota import control
 from core.models import IngestRequest
-from ingestion.adsblol.filters import DEFAULT_FILTER_PATH, CommercialFilter
 from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.pipeline import extract_range, extraction_status, inventory
+from ingestion.adsblol.policy import ExtractionPolicy
 from ingestion.adsblol.prepare import prepare_inputs
 from ingestion.providers.aerodatabox import AeroDataBoxProvider
 from ingestion.providers.csv_feed import CsvProvider
@@ -38,7 +38,7 @@ def add_ingestion_commands(commands):
         end=None,
         manifest=None,
         airport_catalog=None,
-        filter_path=None,
+        policy_path=None,
         data_root=None,
         output_db=None,
         boundary_manifest=None,
@@ -96,10 +96,10 @@ def add_ingestion_commands(commands):
                         "--airport-catalog", type=Path, help="immutable OurAirports CSV snapshot"
                     )
                     command.add_argument(
-                        "--filter",
-                        dest="filter_path",
+                        "--policy",
+                        dest="policy_path",
                         type=Path,
-                        help="aircraft-type/callsign filter JSON; bundled default available",
+                        help="optional inference quality limits JSON; no type/callsign whitelist",
                     )
                     command.add_argument(
                         "--boundary-manifest",
@@ -222,7 +222,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 first,
                 last,
                 airport_path=data.get("airport_catalog"),
-                filter_path=data.get("filter_path"),
+                policy_path=data.get("policy_path"),
             )
         )
         data.setdefault("budget_gib", 20)
@@ -290,10 +290,10 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
         )
         field("airport_catalog", args.airport_catalog, "Airport CSV snapshot")
         field(
-            "filter_path",
-            args.filter_path,
-            "Commercial filter JSON",
-            DEFAULT_FILTER_PATH,
+            "policy_path",
+            args.policy_path,
+            "Inference quality policy JSON",
+            required=False,
         )
         field(
             "data_root",
@@ -335,10 +335,11 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
         _, available = inventory(data["manifest"], data.get("boundary_manifest"))
         if not available:
             raise ValueError("Archive inventory is empty")
-        if not Path(data["airport_catalog"]).is_file() or not Path(data["filter_path"]).is_file():
-            raise ValueError("Airport snapshot and filter files must exist")
+        if not Path(data["airport_catalog"]).is_file():
+            raise ValueError("Airport snapshot must exist")
         airport_points(Path(data["airport_catalog"]))
-        CommercialFilter.model_validate_json(Path(data["filter_path"]).read_text())
+        if data.get("policy_path"):
+            ExtractionPolicy.model_validate_json(Path(data["policy_path"]).read_text())
     elif source == "csv" and not Path(data["csv"]).is_file():
         raise ValueError("Licensed CSV file must exist")
     if args.ingest_action == "configure":
@@ -380,11 +381,11 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
         if missing:
             raise ValueError("Archive inventory missing for " + ", ".join(missing))
         save_profile(path, source, data)
-        inserted = skipped = 0
+        inserted = updated = skipped = 0
         for receipt in extract_range(
             data["manifest"],
             data["airport_catalog"],
-            data["filter_path"],
+            data.get("policy_path"),
             data["data_root"],
             start,
             end,
@@ -400,6 +401,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 skipped += 1
             else:
                 inserted += receipt["counts"].get("records_inserted", 0)
+                updated += receipt["counts"].get("records_updated", 0)
             emit({key: value for key, value in receipt.items() if key != "inputs"})
         emit(
             {
@@ -408,6 +410,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 "end": str(requested_end),
                 "arrival_boundary_day": str(end) if args.finish_year else None,
                 "records_inserted": inserted,
+                "records_updated": updated,
                 "days_skipped": skipped,
                 **extraction_status(data["data_root"], data["output_db"]),
                 "serving": "observed candidates in the shared serving database",

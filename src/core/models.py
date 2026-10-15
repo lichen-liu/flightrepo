@@ -31,9 +31,21 @@ class FlightRecord(BaseModel):
     fetched_at: datetime
     aircraft_type_code: str | None = Field(default=None, pattern=r"^[A-Z0-9]{2,8}$")
     callsign: str | None = Field(default=None, min_length=1)
-    evidence_kind: Literal["source_reported", "inferred_ground_brackets", "manual"] = (
-        "source_reported"
-    )
+    evidence_kind: Literal[
+        "source_reported", "inferred_ground_brackets", "inferred_airport_proximity", "manual"
+    ] = "source_reported"
+    review_reasons: list[
+        Literal["airborne_airport_estimate", "observation_gap", "callsign_variation"]
+    ] = Field(default_factory=list)
+    itinerary_reviewed: bool = False
+
+    @property
+    def needs_review(self):
+        return (
+            bool(self.review_reasons or self.evidence_kind == "inferred_airport_proximity")
+            and not self.itinerary_reviewed
+        )
+
     departure_observed_lower: datetime | None = None
     departure_observed_upper: datetime | None = None
     arrival_observed_lower: datetime | None = None
@@ -89,6 +101,10 @@ class FlightRecord(BaseModel):
     @model_serializer(mode="wrap")
     def preserve_legacy_shape(self, handler):
         data = handler(self)
+        if not self.review_reasons:
+            data.pop("review_reasons", None)
+        if not self.itinerary_reviewed:
+            data.pop("itinerary_reviewed", None)
         if data.get("aircraft_type_code") is None:
             data.pop("aircraft_type_code", None)
         for name in (
@@ -189,8 +205,8 @@ class FlightRecord(BaseModel):
             or not observed[0] <= observed[1] < observed[2] <= observed[3]
         ):
             raise ValueError("observed time bounds must be complete and ordered")
-        if self.evidence_kind == "inferred_ground_brackets" and observed[0] is None:
-            raise ValueError("inferred ground brackets require observed bounds")
+        if self.evidence_kind.startswith("inferred_") and observed[0] is None:
+            raise ValueError("inferred itinerary evidence requires observed bounds")
         if not any(
             getattr(self, name) is not None
             for name in (

@@ -426,6 +426,7 @@ function renderJourney({ preserveView = false } = {}) {
       return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
       <div class="leg-time"><div><strong>${e(flightTimeLabel(f, "departure", zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(flightTimeLabel(f, "arrival", zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
       ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
+      ${f.evidence_kind === "inferred_airport_proximity" ? `<div class="leg-source">Airports inferred from airborne proximity${f.itinerary_reviewed ? " and reviewed" : "; awaiting admin review"}; time windows are estimates.</div>` : ""}
       <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
     .join("");
@@ -488,8 +489,10 @@ function renderEvidence() {
   const entries = [
     [
       "Imported records",
-      `${data.flight_count} (${data.cancelled_count} cancelled)`,
+      `${data.total_record_count ?? data.flight_count} (${data.cancelled_count} cancelled)`,
     ],
+    ["Searchable legs", String(data.flight_count)],
+    ["Awaiting itinerary review", String(data.needs_review_count || 0)],
     ["Providers", data.providers.join(", ") || "None"],
     ["Provider coverage", "Unknown"],
     [
@@ -979,10 +982,10 @@ async function loadCatalog() {
         catalog.dataset.providers[0] === "demo";
       const hasFlights = catalog.dataset.flight_count;
       $("dataset-tag").textContent =
-        `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} records`;
+        `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} searchable legs${catalog.dataset.needs_review_count ? ` · ${catalog.dataset.needs_review_count} awaiting itinerary review` : ""}`;
       $("status").textContent = hasFlights
         ? catalog.dataset.default_time_basis === "observed" ? "Historical observations with inferred time bounds; coverage is partial." : "Dates are based on the imported flight records."
-        : "No flight records loaded. Import data with the internal client to begin.";
+        : catalog.dataset.needs_review_count ? "Itinerary estimates await admin review. No searchable flights yet." : "No flight records loaded. Import data with the internal client to begin.";
       if (catalog.airports_truncated)
         $("status").textContent +=
           " Suggestions limited to 1,000 airports; enter any exact code.";
