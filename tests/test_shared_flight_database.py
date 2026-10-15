@@ -1,4 +1,4 @@
-"""One committed source leg must be usable by every consumer of the same file."""
+"""Explicit publication must make committed source legs usable by every serving consumer."""
 
 import json
 from datetime import UTC, date, datetime, timedelta
@@ -16,6 +16,8 @@ from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot
+from ingestion.publish import publish_day
+from ingestion.store import IngestionStore
 from ingestion.updater import FlightUpdater
 from server.api import app, get_store
 from server.reader import FlightReader
@@ -121,31 +123,27 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
         capsys.readouterr()
         admin.run(["--db", str(database), "flights", "--needs-review"])
         assert json.loads(capsys.readouterr().out)[0]["provider_id"] == record.provider_id
-        admin.run(
-            [
-                "--db",
-                str(database),
-                "flight",
-                "approve",
-                record.provider,
-                record.provider_id,
-                "--yes",
-            ]
-        )
-        record = reader.flight(record.provider, record.provider_id)
-        assert record.itinerary_reviewed and not record.needs_review
-        assert record.evidence_kind == "inferred_airport_proximity"
-        assert reader.list_flights(needs_review=True) == []
-        assert reader.web_catalog().dataset.needs_review_count == 0
-        repeated, _ = run(
-            tmp_path / "inputs",
-            date(2025, 1, 1),
-            [data],
-            output_db=database,
-            refresh_diagnostics=True,
-        )
-        assert repeated["counts"]["records_protected"] == 1
-        assert reader.flight(record.provider, record.provider_id) == record
+        with pytest.raises(ValueError, match="read/query-only"):
+            admin.run(
+                [
+                    "--db",
+                    str(database),
+                    "flight",
+                    "approve",
+                    record.provider,
+                    record.provider_id,
+                    "--yes",
+                ]
+            )
+        serving = tmp_path / "serving.db"
+        assert publish_day(database, serving, date(2025, 1, 1))["held"] == 1
+        assert FlightReader(serving).stats()["flights"] == 0
+        assert reader.flight(record.provider, record.provider_id).needs_review
+        return
+    staging = database
+    database = tmp_path / "serving.db"
+    assert publish_day(staging, database, date(2025, 1, 1))["inserted"] == 1
+    reader = FlightReader(database, serving_only=True)
     assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
     catalog = reader.web_catalog()
     assert catalog.dataset.default_time_basis == "observed"
@@ -165,16 +163,16 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
     assert reader.rebuild(request).complete
     snapshot = reader.routing_snapshot(query())
     assert replay(replay_document("search", query(), snapshot, result))["matches_saved_result"]
-    with reader.connect() as connection:
-        assert (
-            connection.execute(
-                "SELECT type FROM sqlite_master WHERE name='itinerary_legs'"
-            ).fetchone()[0]
-            == "view"
-        )
+    with FlightReader(staging).connect() as connection:
         assert connection.execute(
             "SELECT state,inserted_count FROM ingestion_batches WHERE id=?", (receipt["batch_id"],)
         ).fetchone()[:] == ("committed", 1)
+    with reader.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM ingestion_batches").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT 1 FROM sqlite_schema WHERE name='itinerary_legs'").fetchone()
+            is None
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     app.dependency_overrides[get_store] = lambda: reader
     try:
@@ -201,23 +199,26 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
 
 def test_reprocessing_respects_edits_deletes_and_stable_identity(tmp_path):
     run(tmp_path, date(2025, 1, 1), [leg_trace()])
-    reader = FlightReader(tmp_path / "itineraries.db")
-    updater = FlightUpdater(reader.path)
+    staging = tmp_path / "itineraries.db"
+    serving = tmp_path / "serving.db"
+    publish_day(staging, serving, date(2025, 1, 1))
+    reader = FlightReader(serving)
+    updater = FlightUpdater(serving)
     original = reader.all_records()[0]
     changed = original.model_copy(update={"aircraft_type_code": "B738"})
     updater.update(original, changed)
-    receipt, _ = run(tmp_path, date(2025, 1, 1), [leg_trace()], refresh_diagnostics=True)
-    assert receipt["counts"]["records_protected"] == 1
+    run(tmp_path, date(2025, 1, 1), [leg_trace()], refresh_diagnostics=True)
+    assert publish_day(staging, serving, date(2025, 1, 1))["protected"] == 1
     assert reader.all_records() == [changed]
-    assert updater.delete(changed.provider, changed.provider_id, expected=changed) == 1
+    updater.delete(changed.provider, changed.provider_id, expected=changed)
     run(tmp_path, date(2025, 1, 1), [leg_trace()], refresh_diagnostics=True)
+    assert publish_day(staging, serving, date(2025, 1, 1))["protected"] == 1
     assert reader.all_records() == []
+    assert len(FlightReader(staging).all_records()) == 1
     updater.upsert([original])
-    assert reader.all_records() == [original]
-    run(tmp_path, date(2025, 1, 1), [leg_trace()], refresh_diagnostics=True)
-    with reader.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM flight_legs").fetchone()[0] == 1
-        assert connection.execute("SELECT revision FROM flight_legs").fetchone()[0] == 1
+    assert publish_day(staging, serving, date(2025, 1, 1))["duplicate"] == 1
+    restored = reader.all_records()[0]
+    assert restored == original.model_copy(update={"fetched_at": restored.fetched_at})
 
 
 def observed(key, origin, destination, dep, arr):
@@ -289,11 +290,11 @@ def test_failed_day_has_durable_diagnostics_without_partial_facts(tmp_path):
 
 
 @pytest.mark.parametrize("quota,committed", [(100 * 1024**2, True), (0, False)])
-def test_admin_quota_updates_during_staged_parsing(tmp_path, monkeypatch, quota, committed):
+def test_producer_policy_updates_during_staged_parsing(tmp_path, monkeypatch, quota, committed):
     from ingestion.adsblol import extraction
 
     database = tmp_path / "hosted.db"
-    FlightUpdater(database).initialize()
+    IngestionStore(database).initialize()
     reduce = extraction.reduce_movement
     observations = []
 

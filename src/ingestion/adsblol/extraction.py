@@ -5,11 +5,12 @@ import json
 import re
 import sqlite3
 from collections import Counter
-from contextlib import closing, nullcontext
+from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.database_roles import ingestion_target
 from core.disk_quota import database_bytes, file_bytes, policy
 from core.file_lock import file_mutex
 from core.models import FlightRecord
@@ -31,6 +32,7 @@ from ingestion.adsblol.movements import (
     advance_boundary,
     reduce_movement,
 )
+from ingestion.store import IDENTITY_SCHEMA, STORE_SCHEMA
 
 PIPELINE_VERSION = "observed-itinerary-v5"
 
@@ -62,7 +64,9 @@ CREATE TABLE IF NOT EXISTS extraction_sources (
 """
 
 SCHEMA = (
-    SERVING_SCHEMA
+    IDENTITY_SCHEMA
+    + SERVING_SCHEMA
+    + STORE_SCHEMA
     + SOURCE_SCHEMA
     + """
 CREATE VIEW IF NOT EXISTS itinerary_legs AS
@@ -805,13 +809,10 @@ def extract_day(
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     budget = ExtractionBudget(root, limit, policy_db, output_db=output_db)
+    ingestion_target(budget.database)
     # Serialize by destination as well as scratch directory when these differ.
-    lock = (
-        budget.database.with_name(budget.database.name + ".extraction.lock")
-        if output_db
-        else root / ".extract.lock"
-    )
-    with file_mutex(root / ".extract.lock"), file_mutex(lock) if output_db else nullcontext():
+    lock = budget.database.with_name(budget.database.name + ".extraction.lock")
+    with file_mutex(root / ".extract.lock"), file_mutex(lock):
         counters = Counter(
             records_inserted=0,
             records_updated=0,

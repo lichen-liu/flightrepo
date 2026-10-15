@@ -1,16 +1,19 @@
-# Shared flight database
+# Ingestion and serving databases
 
 **Implemented contract: `flight-legs`, schema version 1.** The canonical
 [SQLite DDL](../src/core/schema.sql) and [storage adapter](../src/core/storage.py)
-are shared by ingestion, API and admin. Startup does not seed real databases.
+define the flight/airport contract in both stores. Pipeline state belongs only
+to the private [ingestion schema](../src/ingestion/schema.sql). Startup does not seed real databases.
 SQLite 3.38 or newer is required (STRICT tables and built-in JSON).
 
 ## Start with the consumer
 
-Ingestion, backend, calendar, routing and admin must share one flight-leg
-contract. A committed leg must be browseable and, when its evidence is eligible, searchable
-without a separate export or pretending that an observation is a schedule. The previous split between
-`flights` and `itinerary_legs` failed this requirement, even in the same file.
+The ingestion database collects candidates and normalized reference evidence.
+The serving database holds explicitly published flight facts and airport metadata.
+They share a typed contract, so publication preserves aircraft type and time
+semantics without making observations look like schedules. Their stored roles
+prevent an ingestion file from being used by the backend or a manual writer.
+Admin can inspect either file, but only clear/reset ingestion, never manually edit it.
 
 Store one leg per source identity. Build connecting journeys at query time.
 Keep aircraft type, airport pair, identifiers, time evidence, status and source
@@ -26,18 +29,22 @@ never synthesize a flight number, schedule, airport timezone or city membership.
 | `airports` | IATA code and nullable descriptive/location/timezone metadata |
 | `airport_transfers` | Explicit, directed transfers between different airports |
 | `data_sources` | Provider codes, attribution and licence references |
-| `ingestion_batches` | Input window, pipeline/config identity, input URLs/hashes, commit counts and diagnostics per attempt |
+| `ingestion_batches` | Private input attempts/diagnostics; common FK structure exists in serving but publication leaves it empty |
 | `flight_tombstones` | Durable deletion intent across repeated imports/downloads |
 | `schema_metadata` | Versioned contract for startup checks |
 | `database_policy` | Persisted live database disk quota |
-| `ingestion_profiles` | Configured source/input paths for repeatable admin jobs |
+| `ingestion_profiles` (private) | Configured source/input paths for repeatable producer jobs |
+| `ingestion_store_metadata` (private) | Role/version, immutable store identity and reset generation |
+| `ingestion_documents` (private) | Source/kind/key, validity, normalized JSON, content hash and revision |
+| `publication_origin`, `publication_membership`, `publication_runs` (serving) | Publisher identity, owned source keys and per-day publication receipts |
 | `searchable_legs` (view) | Common departure/arrival intervals, filtered by explicit time basis |
 
-The DDL covers the shared facts, quota and admin profiles. The extractor also
-retains config/day receipts/boundary state for resumability. Compatibility `flights` and `itinerary_legs`
-views project the same typed facts; they are not separate flight stores. Boundary summaries contain compact airport/time evidence,
-not tracks; successful receipts remain available after raw deletion. A later
-cleanup can retire redundant metadata only after compatibility is demonstrated.
+Extraction receipts, algorithm/config and overnight boundary summaries stay in
+ingestion. The `flights` view projects typed facts in both stores;
+`itinerary_legs` is an extractor-only compatibility view. Serving has no private
+profiles, reference documents, extraction receipts or boundary summaries.
+Boundary summaries contain compact airport/time evidence, not tracks. They remain
+after raw deletion to support disjoint backfills.
 
 ## Identity, updates and truthfulness
 
@@ -74,10 +81,10 @@ Airport-estimate-only records are admitted with visible estimate labels. Other
 reasons block `searchable_legs`, API routing, calendar availability and pure
 snapshot routing unless explicitly approved. `needs_review` means held by those
 blocking reasons, not every record containing an estimate. The model and SQL
-admission predicates follow the same rule. Explicit admin approval sets
+admission predicates follow the same rule. Explicit serving admin approval sets
 `itinerary_reviewed`, preserves the reasons/evidence, and protects the record
-against passive reingestion. Catalog counts distinguish all stored records,
-searchable legs and pending reviews.
+against passive reingestion. Catalog counts describe the selected store; public serving excludes private
+held candidates. Private admin can inspect all candidates without changing them.
 
 ## Time model and routing
 
@@ -128,7 +135,7 @@ window spanning both days can still find the leg. Browsing may use interval
 overlap, labelled explicitly; the route calendar uses the strict search predicate.
 Compute day boundaries using IANA rules, including daylight-saving changes.
 
-Overview separates stored leg count, searchable count by basis, completed input
+Private ingestion overview separates stored leg count, searchable count by basis, completed input
 days, excluded/rejected units, unresolved boundaries, missing metadata and last
 successful ingestion. Refresh time is distinct from flight date. Coverage is
 partial/unknown unless measured against a trusted reference; receipts alone do
@@ -138,7 +145,8 @@ Use SQLite WAL and short read snapshots. Parsing/downloading takes place outside
 the write transaction; one day's leg upserts, airport stubs, boundary changes,
 receipt and committed batch state become visible atomically. Register the attempt
 first; persist failure diagnostics after rollback, with zero applied rows.
-Readers keep accessing previously committed days during downloads and commits.
+Private readers keep accessing previously committed days during downloads and commits.
+Public readers see the latest published days, independent of ingestion progress.
 API responses use one consistent snapshot, not multiple unrelated connections.
 
 ## Space and quota
@@ -158,8 +166,9 @@ not a whole-database capacity claim. Scheduled/actual-rich records can be larger
 
 The 20 GiB quota is stored in SQLite (`database_policy.quota_bytes`) and covers
 only the database and WAL/SHM. Raw daily inputs and staging have an independent
-`--budget-gib` working-space limit, even inside the same directory. Admin's
-`storage quota` changes policy live; ingestion checks it before downloading,
+`--budget-gib` working-space limit, even inside the same directory. Producer
+`init --quota-bytes N` changes private policy live; serving admin `storage quota`
+changes serving policy. Ingestion checks it before downloading,
 during parsing and before committing pending page growth. Reads remain available
 if policy is lowered below usage, and new ingestion pauses. Extracted legs,
 manual edits, tombstones, receipts and boundary state are protected: no LRU or
@@ -169,48 +178,64 @@ supported without retaining annual raw archives or per-flight position files.
 
 ## Initialization and serving
 
-Initialize a fresh target explicitly with `python -m admin --db PATH db --create`.
-The admin ADSB pipeline defaults to the shell's selected database; `--output-db`
-remains an explicit override. Scratch directories hold temporary inputs/staging,
-not a second serving database. Noncontiguous jobs and overlapping days retain
-stable keys and boundary state. Legacy schemas require a new initialized file;
-there is no automatic destructive conversion or reseeding.
+Initialize ingestion using `python -m ingestion --db var/ingestion/ingestion.db init`.
+`FLIGHT_INGESTION_DATABASE_PATH` supplies its independent default. The producer
+CLI and Python API reject an existing serving database before fetching source
+records. `--data-root` is disposable working storage; `--db` selects the only
+pipeline output. A differing `--output-db` cannot redirect writes.
 
-For a clean reingest, stop the ingestion worker and serving processes before
-replacing the target with a freshly initialized database. Do not copy old flight
-facts, tombstones, batches, day receipts, configuration or boundary summaries:
-receipts would otherwise skip days and boundary state could join old evidence.
-Initialize the shared runtime and extraction schema, persist the chosen quota,
-verify integrity/foreign keys and zero data counts before restarting. The archive
-manifest, airport CSV and filter are
-inputs, not database state, and may be reused. Point every consumer at the same
-target. Clear aborted raw/staging files, then restart the requested range from
-its first day; each day's fresh commit becomes visible immediately.
+Initialize serving with `python -m admin --db var/hosted/flights.db db --create`
+or let an explicit publication initialize a new serving target. `FLIGHT_DATABASE_PATH`
+continues to select serving/admin. The public backend and hosted deployment
+checks reject ingestion-role files, including renamed files. No ingestion HTTP
+write endpoint is exposed. Real serving never seeds demo data.
 
-Hosted settings accept `data_mode: real`. This validates the shared schema and
-rejects demo flight records, allows an initialized empty dataset, and never seeds
-it. The default `synthetic` mode keeps the isolated demo's existing checks. Install
-backend, frontend and admin together, and point serving and ingestion at the same
-absolute database path. Readiness and admin `overview --json` expose the schema contract and
-version; admin overview also reports searchable counts by basis and batch states.
+Admin reads private stores using read-only SQLite connections: overview, flights,
+lookup, airports, exports, source status and bounded SELECT inspection. Record
+edits/imports, manual approvals, source job launches, schema/admission changes and
+quota updates are rejected. Clear/reset are explicit lifecycle exceptions and
+refuse held producer/extractor locks. They delete transactionally without
+unlinking a SQLite/WAL family; existing serving facts remain untouched.
 
-API routing accepts `time_basis: scheduled | actual | observed`. An omitted basis
-selects available scheduled evidence first, then observed, then actual. Calendars
-use the same preference. Lookup and JSON export retain every available kind of
-evidence, including partial facts that cannot yet participate in routing. The
-frontend offers the three modes, labels callsigns and inferred intervals, selects
-UTC explicitly when no timezone metadata exists, and shows source/licence notices.
+## Publication
 
-Raw parsing writes disposable daily staging outside the main database's write
-transaction. Admin quota changes can commit while this parser runs. Only the
-candidate/boundary merge, receipt and successful batch state acquire the main
-write lock. Readers see prior complete days until that commit. Failed attempts
-retain diagnostics and raw retry inputs, remove staging, and apply no partial
-legs. Lowering quota during parsing is rechecked before committing the day.
+`python -m ingestion --db INGESTION.db publish --serving-db SERVING.db --start YYYY-MM-DD --end YYYY-MM-DD`
+is the only producer command that writes serving. Inclusive UTC days publish
+independently using an ingestion read snapshot and a short serving transaction.
+Both files remain available to readers. Quota failure rolls back the day's facts.
+SQLite/SHM/WAL usage is checked, excluding source scratch space.
 
-`tests/test_shared_flight_database.py` exercises the complete daily handoff,
-API/calendar/routing/rebuild/replay/export/admin, edit/delete protection, failed-day
-receipts, partial records, interval connection
-limits and a separate admin writer changing quota during parsing. Scheduled
-routing, interactive admin, package and browser regression suites cover the
-existing workflows.
+Publish non-held facts, retaining their evidence labels, source keys, available
+aircraft types and all reported times. Partial/cancelled facts remain useful to
+lookup/admin; normal routing/calendar eligibility still applies. Partition by the
+selected departure basis, falling back to available arrival evidence for partial
+records. Copy airport/transfer metadata and relevant source attribution, preserving
+existing serving metadata and valid transfers. Reference-only source documents,
+private holds, profiles, receipts and boundary state never publish.
+
+Membership records allow a rerun to retract previously published facts that
+became held or disappeared, even if a correction moved their time outside the
+original day. Reconcile only requested dates. Stable provider keys deduplicate
+retries. Serving edits and deletion tombstones take precedence; publication does
+not resurrect deletions. Prior explicit human approvals remain protected.
+One serving file accepts one ingestion store identity, preventing competing
+publishers from deleting each other's records. Clearing/resetting ingestion
+increments generation without changing identity; clearing itself never changes
+serving. A later explicit publication can reconcile its affected days.
+
+The production ingestor already running in a frozen older runtime may finish
+without interruption. Its file is not a clean serving replacement under this
+architecture. Preserve it and its explicit human decisions; validate/import into
+a dedicated ingestion store before publishing a clean serving replacement.
+Never rename/copy the entire ingestion SQLite file over serving. No legacy
+conversion, production publication or serving cutover occurs automatically.
+
+API routing still supports `scheduled`, `actual` and `observed` modes. Calendars
+use the same eligibility predicate; lookup/export retain incomplete facts. The
+frontend preserves inferred airport/time labels and aircraft type. Existing
+serving admin creation/edit/delete/approval and airport management remain intact.
+
+`tests/test_ingestion_store.py` exercises role guards, private read-only admin,
+clear/reset safety, evidence deduplication, publication/retraction, edit/delete
+protection and quota rollback. `tests/test_shared_flight_database.py` exercises
+extraction through publication to API/calendar/routing/rebuild/replay/export.

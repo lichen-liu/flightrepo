@@ -1,9 +1,12 @@
 """Embedded SQLite repository shared by independent local Python processes."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+
+from core.models import FlightRecord
 
 TIME_FIELDS = (
     "departure_scheduled",
@@ -273,3 +276,11 @@ class SQLiteConnection:
                 yield connection
         finally:
             connection.close()
+
+
+def flight_record(row):
+    """Decode the common SQL flight view for producers and read-only consumers."""
+    data = dict(row)
+    data["codeshares"] = json.loads(data["codeshares"])
+    data["review_reasons"] = json.loads(data.get("review_reasons", "[]"))
+    return FlightRecord.model_validate(data)

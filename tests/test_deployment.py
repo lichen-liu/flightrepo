@@ -908,7 +908,11 @@ def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
     root = tmp_path / "runtime"
     root.mkdir()
     database = tmp_path / "real.db"
-    run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=database)
+    from ingestion.publish import publish_day
+
+    staging = tmp_path / "ingestion.db"
+    run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=staging)
+    publish_day(staging, database, date(2025, 1, 1))
     (root / "settings.json").write_text(
         json.dumps(
             {

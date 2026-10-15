@@ -4,21 +4,11 @@ import sqlite3
 
 from core.connections import Airport
 from core.models import FlightRecord
+from core.prompts import ask
 from core.routing.models import RouteSearchRequest
 from core.storage import SQLiteConnection
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
-
-
-def ask(label, default=None):
-    while True:
-        suffix = f" [{default}]" if default is not None else ""
-        value = input(f"{label}{suffix}: ").strip()
-        if value.lower() == "cancel":
-            raise EOFError
-        if value or default is not None:
-            return value or default
-        print("A value is required.")
 
 
 def yes_no(label, default="n"):

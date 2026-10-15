@@ -54,7 +54,7 @@ def read_settings(root: Path) -> dict:
 def validate_database(database: Path, *, data_mode="synthetic") -> int:
     from server.reader import FlightReader
 
-    stats = FlightReader(database).stats()
+    stats = FlightReader(database, serving_only=True).stats()
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
         schema = connection.execute(
             "SELECT contract,version FROM schema_metadata WHERE id=1"
@@ -203,7 +203,7 @@ def create_server(root: Path):
     app = FastAPI(title=original.title, description=original.description, version=original.version)
     app.user_middleware = list(original.user_middleware)
     app.exception_handlers = dict(original.exception_handlers)
-    reader = FlightReader(database)
+    reader = FlightReader(database, serving_only=True)
     app.dependency_overrides[get_store] = lambda: reader
     # include_router binds overrides to this app without changing original routes/caches.
     app.include_router(original.router)

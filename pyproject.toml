@@ -19,6 +19,7 @@ dev = ["pytest>=8,<9", "ruff>=0.17,<1", "build>=1.3,<2"]
 
 [project.scripts]
 flyji = "admin.client:main"
+flyji-ingest = "ingestion.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -86,9 +86,8 @@ def probe_ingestion(executable, directory, environment):
         "iata_code,latitude_deg,longitude_deg,scheduled_service,type\nAAA,40,-70,yes,large_airport\nBBB,41,-71,yes,large_airport\n"
     )
     rules.write_text("{}")
-    prefix = [str(executable), "-m", "admin", "--db", str(root / "admin.db")]
+    prefix = [str(executable), "-m", "ingestion", "--db", str(root / "ingestion.db")]
     arguments = [
-        "ingest",
         "adsblol",
         "run",
         "--manifest",
@@ -129,13 +128,42 @@ def probe_ingestion(executable, directory, environment):
     assert not archive.exists()
     repeat = finished(invoke(arguments))
     assert repeat["counts_historical"] and repeat["records_applied"] == 0
-    status = json.loads(invoke(["ingest", "adsblol", "status"]).stdout)
+    status = json.loads(invoke(["adsblol", "status"]).stdout)
     assert status["records"] == 2 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
-    admission = json.loads(invoke(["maintenance", "apply-admission"]).stdout)
-    assert admission["admission_policy"] == "labeled-airport-estimates-v1"
-    assert admission["manual_approvals_added"] == 0
-    assert admission["searchable_before"] == admission["searchable_after"] == 2
+    serving = root / "serving.db"
+    published = json.loads(
+        invoke(
+            [
+                "publish",
+                "--serving-db",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert published["inserted"] == 2
+    admin_prefix = [str(executable), "-m", "admin", "--db", str(root / "ingestion.db")]
+    inspected = subprocess.run(
+        admin_prefix + ["inspect", "query", "SELECT count(*) FROM flights"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(inspected.stdout)["rows"] == [[2]]
+    blocked = subprocess.run(
+        admin_prefix + ["maintenance", "init"],
+        cwd=directory,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert blocked.returncode != 0 and "read/query-only" in blocked.stderr
 
 
 def main():

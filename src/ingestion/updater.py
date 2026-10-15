@@ -2,14 +2,22 @@
 
 import json
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from core.connections import Airport, AirportTransfer
+from core.database_roles import require_serving
 from core.models import FlightRecord
 from core.storage import SCHEMA, SQLiteConnection, source_id, store_flight, utc_us
 
 
 class FlightUpdater(SQLiteConnection):
+    @contextmanager
+    def connect(self):
+        with super().connect() as connection:
+            require_serving(connection)
+            yield connection
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:

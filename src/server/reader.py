@@ -1,7 +1,7 @@
 """Flight queries over the shared local itinerary database."""
 
-import json
 from bisect import bisect_left
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from core.admission import ADMITTED_SQL, REVIEW_REQUIRED_SQL
 from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
+from core.database_roles import require_serving
 from core.models import FlightRecord, RouteSummary
 from core.planning import rebuild_from_snapshot, validate_prefix
 from core.routing.models import RouteSearchRequest, RoutingError, airport_code
@@ -16,7 +17,7 @@ from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot, flight_key
-from core.storage import EPOCH, SQLiteConnection, utc_text, utc_us
+from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
 from server.web_models import (
     AirportCoverage,
@@ -31,8 +32,16 @@ from server.web_models import (
 
 
 class FlightReader(SQLiteConnection):
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, serving_only=False):
         super().__init__(path, read_only=True)
+        self.serving_only = serving_only
+
+    @contextmanager
+    def connect(self):
+        with super().connect() as connection:
+            if self.serving_only:
+                require_serving(connection)
+            yield connection
 
     def stats(self) -> dict:
         with self.connect() as connection:
@@ -57,12 +66,7 @@ class FlightReader(SQLiteConnection):
             "time_bases": bases,
         }
 
-    @staticmethod
-    def _record(row):
-        data = dict(row)
-        data["codeshares"] = json.loads(data["codeshares"])
-        data["review_reasons"] = json.loads(data.get("review_reasons", "[]"))
-        return FlightRecord.model_validate(data)
+    _record = staticmethod(flight_record)
 
     def _window(
         self,

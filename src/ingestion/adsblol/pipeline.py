@@ -7,6 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from core.admission import REVIEW_REQUIRED_SQL
+from core.database_roles import ingestion_target
+from core.file_lock import file_mutex
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
@@ -67,21 +69,24 @@ def extract_range(
         if policy_path
         else ExtractionPolicy()
     )
-    for day in days:
-        yield extract_day(
-            root,
-            day,
-            grouped[day],
-            airports,
-            rules,
-            limit=limit,
-            policy_db=policy_db,
-            download=download,
-            client=client,
-            departure_year=departure_year,
-            output_db=output_db,
-            refresh_diagnostics=refresh_diagnostics,
-        )
+    database = Path(output_db).resolve() if output_db else Path(root).resolve() / "itineraries.db"
+    ingestion_target(database)
+    with file_mutex(Path(str(database) + ".job.lock")):
+        for day in days:
+            yield extract_day(
+                root,
+                day,
+                grouped[day],
+                airports,
+                rules,
+                limit=limit,
+                policy_db=policy_db,
+                download=download,
+                client=client,
+                departure_year=departure_year,
+                output_db=output_db,
+                refresh_diagnostics=refresh_diagnostics,
+            )
 
 
 def extraction_status(root, output_db=None):

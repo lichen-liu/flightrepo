@@ -28,6 +28,7 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
+from core.database_roles import ingestion_path
 from core.disk_quota import policy, set_quota, storage_status
 from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
@@ -35,6 +36,7 @@ from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
 from ingestion.adsblol.diagnostics import configure_logging
+from ingestion.store import IngestionStore
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
 
@@ -98,6 +100,8 @@ def clear_database(path):
     path = path.resolve()
     if not path.is_relative_to(LOCAL_DATA_DIR.resolve()):
         raise ValueError("clear-data only supports data files under the project's var directory")
+    if ingestion_path(path):
+        return IngestionStore(path).clear()
     FlightUpdater(path).reset()
     return FlightReader(path).stats()
 
@@ -189,7 +193,7 @@ def print_overview(summary):
     for route in summary["top_routes"]:
         print(f"  {route['origin_iata']} -> {route['destination_iata']}: {route['flights']:,}")
     if not summary["flights"]:
-        print("  No flights yet. Use create-route or import-json to add flights.")
+        print("  No flights yet.")
 
 
 def disk_quota(value):
@@ -338,6 +342,10 @@ def parser():
         "apply-admission",
         help="admit labeled airport estimates; retain timing/gap review and manual decisions",
     )
+    reset = operations.add_parser(
+        "reset", help="reset ingestion data/configuration; keep file/schema"
+    )
+    reset.add_argument("--yes", action="store_true", help="confirm ingestion reset")
     clear = operations.add_parser(
         "clear-data", help="delete all flights, airports and transfers; keep schema"
     )
@@ -400,6 +408,51 @@ def run(arguments, *, database_path=None, interactive=False):
         output(replay(read_json(args.path)))
         return
     path = (args.db or database_path or get_settings().database_path).expanduser().resolve()
+    destinations = [getattr(args, "snapshot_out", None)]
+    if args.command == "export-json" or (
+        args.command == "airports" and args.airport_action == "export"
+    ):
+        destinations.append(args.path)
+    for destination in filter(None, destinations):
+        destination = Path(destination).expanduser().resolve()
+        family = [path, Path(str(path) + "-wal"), Path(str(path) + "-shm")]
+        if any(
+            destination == member
+            or (destination.exists() and member.exists() and destination.samefile(member))
+            for member in family
+        ) or (destination.is_file() and destination.open("rb").read(16) == b"SQLite format 3\x00"):
+            raise ValueError("Export output cannot overwrite a database or its SQLite sidecars")
+    if ingestion_path(path):
+        reading = args.command in {
+            None,
+            "overview",
+            "inspect",
+            "flights",
+            "search",
+            "routes",
+            "export-json",
+            "debug",
+            "ingest",
+        }
+        reading |= args.command == "flight" and args.flight_action == "show"
+        reading |= args.command == "airports" and args.airport_action != "import"
+        reading |= args.command == "storage" and not hasattr(args, "size")
+        reading |= args.command == "db" and not args.create
+        lifecycle = args.command == "maintenance" and args.maintenance_action in {
+            "clear-data",
+            "reset",
+        }
+        if not (reading or lifecycle):
+            raise ValueError(
+                "Ingestion admin is read/query-only except explicit clear-data/reset; use producer tools"
+            )
+        if lifecycle:
+            if not args.yes:
+                raise ValueError("Supply --yes to clear/reset the ingestion database")
+            output(IngestionStore(path).clear(reset=args.maintenance_action == "reset"))
+            return
+    if args.command == "db" and args.create and args.target and ingestion_path(args.target):
+        raise ValueError("Admin cannot initialize or modify an ingestion store")
     if args.command is None:
         LocalShell(path).cmdloop()
     elif args.command == "db":
@@ -411,6 +464,8 @@ def run(arguments, *, database_path=None, interactive=False):
         print(f"Database: {target}")
         return target
     elif args.command == "maintenance":
+        if args.maintenance_action == "reset":
+            raise ValueError("reset is for ingestion stores; serving uses clear-data")
         if args.maintenance_action == "init":
             FlightUpdater(path).initialize()
             output({"initialized": path})
@@ -544,6 +599,8 @@ class LocalShell(cmd.Cmd):
         super().__init__()
         self.database_path = (database_path or get_settings().database_path).expanduser().resolve()
         self.intro += f"\nDatabase: {self.database_path}"
+        if ingestion_path(self.database_path):
+            self.intro += "\nIngestion store: read/query only; clear-data/reset require --yes. Producer jobs use flyji-ingest."
 
     def default(self, line):
         try:

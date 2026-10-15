@@ -19,7 +19,7 @@ Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe o
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
-To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). Hosted settings explicitly select synthetic or real serving; real mode uses the shared flight-leg database under `var/hosted/` and never seeds demo data.
+To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). Hosted settings explicitly select synthetic or real serving; real mode uses the published flight-leg database under `var/hosted/` and never seeds demo data.
 
 ## What works
 
@@ -30,7 +30,7 @@ To host the installed preview at **fly.boboji.fyi**, follow [installation](insta
 | Edit | Keep a selected prefix, type the next airport, choose a later flight, rebuild subsequent legs, show dead ends and undo |
 | Airport changes | Opt-in, same-city changes with an explicit directed allowance in SQLite |
 | Inspect | Coverage/refresh evidence, bounded search diagnostics, exact exports and offline routing replay |
-| Manage data | Internal shell, validated JSON/CSV imports, exports, ingestion and guarded reset |
+| Manage data | Serving admin, separate producer CLI/API, explicit publication and guarded reset |
 
 Search defaults to **Any number** of stops. UTC/local search and connection-edit
 requests use `max_legs: null` (or omit it) for no stop-count limit; positive integers
@@ -41,20 +41,25 @@ in the search diagnostics.
 ## Architecture
 
 ```text
-provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web app
-                              ↑                   ↑
-                              └── internal admin ─┘
+provider / CSV / tool API → ingestion.db → explicit publish → flights.db → API + web
+                               ↑                               ↑
+                       admin reads/clear/reset           serving admin edits
 ```
 
-`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+`src/core` defines the common flight/airport contract. `src/ingestion` owns
+producer jobs, private candidates/evidence and publication. `src/server` only
+reads serving facts. `src/admin` manages serving records and inspects ingestion
+through read-only connections, with explicit clear/reset as lifecycle exceptions.
+Boundary tests enforce package and database roles.
 
-The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Accepted observed legs, scheduled flights and reported actual events share the [typed serving schema](docs/database-schema.md). Each completed ingestion day feeds counts, calendars, routing and admin immediately.
-
-The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) supports
-explicit source commands: `ingest sources`, `ingest adsblol prepare`, then
-`ingest adsblol run --start 2023-07-01 --end 2023-07-03`. Later jobs can overlap or backfill
-other periods; completed days are skipped and stable keys prevent duplicates.
-Configure `--output-db var/hosted/<name>.db` to select an exact hosted destination.
+The [ingestion pipeline reference](docs/ingestion.md) covers sources/licences,
+one-day extraction and measurements. Both databases use the same typed flight
+model, including aircraft type, while [publication](docs/database-schema.md#publication)
+keeps held candidates, reference documents and pipeline state out of serving.
+The [producer workflow](docs/ingestion.md#interactive-jobs-and-resume) supports
+noncontiguous, overlapping jobs. Completed days skip downloads and stable source
+keys prevent duplicates. Use `python -m ingestion --db var/ingestion/ingestion.db`;
+`--db` always selects the private ingestion destination.
 
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
@@ -80,7 +85,7 @@ python -m admin import-json var/flights.json
 python -m admin airports import var/airports.json
 python -m admin export-json var/flights-export.json
 python -m admin airports export var/airport-catalog.json
-python -m admin ingest csv run --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
+python -m ingestion --db var/ingestion/ingestion.db csv run --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
 python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
 
@@ -88,13 +93,13 @@ Use `help` in the shell or `COMMAND --help` for options. JSON flight imports are
 
 To enter an entire route by hand, start `FLIGHT_DATABASE_PATH=/absolute/path/to/flights.db python -m admin` and type `create-route`. Enter the origin, then each leg's destination, flight number, departure and arrival timestamps (with `Z` or a timezone offset). Choose whether to add another leg; its origin is the previous destination. The command previews the complete route in UTC and asks before saving all legs together. Type `cancel` at any prompt or press Ctrl+C to discard it. Each saved flight receives a unique ID under provider `manual`. Routes are derived from the saved flights, rather than stored as named journeys; search connection limits still apply. You can also launch the wizard directly with `python -m admin create-route`.
 
-AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, caching and redistribution rights must be checked for your account. Automatic refresh is not implemented; run `ingest` separately to update the same database while readers remain connected.
+AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, caching and redistribution rights must be checked for your account. Automatic refresh is not implemented; run producer jobs separately, then explicitly publish a date range while serving readers remain connected.
 
 ```sh
 python -m admin maintenance clear-data --yes
 ```
 
-`maintenance clear-data` clears flights, airport metadata, transfer rules and any observed itinerary facts/resume state transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
+`maintenance clear-data` clears flights, airport metadata, transfer rules and any observed itinerary facts/resume state transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. For an ingestion database, admin only allows reads and explicit clear/reset; clearing refuses an active job. See the producer workflow for publication.
 
 ## Development checks
 

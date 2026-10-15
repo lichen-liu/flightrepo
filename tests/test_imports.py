@@ -11,7 +11,7 @@ from admin import client
 from core.config import Settings
 from ingestion.providers.csv_feed import CsvProvider
 from ingestion.service import IngestionService
-from ingestion.updater import FlightUpdater
+from ingestion.store import IngestionStore
 from server.reader import FlightReader
 
 
@@ -81,7 +81,7 @@ def test_bad_csv_batch_does_not_write_partial_flights(tmp_path, changes):
     b = row(provider_id="bad", **changes)
     # Both rows need the optional column if this case introduces one.
     write_csv(path, [a, b])
-    updater = FlightUpdater(tmp_path / "flights.db")
+    updater = IngestionStore(tmp_path / "flights.db")
     updater.initialize()
     with pytest.raises(ValueError):
         asyncio.run(
@@ -116,7 +116,7 @@ def test_service_validates_before_provider_or_database_access(tmp_path, airports
         async def flights_for_airport(self, *args):
             raise AssertionError("invalid input reached provider")
 
-    updater = FlightUpdater(tmp_path / "missing.db")
+    updater = IngestionStore(tmp_path / "missing.db")
     with pytest.raises(ValueError):
         asyncio.run(IngestionService(updater, NeverCalled(), 31).ingest(airports, start, end))
     assert not updater.path.exists()

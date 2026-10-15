@@ -7,8 +7,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from admin import client, ingestion
 from core.config import Settings
+from ingestion import cli as client
+from ingestion import jobs as ingestion
 from ingestion.adsblol.prepare import AIRPORT_URL, prepare_inputs
 
 AIRPORTS = (
@@ -115,10 +116,9 @@ def test_admin_prepare_saves_source_profile_without_ingesting_flights(
             return prepare_inputs(*args, client=http, **kwargs)
 
     monkeypatch.setattr(ingestion, "prepare_inputs", prepared)
-    monkeypatch.setattr(client, "get_settings", lambda: Settings(database_path=database))
+    monkeypatch.setattr(client, "get_settings", lambda: Settings(ingestion_database_path=database))
     client.run(
         [
-            "ingest",
             "adsblol",
             "prepare",
             "--start",
@@ -130,7 +130,7 @@ def test_admin_prepare_saves_source_profile_without_ingesting_flights(
         ]
     )
     result = json.loads(capsys.readouterr().out)
-    assert result["prepared"] == "adsblol" and result["next"].startswith("ingest adsblol run")
+    assert result["prepared"] == "adsblol" and result["next"].startswith("adsblol run")
     assert ingestion.profiles(database)["adsblol"]["manifest"] == str(root / "manifest.json")
     from server.reader import FlightReader
 
@@ -147,11 +147,10 @@ def test_unavailable_period_does_not_create_artifacts_or_database(tmp_path, monk
             return prepare_inputs(*args, client=http, **kwargs)
 
     monkeypatch.setattr(ingestion, "prepare_inputs", prepared)
-    monkeypatch.setattr(client, "get_settings", lambda: Settings(database_path=database))
+    monkeypatch.setattr(client, "get_settings", lambda: Settings(ingestion_database_path=database))
     with pytest.raises(ValueError, match="unavailable"):
         client.run(
             [
-                "ingest",
                 "adsblol",
                 "prepare",
                 "--start",

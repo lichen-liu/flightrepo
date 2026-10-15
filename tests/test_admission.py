@@ -1,6 +1,7 @@
 """Admission must agree in SQL, routing, admin and retained manual decisions."""
 
 import json
+import sqlite3
 from datetime import date
 
 import pytest
@@ -76,6 +77,8 @@ def test_apply_existing_admission_is_idempotent_and_preserves_source_and_admin_s
 ):
     database = tmp_path / "hosted.db"
     run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=database)
+    with sqlite3.connect(database) as c:
+        c.execute("DROP TABLE ingestion_store_metadata")
     capsys.readouterr()
     updater = FlightUpdater(database)
     estimated = observed("estimate", "AAA", "BBB", 10, 70).model_copy(

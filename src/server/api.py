@@ -82,7 +82,7 @@ async def storage_error(request: Request, error: sqlite3.Error):
 @lru_cache
 def get_store() -> FlightReader:
     settings = get_settings()
-    return FlightReader(settings.database_path)
+    return FlightReader(settings.database_path, serving_only=True)
 
 
 @app.get("/health")

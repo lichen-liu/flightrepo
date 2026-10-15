@@ -16,12 +16,6 @@ CREATE TABLE IF NOT EXISTS database_policy (
 ) STRICT;
 INSERT OR IGNORE INTO database_policy VALUES (1, 21474836480);
 
-CREATE TABLE IF NOT EXISTS ingestion_profiles (
-    source TEXT PRIMARY KEY,
-    data TEXT NOT NULL CHECK(json_valid(data)),
-    last_used INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE CHECK(length(trim(code)) > 0),
