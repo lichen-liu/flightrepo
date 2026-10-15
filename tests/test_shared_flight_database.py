@@ -34,6 +34,26 @@ def query(**changes):
     )
 
 
+@pytest.mark.parametrize("gap", [300, 1801])
+def test_relaxed_adsb_gap_and_callsign_policy_reaches_search_and_calendar(tmp_path, gap):
+    database = tmp_path / "hosted.db"
+    data = leg_trace()
+    data["trace"][3][8] = {"flight": "ZZZ456"}
+    for row in data["trace"][3:]:
+        row[0] += gap - 100
+    receipt, _ = run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
+    reader = FlightReader(database)
+    (record,) = reader.all_records()
+    blocked = gap > 1800
+    assert record.callsign == "ZZZ456" and record.aircraft_type_code == "A320"
+    assert record.needs_review == blocked
+    assert reader.available_dates("AAA", "UTC").dates == ([] if blocked else [date(2025, 1, 1)])
+    assert len(reader.search_itineraries(query()).items) == (0 if blocked else 1)
+    metadata = receipt["diagnostics"]["counts"]["metadata"]
+    assert metadata["accepted_with_callsign_variations"] == 1
+    assert metadata.get("accepted_under_relaxed_review", 0) == (0 if blocked else 1)
+
+
 @pytest.mark.parametrize("airborne_only", [False, True])
 def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(
     tmp_path, capsys, airborne_only

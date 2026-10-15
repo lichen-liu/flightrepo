@@ -116,9 +116,13 @@ def make_candidate(
     if ground.inferred or arrival.inferred:
         review_reasons.append("airborne_airport_estimate")
     if state.max_observation_gap_us > 120_000_000:
+        count(diagnostics, "metadata", "accepted_with_observation_gaps")
+    if state.max_observation_gap_us > rules.review_gap_seconds * 1_000_000:
         review_reasons.append("observation_gap")
-    if len(state.callsigns) > 1:
-        review_reasons.append("callsign_variation")
+    if not review_reasons and (
+        state.max_observation_gap_us > 120_000_000 or len(state.callsigns) > 1
+    ):
+        count(diagnostics, "metadata", "accepted_under_relaxed_review")
     for review_reason in review_reasons:
         count(diagnostics, "review_reasons", review_reason)
     return FlightLegCandidate(

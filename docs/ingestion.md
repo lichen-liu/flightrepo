@@ -69,8 +69,10 @@ manifest → download/verify one day → stream aircraft members → filter/reco
   (outside 3 km, where airport-center/runway offsets matter).
   A later climb/exit from the airport area cancels an arrival hint. Such records
   have separate evidence labels and require admin review before search.
-  Ground candidates with sample gaps over 120 seconds or changing callsigns also
-  require review: hidden intermediate stops can otherwise resemble one flight.
+  Ground candidates with sample gaps over 30 minutes still require review:
+  hidden intermediate stops can otherwise resemble one flight. Shorter reception
+  gaps and changing callsigns no longer require review on their own. Keep the
+  dominant callsign and log variations; source leg markers still split movements.
   These checks retain candidates rather than rejecting them; the six-hour parsing
   limit is independent of the serving review gate.
 - Allow internal observation gaps up to six hours; terminal brackets up to 30
@@ -110,6 +112,7 @@ fields alone.
 | Airborne endpoint fallback | Within 3,500 ft of airport elevation; origin needs a 100-ft observed climb or 300 ft/min upward rate; destination descending/nonascending; available heading within 45 degrees beyond 3 km; estimated window 30 minutes |
 | Ground endpoints | Preferred, but no longer required at both ends |
 | Continuity | Maximum six-hour gap between usable samples, including overnight joins |
+| Search review | Airport estimates or sample gaps over 30 minutes; callsign changes alone do not block search |
 | Terminal bounds/duration | Maximum 30-minute endpoint bracket; minimum 60-second airborne span |
 | Bad samples | Skip without advancing evidence; report the reason |
 | Reception-gap flag | Keep the newly received position; log flag `1` rather than discarding it |
@@ -122,8 +125,11 @@ Optional `--policy FILE` contains fields from
 or callsign lists. `{"allow_airborne_endpoints":false}` requires ground evidence
 at both ends without adding any aircraft/operator whitelist. Defaults need no
 configuration file. Policy and algorithm
-`observed-itinerary-v3` are recorded in batch/configuration provenance; changed
+`observed-itinerary-v4` are recorded in batch/configuration provenance; changed
 rules require a fresh output database so old receipts cannot silently skip work.
+`review_gap_seconds` adjusts the 1,800-second review threshold independently of
+the six-hour parsing limit. The source identity namespace remains stable across
+algorithm versions, so changing quality rules does not invent new flight IDs.
 Malformed/unordered archive records, checksum failures and quota violations fail
 an entire day without applying partial flight facts. Endpoint estimates still
 need empirical validation; higher retained counts do not prove flight coverage.
@@ -197,6 +203,26 @@ without advancing coverage. `--refresh-diagnostics` explicitly reprocesses selec
 days; retained inputs or redownloads are required. These counters describe aircraft,
 sample rows and movement fragments, **not missing-flight percentages**. Compare
 accepted legs against a trusted flight list before claiming completeness.
+
+### January 2024 pilot
+
+Run the relaxed rules in a separate database before replacing the July–December
+2023 extraction. Prepare December 31 through February 1 for overnight context;
+report January departures separately from these boundary days. Use only ADSB.lol
+observations and the airport reference already used by extraction. There are no
+tail lookup APIs, commercial operator lists or external flight-validation joins.
+
+Report daily candidate/searchable/review counts, available aircraft types,
+exclusions and rejection reasons, database bytes, and successful raw-input cleanup.
+`metadata.accepted_under_relaxed_review` counts evaluated candidates that no longer
+need review because of the relaxed gap/callsign rules. These candidate events can
+include later boundary refinements; use database counts for unique itineraries.
+Treat a pilot as operationally successful only after all days commit, database
+integrity/foreign-key and duplicate checks pass, itinerary time bounds are valid,
+and search/calendar can read eligible records. Inspect representative airport
+pairs and unusually long legs using retained itinerary fields. This is a
+best-effort reconstruction, not a completeness or accuracy guarantee. Uncertain
+airport estimates remain available to admin and excluded from search.
 
 ## Measured storage
 

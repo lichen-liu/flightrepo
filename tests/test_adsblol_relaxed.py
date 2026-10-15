@@ -73,6 +73,46 @@ def test_long_airborne_gap_does_not_discard_observed_terminal_evidence():
     assert leg.arrival_lower - leg.departure_upper > timedelta(hours=2)
 
 
+@pytest.mark.parametrize(
+    "gap,needs_review", [(120, False), (121, False), (1800, False), (1801, True)]
+)
+def test_reception_gaps_use_the_relaxed_review_threshold(gap, needs_review):
+    data = leg_trace()
+    for row in data["trace"][3:]:
+        row[0] += gap - 100
+    (legs, _, _), counts = diagnose(data)
+    (leg,) = legs
+    assert leg.review_reasons == (["observation_gap"] if needs_review else [])
+    assert counts["metadata"].get("accepted_with_observation_gaps", 0) == (gap > 120)
+
+
+def test_gap_review_threshold_is_configurable_independently_of_parsing_limit():
+    data = leg_trace()
+    data["trace"][3][0] += 50
+    (leg,) = candidates(data, AIRPORTS, rules(review_gap_seconds=120))
+    assert leg.review_reasons == ["observation_gap"]
+
+
+def test_changing_callsigns_are_logged_without_blocking_an_observed_leg():
+    data = leg_trace()
+    data["trace"][3][8] = {"flight": "ZZZ456"}
+    (legs, _, _), counts = diagnose(data)
+    (leg,) = legs
+    assert leg.callsign == "ZZZ456"
+    assert leg.review_reasons == []
+    assert counts["metadata"]["accepted_with_callsign_variations"] == 1
+
+
+def test_relaxed_gap_and_callsign_rules_do_not_clear_airport_estimate_review():
+    data = leg_trace()
+    data["trace"][3][8] = {"flight": "ZZZ456"}
+    for row in data["trace"][3:]:
+        row[0] += 600
+    data["trace"] = data["trace"][1:-1]
+    (leg,) = candidates(data, AIRPORTS, rules())
+    assert leg.review_reasons == ["airborne_airport_estimate"]
+
+
 def test_no_ground_rows_can_produce_separately_labelled_endpoint_estimates():
     data = leg_trace()
     data["trace"] = data["trace"][1:-1]

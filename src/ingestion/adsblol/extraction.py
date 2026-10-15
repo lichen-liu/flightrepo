@@ -31,7 +31,7 @@ from ingestion.adsblol.movements import (
     reduce_movement,
 )
 
-PIPELINE_VERSION = "observed-itinerary-v3"
+PIPELINE_VERSION = "observed-itinerary-v4"
 
 SOURCE_ROWS = [
     (
@@ -143,6 +143,7 @@ def receipt_scope(receipt, saved_config):
 def save_leg(connection, leg, counters, *, diagnostics=None):
     # Departure evidence may improve when a previous day is backfilled. Anchor
     # the movement to its arrival observation so that refinement keeps one key.
+    # Keep the source identity namespace stable across filtering revisions.
     identity = f"observed-itinerary-v3:{leg.icao_hex}:{leg.arrival_lower.isoformat()}"
     key = hashlib.blake2b(identity.encode(), digest_size=16).hexdigest()
     return save_candidate(
