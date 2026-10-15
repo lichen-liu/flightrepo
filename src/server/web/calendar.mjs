@@ -28,6 +28,26 @@ export class DataCalendar {
     this.panel.setAttribute("role", "dialog");
     this.panel.setAttribute("aria-label", optional ? "Last departure calendar" : "Departure calendar");
     this.panel.hidden = true;
+    // Keep navigation controls mounted: replacing the clicked button makes the
+    // document's outside-click handler treat month navigation as an outside click.
+    this.panel.innerHTML = `<div class="calendar-heading"><button type="button" data-calendar-previous aria-label="Previous month with data">‹</button><select aria-label="Month with departure data"></select><button type="button" data-calendar-next aria-label="Next month with data">›</button></div>
+      <div class="calendar-grid"></div><p class="calendar-summary small" aria-live="polite"></p>
+      <div class="calendar-footer">${optional ? '<button type="button" data-date="">Use first date only</button>' : ""}<button type="button" data-close>Close</button></div>`;
+    this.monthControl = this.panel.querySelector("select");
+    this.monthControl.addEventListener("change", (event) => {
+      event.stopPropagation();
+      this.month = this.monthControl.value;
+      this.render();
+    });
+    this.monthControl.addEventListener("keydown", (event) => {
+      const index = this.months.indexOf(this.month),
+        target = { ArrowDown: index + 1, ArrowUp: index - 1,
+          Home: 0, End: this.months.length - 1 }[event.key];
+      if (target === undefined) return;
+      event.preventDefault();
+      this.month = this.months[Math.max(0, Math.min(target, this.months.length - 1))];
+      this.render();
+    });
     input.setAttribute("aria-controls", this.panel.id);
     input.parentElement.classList.add("calendar-field");
     input.after(this.panel);
@@ -56,6 +76,8 @@ export class DataCalendar {
       }
     });
     this.panel.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target === this.monthControl)
+        event.preventDefault();
       if (event.key === "Escape") {
         event.preventDefault();
         this.close();
@@ -94,11 +116,25 @@ export class DataCalendar {
   render() {
     const index = this.months.indexOf(this.month),
       previous = this.months[index - 1], next = this.months[index + 1],
-      title = new Intl.DateTimeFormat("en", { month: "long", year: "numeric", timeZone: "UTC" })
-        .format(new Date(`${this.month}-01T00:00:00Z`)),
+      formatter = new Intl.DateTimeFormat("en", { month: "long", year: "numeric", timeZone: "UTC" }),
       offset = new Date(`${this.month}-01T00:00:00Z`).getUTCDay();
-    this.panel.innerHTML = `<div class="calendar-heading"><button type="button" aria-label="Previous month with data" ${previous ? `data-month="${previous}"` : "disabled"}>‹</button><strong aria-live="polite">${e(title)}</strong><button type="button" aria-label="Next month with data" ${next ? `data-month="${next}"` : "disabled"}>›</button></div>
-      <div class="calendar-grid">${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => `<span>${day}</span>`).join("")}${"<span></span>".repeat(offset)}${calendarDays(this.month, this.available).map(({ date, day, enabled }) => `<button type="button" data-date="${date}" aria-label="${date}${enabled ? "" : ": no departure data"}" aria-pressed="${date === this.input.value}" ${enabled ? "" : "disabled"}>${day}</button>`).join("")}</div>
-      <div class="calendar-footer">${this.optional ? '<button type="button" data-date="">Use first date only</button>' : ""}<button type="button" data-close>Close</button></div>`;
+    for (const [selector, month] of [["[data-calendar-previous]", previous], ["[data-calendar-next]", next]]) {
+      const button = this.panel.querySelector(selector);
+      button.disabled = !month;
+      button.dataset.month = month || "";
+    }
+    if (this.monthControl.options.length !== this.months.length ||
+        [...this.monthControl.options].some((option, i) => option.value !== this.months[i]))
+      this.monthControl.innerHTML = this.months.map((month) =>
+        `<option value="${month}">${e(formatter.format(new Date(`${month}-01T00:00:00Z`)))}</option>`,
+      ).join("");
+    this.monthControl.value = this.month;
+    const days = calendarDays(this.month, this.available),
+      count = days.filter((day) => day.enabled).length;
+    const grid = this.panel.querySelector(".calendar-grid");
+    if (grid.contains(document.activeElement)) this.monthControl.focus();
+    grid.innerHTML = `${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => `<span>${day}</span>`).join("")}${"<span></span>".repeat(offset)}${days.map(({ date, day, enabled }) => `<button type="button" data-date="${date}" aria-label="${date}${enabled ? "" : ": no departure data"}" aria-pressed="${date === this.input.value}" ${enabled ? "" : "disabled"}>${day}</button>`).join("")}`;
+    this.panel.querySelector(".calendar-summary").textContent =
+      `${count} selectable departure date${count === 1 ? "" : "s"} this month. Months without selectable dates are omitted.${this.optional ? " Last date must be within 30 days of the first." : ""}`;
   }
 }

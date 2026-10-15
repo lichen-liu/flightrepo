@@ -1141,6 +1141,14 @@ footer {
   margin: 10px 0;
   text-align: center;
 }
+.calendar-heading select {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+.calendar-summary {
+  margin: 0 0 10px;
+}
 .calendar-grid span {
   font-size: 12px;
   padding: 4px 0;
