@@ -77,6 +77,42 @@ def test_reader_cannot_write_or_create_database(tmp_path):
             connection.execute("DELETE FROM flights")
 
 
+def test_old_flight_database_migration_preserves_records_and_reader_compatibility(tmp_path):
+    import json
+
+    from core.storage import SCHEMA
+
+    updater = FlightUpdater(tmp_path / "old.db")
+    with updater.connect() as connection:
+        connection.executescript(SCHEMA.replace("    aircraft_type_code TEXT,\n", ""))
+    record = flight("1", "AC1", "YYZ", "YUL", "2026-10-10T10:00:00Z", "2026-10-10T11:00:00Z")
+    data = record.model_dump(mode="json")
+    data["codeshares"] = json.dumps(data["codeshares"])
+    with updater.connect() as connection:
+        connection.execute(
+            f"INSERT INTO flights ({', '.join(data)}) VALUES ({', '.join('?' for _ in data)})",
+            list(data.values()),
+        )
+    # Old read-only data files remain readable before an explicit writer migration.
+    assert FlightReader(updater.path).all_records() == [record]
+    updater.initialize()
+    updater.initialize()
+    assert FlightReader(updater.path).all_records() == [record]
+
+
+def test_mixed_type_codes_round_trip_and_unknown_keeps_legacy_shape(tmp_path):
+    updater = FlightUpdater(tmp_path / "mixed.db")
+    updater.initialize()
+    unknown = flight("1", "AC1", "YYZ", "YUL", "2026-10-10T10:00:00Z", "2026-10-10T11:00:00Z")
+    typed = unknown.model_copy(update={"provider_id": "2", "aircraft_type_code": "B738"})
+    updater.upsert([unknown, typed])
+    assert sorted(FlightReader(updater.path).all_records(), key=lambda f: f.provider_id) == [
+        unknown,
+        typed,
+    ]
+    assert "aircraft_type_code" not in unknown.model_dump()
+
+
 def test_serving_api_only_exposes_reads(tmp_path):
     from fastapi.testclient import TestClient
 

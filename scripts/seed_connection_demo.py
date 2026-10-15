@@ -1,6 +1,7 @@
 """Seed a separate, ignored demo DB without modifying the normal local DB."""
 
 import json
+import sqlite3
 
 from core.config import LOCAL_DATA_DIR, PROJECT_ROOT
 from core.connections import Airport, AirportTransfer, RebuildRequest
@@ -12,6 +13,14 @@ from server.reader import FlightReader
 def main():
     data = json.loads((PROJECT_ROOT / "fixtures/connections-demo.json").read_text())
     path = LOCAL_DATA_DIR / "connections-demo.db"
+    if path.exists():
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as connection:
+            legacy = connection.execute(
+                "SELECT type FROM sqlite_master WHERE name='flights'"
+            ).fetchone()
+        if legacy and legacy[0] == "table":
+            # Preserve an older demo file; the explicit demo command seeds a fresh one.
+            path = LOCAL_DATA_DIR / "connections-demo-legs.db"
     updater = FlightUpdater(path)
     updater.initialize()
     updater.update_airports(
@@ -53,6 +62,7 @@ def main():
             indent=2,
         )
     )
+    return path
 
 
 if __name__ == "__main__":

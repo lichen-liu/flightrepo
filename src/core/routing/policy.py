@@ -36,7 +36,7 @@ class ConnectionPolicy:
                     self.airports.get(rule.arrival_iata),
                     self.airports.get(rule.departure_iata),
                 )
-                if a and b and a.city_id == b.city_id:
+                if a and b and a.city_id is not None and a.city_id == b.city_id:
                     self.rules[rule.arrival_iata, rule.departure_iata] = rule
         origins, arrivals = defaultdict(set), defaultdict(set)
         for arrival, departure in self.rules:
@@ -74,17 +74,17 @@ class ConnectionPolicy:
         rule = self.minimum(previous.destination_iata, origin, window)
         if not rule:
             return None
-        if horizon - previous.arrival_scheduled < timedelta(minutes=rule[0]):
+        if horizon - previous.arrival_upper < timedelta(minutes=rule[0]):
             return None
-        lower = previous.arrival_scheduled + timedelta(minutes=rule[0])
+        lower = previous.arrival_upper + timedelta(minutes=rule[0])
         if window.not_before is not None:
             lower = max(lower, window.not_before)
         upper = horizon
         if (
             window.maximum_minutes is not None
-            and timedelta(minutes=window.maximum_minutes) < horizon - previous.arrival_scheduled
+            and timedelta(minutes=window.maximum_minutes) < horizon - previous.arrival_upper
         ):
-            upper = previous.arrival_scheduled + timedelta(minutes=window.maximum_minutes)
+            upper = previous.arrival_lower + timedelta(minutes=window.maximum_minutes)
         return lower, upper
 
     def assess(
@@ -95,9 +95,11 @@ class ConnectionPolicy:
         seen: AbstractSet[str],
         horizon: datetime,
     ) -> Assessment:
+        if flight.needs_review:
+            return Assessment("airports_need_review")
         if flight.status == FlightStatus.CANCELLED:
             return Assessment("cancelled")
-        if flight.arrival_scheduled > horizon:
+        if flight.arrival_upper > horizon:
             return Assessment("arrival_after_horizon")
         if flight.origin_iata in self.avoid or flight.destination_iata in self.avoid:
             return Assessment("avoided_airport")
@@ -113,12 +115,15 @@ class ConnectionPolicy:
         if rule is None:
             return Assessment("airport_change_not_permitted")
         minimum, source = rule
-        wait = (flight.departure_scheduled - previous.arrival_scheduled).total_seconds() / 60
+        wait = (flight.departure_lower - previous.arrival_upper).total_seconds() / 60
         if wait < minimum:
             return Assessment("connection_too_short", wait_minutes=wait, minimum_minutes=minimum)
-        if window.maximum_minutes is not None and wait > window.maximum_minutes:
-            return Assessment("connection_too_long", wait_minutes=wait, minimum_minutes=minimum)
-        if window.not_before is not None and flight.departure_scheduled < window.not_before:
+        maximum_wait = (flight.departure_upper - previous.arrival_lower).total_seconds() / 60
+        if window.maximum_minutes is not None and maximum_wait > window.maximum_minutes:
+            return Assessment(
+                "connection_too_long", wait_minutes=maximum_wait, minimum_minutes=minimum
+            )
+        if window.not_before is not None and flight.departure_lower < window.not_before:
             return Assessment(
                 "before_departure_threshold", wait_minutes=wait, minimum_minutes=minimum
             )

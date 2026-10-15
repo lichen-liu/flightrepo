@@ -61,6 +61,58 @@ def departure_request(**changes):
     return payload
 
 
+def test_date_availability_is_origin_specific_and_uses_requested_clock(client, demo):
+    response = client.get("/v1/dates", params={"origin": "yyz"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "origin": "YYZ",
+        "timezone": "America/Toronto",
+        "dates": ["2026-10-17"],
+    }
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={
+            "provider_id": "late-night",
+            "departure_scheduled": datetime.fromisoformat("2026-10-20T02:00:00Z"),
+            "arrival_scheduled": datetime.fromisoformat("2026-10-20T10:00:00Z"),
+        }
+    )
+    demo[0].upsert([record])
+    assert client.get("/v1/dates?origin=YYZ").json()["dates"] == ["2026-10-17", "2026-10-19"]
+    assert client.get("/v1/dates?origin=YYZ&clock=UTC").json()["dates"] == [
+        "2026-10-17",
+        "2026-10-20",
+    ]
+    assert client.get("/v1/dates?origin=XYZ&clock=UTC").json()["dates"] == []
+    assert client.get("/v1/dates?origin=XYZ").status_code == 422
+    assert client.get("/v1/dates?origin=YYZ&clock=invalid").status_code == 422
+    assert client.get("/v1/dates?origin=invalid").status_code == 422
+
+
+def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
+    with demo[0].connect() as connection:
+        connection.execute("UPDATE flights SET status='cancelled' WHERE origin_iata='YYZ'")
+    assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
+
+
+def test_aircraft_type_survives_storage_edit_and_serving(client, demo):
+    record = FlightRecord.model_validate(demo[2]["flights"][0])
+    record.aircraft_type_code = "A320"
+    demo[0].upsert([record])
+    saved = demo[1].flight(record.provider, record.provider_id)
+    assert saved.aircraft_type_code == record.aircraft_type_code
+    changed = saved.model_copy(update={"flight_number": "AC123"})
+    demo[0].update(saved, changed)
+    assert demo[1].flight(record.provider, record.provider_id) == changed
+    result = client.post("/v1/itineraries/search/local", json=departure_request()).json()
+    legs = [f for item in result["items"] for f in item["legs"]]
+    assert any(f.get("aircraft_type_code") == "A320" for f in legs)
+
+
+def test_trace_serving_is_not_part_of_the_application(client):
+    assert client.get("/v1/observations?day=2025-01-01").status_code == 404
+    assert client.get("/v1/observations/2025-01-01/ad4584/trace").status_code == 404
+
+
 def test_departure_search_needs_no_arrival_input(client):
     response = client.post("/v1/itineraries/search/local", json=departure_request())
     assert response.status_code == 200, response.text
@@ -215,7 +267,7 @@ def test_local_search_uses_exact_dates_and_applies_constraints(client):
 def test_missing_timezone_and_aware_wall_time_are_actionable(client, demo):
     with demo[0].connect() as connection:
         connection.execute("DELETE FROM airport_transfers")
-        connection.execute("DELETE FROM airports WHERE iata='YYZ'")
+        connection.execute("UPDATE airports SET timezone=NULL WHERE iata='YYZ'")
     result = client.post("/v1/itineraries/search/local", json=request())
     assert result.status_code == 422
     assert result.json()["detail"]["code"] == "airport_metadata_missing"

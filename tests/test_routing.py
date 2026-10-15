@@ -605,10 +605,14 @@ def test_index_api_partial_results_and_naive_times(tmp_path):
     reader = FlightReader(updater.path)
     with reader.connect() as conn:
         plan = conn.execute(
-            "EXPLAIN QUERY PLAN SELECT * FROM flights WHERE origin_iata=? AND departure_scheduled>=? AND departure_scheduled<? AND status != 'cancelled' ORDER BY departure_scheduled,provider,provider_id LIMIT 10",
-            ("AAA", BASE.isoformat(), (BASE + timedelta(days=1)).isoformat()),
+            "EXPLAIN QUERY PLAN SELECT * FROM flights WHERE origin_iata=? AND departure_scheduled_us>=? AND departure_scheduled_us<? AND arrival_scheduled_us IS NOT NULL AND status != 'cancelled' ORDER BY departure_scheduled_us,provider,provider_id LIMIT 10",
+            (
+                "AAA",
+                int(BASE.timestamp()) * 1000000,
+                int((BASE + timedelta(days=1)).timestamp()) * 1000000,
+            ),
         ).fetchall()
-        assert any("idx_flights_routing" in str(tuple(row)) for row in plan)
+        assert any("flight_legs_scheduled_origin" in str(tuple(row)) for row in plan)
     app.dependency_overrides[get_store] = lambda: reader
     try:
         with TestClient(app) as client:

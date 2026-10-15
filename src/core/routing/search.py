@@ -23,11 +23,11 @@ class RankedPath:
 
 
 def route_score(legs, ranking):
-    elapsed = (legs[-1].arrival_scheduled - legs[0].departure_scheduled).total_seconds()
+    elapsed = (legs[-1].arrival_upper - legs[0].departure_lower).total_seconds()
     identity = tuple(flight_key(f) for f in legs)
     arrival, departure, count = (
-        legs[-1].arrival_scheduled,
-        legs[0].departure_scheduled,
+        legs[-1].arrival_upper,
+        legs[0].departure_lower,
         len(legs),
     )
     if ranking == "shortest_elapsed":
@@ -38,6 +38,7 @@ def route_score(legs, ranking):
 
 
 def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> RouteSearchResult:
+    snapshot = snapshot.with_time_basis(request.time_basis)
     policy = ConnectionPolicy(
         snapshot.airports,
         snapshot.transfers,
@@ -68,6 +69,8 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
             decision = policy.assess(
                 legs[-1] if legs else None, flight, window, seen, request.horizon_end
             )
+            if not legs and flight.departure_upper >= request.departure_end:
+                decision = Assessment("departure_after_window")
             next_seen = seen | {flight.origin_iata, flight.destination_iata}
             next_via = session.advance_via(via_progress, flight)
             if decision.reason == "accepted" and next_via is None:
@@ -117,10 +120,10 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
             itinerary_id=digest([flight_key(f) for f in legs]),
             legs=legs,
             connections=links,
-            departure=legs[0].departure_scheduled,
-            arrival=legs[-1].arrival_scheduled,
+            departure=legs[0].departure_lower,
+            arrival=legs[-1].arrival_upper,
             duration_minutes=int(
-                (legs[-1].arrival_scheduled - legs[0].departure_scheduled).total_seconds() / 60
+                (legs[-1].arrival_upper - legs[0].departure_lower).total_seconds() / 60
             ),
         )
         for item in sorted(best, key=lambda item: item.score)

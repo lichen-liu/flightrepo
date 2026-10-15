@@ -1,4 +1,4 @@
-"""Serve one installed synthetic-data preview; credentials stay in its tunnel job."""
+"""Serve an explicitly configured dataset; credentials stay in its tunnel job."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -39,17 +40,33 @@ def read_settings(root: Path) -> dict:
     database = data.get("database_path")
     if not isinstance(database, str) or not database or not Path(database).is_absolute():
         raise ValueError("database_path must be an absolute path in settings.json.")
-    return {"hostname": hostname, "port": port, "database_path": str(Path(database).resolve())}
+    data_mode = data.get("data_mode", "synthetic")
+    if data_mode not in ("synthetic", "real"):
+        raise ValueError("data_mode must be synthetic or real")
+    return {
+        "hostname": hostname,
+        "port": port,
+        "database_path": str(Path(database).resolve()),
+        "data_mode": data_mode,
+    }
 
 
-def validate_database(database: Path) -> int:
+def validate_database(database: Path, *, data_mode="synthetic") -> int:
     from server.reader import FlightReader
 
     stats = FlightReader(database).stats()
-    if not stats["flights"] or set(stats["providers"]) != {"demo"}:
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+        schema = connection.execute(
+            "SELECT contract,version FROM schema_metadata WHERE id=1"
+        ).fetchone()
+    if schema != ("flight-legs", 1):
+        raise ValueError("Hosted database requires the shared flight-legs schema version 1")
+    if data_mode == "synthetic" and (not stats["flights"] or set(stats["providers"]) != {"demo"}):
         raise ValueError(
             "Hosted preview requires a nonempty database containing only demo providers."
         )
+    if data_mode == "real" and "demo" in stats["providers"]:
+        raise ValueError("Real serving mode cannot contain demo flight records")
     return stats["flights"]
 
 
@@ -59,13 +76,18 @@ def seed_database(root: Path) -> dict:
     from core.models import FlightRecord
     from ingestion.updater import FlightUpdater
 
-    database = Path(read_settings(root)["database_path"])
+    settings = read_settings(root)
+    database = Path(settings["database_path"])
     if database.exists() or database.is_symlink():
         return {
             "database_path": str(database),
             "seeded": False,
-            "flight_count": validate_database(database),
+            "flight_count": validate_database(database, data_mode=settings["data_mode"]),
         }
+    if settings["data_mode"] == "real":
+        raise ValueError(
+            "Real mode never seeds demo data; initialize the selected database with admin first"
+        )
     data = json.loads((root / "synthetic-data.json").read_text(encoding="utf-8"))
     if not isinstance(data, dict) or any(
         not isinstance(data.get(field), list) for field in ("flights", "airports", "transfers")
@@ -177,7 +199,7 @@ def create_server(root: Path):
 
     settings = read_settings(root)
     database = Path(settings["database_path"])
-    validate_database(database)
+    validate_database(database, data_mode=settings["data_mode"])
     app = FastAPI(title=original.title, description=original.description, version=original.version)
     app.user_middleware = list(original.user_middleware)
     app.exception_handlers = dict(original.exception_handlers)
@@ -214,6 +236,7 @@ async def check_installation(root: Path) -> None:
     import httpx
 
     app, _ = create_server(root)
+    settings = read_settings(root)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
@@ -228,9 +251,42 @@ async def check_installation(root: Path) -> None:
         ):
             response = await client.get(path)
             if response.status_code != 200:
-                raise RuntimeError(
-                    "The installed application, synthetic database or assets are unavailable."
-                )
+                raise RuntimeError("The installed application, database or assets are unavailable.")
+        if settings["data_mode"] == "real":
+            catalog = (await client.get("/v1/catalog")).json()
+            dataset = catalog["dataset"]
+            if not any(dataset["time_bases"].values()):
+                return
+            route = catalog["suggested_route"]
+            first = datetime.fromisoformat(dataset["first_departure"].replace("Z", "+00:00"))
+            start = first.replace(hour=0, minute=0, second=0, microsecond=0)
+            horizon = (start + timedelta(days=7)).isoformat()
+            response = await client.post(
+                "/v1/itineraries/search",
+                json={
+                    "origin": route["origin_iata"],
+                    "destination": route["destination_iata"],
+                    "departure_start": start.isoformat(),
+                    "departure_end": (start + timedelta(days=2)).isoformat(),
+                    "horizon_end": horizon,
+                    "time_basis": dataset["default_time_basis"],
+                },
+            )
+            if response.status_code != 200 or not response.json().get("items"):
+                raise RuntimeError("The installed real itinerary search failed")
+            leg = response.json()["items"][0]["legs"][0]
+            response = await client.post(
+                "/v1/plans/rebuild",
+                json={
+                    "prefix": [{"provider": leg["provider"], "provider_id": leg["provider_id"]}],
+                    "destination": route["destination_iata"],
+                    "horizon_end": horizon,
+                    "time_basis": dataset["default_time_basis"],
+                },
+            )
+            if response.status_code != 200 or not response.json().get("complete"):
+                raise RuntimeError("The installed real itinerary rebuild failed")
+            return
         response = await client.post(
             "/v1/itineraries/search",
             json={
@@ -279,7 +335,7 @@ async def check_installation(root: Path) -> None:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Serve the installed Flyji synthetic preview.")
+    parser = argparse.ArgumentParser(description="Serve the installed Flyji dataset.")
     default_root = (
         RUNTIME_ROOT
         if Path(__file__).resolve().parent == REPO / "deployment"
@@ -299,12 +355,10 @@ def main(argv=None):
     try:
         if args.seed:
             result = seed_database(args.root)
-            print(
-                f"Synthetic database ready: {result['flight_count']} flights; existing facts preserved."
-            )
+            print(f"Database ready: {result['flight_count']} flights; existing facts preserved.")
         if args.check:
             asyncio.run(check_installation(args.root))
-            print("Installed synthetic application, assets and routing are ready.")
+            print("Installed application, assets and routing are ready.")
         if args.seed or args.check:
             return
         import uvicorn

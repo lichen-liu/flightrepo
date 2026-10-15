@@ -95,6 +95,7 @@
               Search flights
             </button>
           </div>
+          <p id="date-availability" class="small" role="status">Loading departure dates…</p>
           <div class="route-filter">
             <label
               >Via airports (optional)<span class="airport-list-input"><input
@@ -139,6 +140,11 @@
               </select></label
             >
           </div>
+          <label class="inline-label">Flight times<select name="time-basis">
+            <option value="scheduled">Published schedules</option>
+            <option value="observed">Observed historical legs</option>
+            <option value="actual">Reported actual times</option>
+          </select></label>
           <details id="search-details">
             <summary>Search filters</summary>
             <div class="filter-grid">
@@ -291,7 +297,7 @@
           </section>
           <section class="schedule-panel" aria-labelledby="schedule-heading">
             <div class="panel-heading">
-              <h2 id="schedule-heading">Flight schedule</h2>
+              <h2 id="schedule-heading">Journey times</h2>
               <label class="inline-label"
                 >Leg times<select id="display-clock">
                   <option value="local">Airport local</option>
@@ -301,7 +307,7 @@
             </div>
             <div id="timeline"></div>
             <label class="cursor-label" for="time-cursor"
-              >Schedule time <output id="cursor-time">—</output></label
+              >Journey time <output id="cursor-time">—</output></label
             >
             <input
               id="time-cursor"
@@ -312,7 +318,7 @@
               disabled
             />
             <p id="cursor-detail" class="small muted">
-              Flight positions illustrate the schedule, not live tracking.
+              Map positions illustrate journey progress, not aircraft tracking.
             </p>
           </section>
           <section class="journey-panel" aria-labelledby="journey-heading">

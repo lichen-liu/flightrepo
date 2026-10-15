@@ -3,7 +3,7 @@
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from core.connections import Airport
 from core.routing.models import (
@@ -11,6 +11,7 @@ from core.routing.models import (
     RouteSearchRequest,
     RoutingError,
     SearchLimits,
+    TimeBasis,
     ViaAirports,
     airport_code,
     via_airports,
@@ -39,6 +40,7 @@ class LocalRouteSearchRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
+    time_basis: TimeBasis | None = None
 
     @field_validator("origin", "destination", mode="before")
     @classmethod
@@ -53,7 +55,10 @@ class LocalRouteSearchRequest(BaseModel):
         if self.arrival_by_local is not None:
             required.append("destination")
         for field in required:
-            if getattr(self, field) not in by_code:
+            if (
+                getattr(self, field) not in by_code
+                or by_code[getattr(self, field)].timezone is None
+            ):
                 raise RoutingError(
                     "airport_metadata_missing",
                     "Airport local time requires timezone metadata. Use UTC or import the airport catalog.",
@@ -167,6 +172,8 @@ class CatalogAirport(BaseModel):
 
 class DatasetEvidence(BaseModel):
     flight_count: int
+    total_record_count: int = 0
+    needs_review_count: int = 0
     cancelled_count: int
     first_departure: datetime | None
     last_departure: datetime | None
@@ -174,9 +181,27 @@ class DatasetEvidence(BaseModel):
     newest_fact_refresh: datetime | None
     providers: list[str]
     coverage: Literal["unknown"] = "unknown"
+    time_bases: dict[str, int] = Field(default_factory=dict)
+    default_time_basis: TimeBasis = "scheduled"
+    sources: list[dict] = Field(default_factory=list)
 
 
 class WebCatalog(BaseModel):
     airports: list[CatalogAirport]
     airports_truncated: bool
     dataset: DatasetEvidence
+    suggested_route: dict | None = None
+
+
+class AvailableDates(BaseModel):
+    origin: str
+    timezone: str
+    dates: list[date]
+    time_basis: TimeBasis = "scheduled"
+
+    @model_serializer(mode="wrap")
+    def legacy_schedule(self, handler):
+        data = handler(self)
+        if self.time_basis == "scheduled":
+            data.pop("time_basis", None)
+        return data

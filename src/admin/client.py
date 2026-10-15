@@ -1,19 +1,22 @@
 """Local development client. Commands call the same core used by the API."""
 
 import argparse
-import asyncio
 import cmd
 import json
 import shlex
 import sqlite3
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 import httpx
 
+from admin.ingestion import add_ingestion_commands, run_ingestion
 from admin.management import (
+    approve_flight,
     ask,
     create_airport,
     delete_flight,
@@ -24,14 +27,13 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
-from core.models import FlightRecord, FlightStatus, IngestRequest
+from core.disk_quota import policy, set_quota, storage_status
+from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
-from ingestion.providers.aerodatabox import AeroDataBoxProvider
-from ingestion.providers.csv_feed import CsvProvider
-from ingestion.service import IngestionService
+from ingestion.adsblol.diagnostics import configure_logging
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
 
@@ -46,6 +48,33 @@ def read_json(path):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def write_flight_export(path, records):
+    """Keep the previous export intact if reading or writing fails halfway through."""
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".partial",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            output.write("[\n")
+            first = True
+            for record in records:
+                if not first:
+                    output.write(",\n")
+                output.write(json.dumps(record.model_dump(mode="json")))
+                first = False
+            output.write("\n]\n")
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def query_limit(value):
@@ -137,6 +166,9 @@ def print_overview(summary):
         f"Airport catalog: {summary['catalog_airports']:,}   "
         f"Transfer rules: {summary['transfers']:,}"
     )
+    print(
+        f"Searchable flights: {summary['searchable_flights']:,}   Awaiting itinerary review: {summary['needs_review_count']:,}"
+    )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
         ("Departures (UTC)", "first_departure", "last_departure"),
@@ -146,11 +178,32 @@ def print_overview(summary):
     for label, key in (("Providers", "providers"), ("Statuses", "statuses")):
         counts = ", ".join(f"{name}: {count:,}" for name, count in summary[key].items())
         print(f"{label}: {counts or '—'}")
+    for label, key in (
+        ("Searchable time evidence", "time_bases"),
+        ("Ingestion attempts", "ingestion_batches"),
+    ):
+        counts = ", ".join(f"{name}: {count:,}" for name, count in summary.get(key, {}).items())
+        print(f"{label}: {counts or '—'}")
     print("Top routes by flight count (includes cancelled flights):")
     for route in summary["top_routes"]:
         print(f"  {route['origin_iata']} -> {route['destination_iata']}: {route['flights']:,}")
     if not summary["flights"]:
         print("  No flights yet. Use create-route or import-json to add flights.")
+
+
+def disk_quota(value):
+    if value.lower() in {"off", "unlimited"}:
+        return None
+    units = {"b": 1, "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40}
+    import re
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(B|KiB|MiB|GiB|TiB)?", value, re.IGNORECASE)
+    if match:
+        try:
+            return int(Decimal(match[1]) * units[(match[2] or "B").lower()])
+        except InvalidOperation:
+            pass
+    raise argparse.ArgumentTypeError("Use a non-negative size such as 20GiB, 500MiB, bytes, or off")
 
 
 def parser():
@@ -170,27 +223,40 @@ def parser():
     overview.add_argument("--json", action="store_true", help="print structured JSON")
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
     commands.add_parser("create-airport", help="enter airport metadata, preview and save")
+    storage = commands.add_parser("storage", help="database disk usage and live quota")
+    actions = storage.add_subparsers(dest="storage_action", required=True)
+    actions.add_parser("status", help="show database/WAL/SHM disk usage and quota")
+    quota = actions.add_parser(
+        "quota", help="show or change database quota; applied on next ingestion IO"
+    )
+    quota.add_argument("size", nargs="?", type=disk_quota, default=argparse.SUPPRESS)
 
     flights = commands.add_parser("flights", help="browse flight records with optional filters")
+    flights.add_argument(
+        "--needs-review",
+        action="store_true",
+        help="only uncertain itinerary estimates awaiting approval",
+    )
     flights.add_argument("--origin", type=airport_code)
     flights.add_argument("--destination", type=airport_code)
     flights.add_argument("--provider")
     flights.add_argument(
         "--status", choices=list(FlightStatus), help="default: all statuses, including cancelled"
     )
-    flights.add_argument("--start", type=timestamp, help="inclusive scheduled departure cutoff")
-    flights.add_argument("--end", type=timestamp, help="exclusive scheduled departure cutoff")
+    flights.add_argument("--start", type=timestamp, help="inclusive departure cutoff")
+    flights.add_argument("--end", type=timestamp, help="exclusive departure cutoff")
     flights.add_argument("--limit", type=query_limit, default=20)
 
     flight = commands.add_parser(
         "flight", help="show, edit or delete one flight by provider and ID"
     )
     actions = flight.add_subparsers(dest="flight_action", required=True)
-    for name in ("show", "edit", "delete"):
+    for name in ("show", "edit", "delete", "approve"):
         record = actions.add_parser(
             name,
             help={
                 "show": "view a flight record",
+                "approve": "approve reviewed itinerary estimates for search; protects against re-ingestion",
                 "edit": "edit interactively or replace from JSON",
                 "delete": "preview and confirm deletion of one flight",
             }[name],
@@ -203,7 +269,7 @@ def parser():
                 type=Path,
                 help="replace from a complete FlightRecord JSON object without prompts",
             )
-        if name == "delete":
+        if name in ("delete", "approve"):
             record.add_argument("--yes", action="store_true", help="skip preview and confirmation")
 
     search = commands.add_parser(
@@ -264,7 +330,7 @@ def parser():
 
     maintenance = commands.add_parser("maintenance", help="initialize schema or clear local data")
     operations = maintenance.add_subparsers(dest="maintenance_action", required=True)
-    operations.add_parser("init", help="explicitly initialize or upgrade the Flyji schema")
+    operations.add_parser("init", help="explicitly initialize the Flyji schema")
     clear = operations.add_parser(
         "clear-data", help="delete all flights, airports and transfers; keep schema"
     )
@@ -285,13 +351,7 @@ def parser():
     continuation.add_argument("path", type=Path, help="RebuildRequest JSON")
     continuation.add_argument("--snapshot-out", type=Path)
 
-    ingest = commands.add_parser(
-        "ingest", help="manual provider/CSV import; collection workflow is pending"
-    )
-    ingest.add_argument("--airports", nargs="+", required=True)
-    ingest.add_argument("--start", type=date.fromisoformat, required=True)
-    ingest.add_argument("--end", type=date.fromisoformat, required=True)
-    ingest.add_argument("--csv", type=Path)
+    add_ingestion_commands(commands)
     return root
 
 
@@ -326,28 +386,7 @@ def search_request(args):
     return RouteSearchRequest.model_validate(data) if data else route_request()
 
 
-async def ingest_records(args, updater):
-    settings = get_settings()
-    request = IngestRequest(airports=args.airports, start=args.start, end=args.end)
-    provider = (
-        CsvProvider(args.csv)
-        if args.csv
-        else AeroDataBoxProvider(
-            settings.provider_api_key,
-            settings.provider_base_url,
-            settings.provider_host,
-        )
-    )
-    try:
-        return await IngestionService(updater, provider, settings.max_query_days).ingest(
-            request.airports, request.start, request.end
-        )
-    finally:
-        if isinstance(provider, AeroDataBoxProvider):
-            await provider.aclose()
-
-
-def run(arguments, *, database_path=None):
+def run(arguments, *, database_path=None, interactive=False):
     args = parser().parse_args(arguments)
     # Replay is intentionally independent of database settings and files.
     if args.command == "debug" and args.debug_action == "replay":
@@ -378,6 +417,17 @@ def run(arguments, *, database_path=None):
         create_route(path)
     elif args.command == "create-airport":
         create_airport(path, output)
+    elif args.command == "storage":
+        if args.storage_action == "status":
+            output(storage_status(path))
+        elif hasattr(args, "size"):
+            set_quota(path, args.size)
+            output({"quota_bytes": args.size, "applies": "next ingestion IO"})
+        else:
+            state = policy(path)
+            if state is None:
+                raise ValueError("Initialize with maintenance init first")
+            output({"quota_bytes": state["quota_bytes"]})
     elif args.command == "overview":
         summary = FlightReader(path).overview()
         output(summary) if args.json else print_overview(summary)
@@ -394,6 +444,7 @@ def run(arguments, *, database_path=None):
         output(
             FlightReader(path).list_flights(
                 origin=args.origin,
+                needs_review=args.needs_review,
                 destination=args.destination,
                 provider=args.provider,
                 status=args.status,
@@ -405,6 +456,8 @@ def run(arguments, *, database_path=None):
     elif args.command == "flight":
         if args.flight_action == "show":
             output(FlightReader(path).flight(args.provider, args.provider_id))
+        elif args.flight_action == "approve":
+            approve_flight(path, args.provider, args.provider_id, args.yes, output)
         elif args.flight_action == "delete":
             delete_flight(path, args.provider, args.provider_id, args.yes, output)
         elif args.file is None:
@@ -439,9 +492,7 @@ def run(arguments, *, database_path=None):
         updater.initialize()
         output({"upserted": updater.upsert(records)})
     elif args.command == "export-json":
-        write_json(
-            args.path, [row.model_dump(mode="json") for row in FlightReader(path).all_records()]
-        )
+        write_flight_export(args.path, FlightReader(path).iter_records())
         output({"exported_to": args.path})
     elif args.command == "airports":
         if args.airport_action == "import":
@@ -473,9 +524,7 @@ def run(arguments, *, database_path=None):
             write_json(args.snapshot_out, replay_document("rebuild", request, snapshot, result))
         output(result)
     elif args.command == "ingest":
-        updater = FlightUpdater(path)
-        updater.initialize()
-        output(asyncio.run(ingest_records(args, updater)))
+        run_ingestion(args, path, get_settings(), output, interactive=interactive)
 
 
 class LocalShell(cmd.Cmd):
@@ -489,7 +538,7 @@ class LocalShell(cmd.Cmd):
 
     def default(self, line):
         try:
-            selected = run(shlex.split(line), database_path=self.database_path)
+            selected = run(shlex.split(line), database_path=self.database_path, interactive=True)
             if isinstance(selected, Path):
                 self.database_path = selected
         except SystemExit:
@@ -523,8 +572,12 @@ class LocalShell(cmd.Cmd):
 
 
 def main(arguments=None):
+    configure_logging()
     try:
         run(sys.argv[1:] if arguments is None else arguments)
+    except (EOFError, KeyboardInterrupt):
+        print("\nCommand cancelled; completed ingestion days are preserved.", file=sys.stderr)
+        raise SystemExit(130)
     except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1)

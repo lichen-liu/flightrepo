@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,11 +18,13 @@ from core.routing.models import (
     IncompleteSearchError,
     RouteSearchRequest,
     RoutingError,
+    TimeBasis,
     utc_instant,
 )
 from core.routing.results import RouteSearchResult
 from server.reader import FlightReader
 from server.web_models import (
+    AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
     ResolvedTime,
@@ -76,7 +78,8 @@ async def storage_error(request: Request, error: sqlite3.Error):
 
 @lru_cache
 def get_store() -> FlightReader:
-    return FlightReader(get_settings().database_path)
+    settings = get_settings()
+    return FlightReader(settings.database_path)
 
 
 @app.get("/health")
@@ -87,12 +90,31 @@ def health() -> dict[str, str]:
 @app.get("/health/ready")
 def readiness(store: FlightReader = Depends(get_store)):
     catalog = store.web_catalog()
-    return {"status": "ready", "flight_count": catalog.dataset.flight_count}
+    return {
+        "status": "ready",
+        "flight_count": catalog.dataset.flight_count,
+        "schema_contract": "flight-legs",
+        "schema_version": 1,
+        "time_basis": catalog.dataset.default_time_basis,
+    }
 
 
 @app.get("/v1/catalog", response_model=WebCatalog)
 def catalog(store: FlightReader = Depends(get_store)) -> WebCatalog:
     return store.web_catalog()
+
+
+@app.get("/v1/dates", response_model=AvailableDates)
+def available_dates(
+    origin: str,
+    clock: Literal["local", "UTC"] = "local",
+    time_basis: TimeBasis | None = None,
+    store: FlightReader = Depends(get_store),
+):
+    try:
+        return store.available_dates(origin, clock, time_basis)
+    except ValueError as error:
+        raise routing_http_error(error) from error
 
 
 @app.post("/v1/itineraries/search/local", response_model=LocalRouteSearchResult)

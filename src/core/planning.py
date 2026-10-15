@@ -29,7 +29,7 @@ def rejection_context(flight: FlightRecord, assessment) -> dict:
     return {
         "provider": flight.provider,
         "provider_id": flight.provider_id,
-        "departure_utc": flight.departure_scheduled.isoformat(),
+        "departure_utc": flight.departure_lower.isoformat(),
         "wait_minutes": assessment.wait_minutes,
         "minimum_minutes": assessment.minimum_minutes,
     }
@@ -38,6 +38,7 @@ def rejection_context(flight: FlightRecord, assessment) -> dict:
 def validate_prefix(
     request: RebuildRequest, snapshot: RoutingSnapshot
 ) -> tuple[list[FlightRecord], list[PlanConnection], set[str], ConnectionPolicy]:
+    snapshot = snapshot.with_time_basis(request.time_basis)
     records = snapshot.records()
     try:
         prefix = [records[(ref.provider, ref.provider_id)] for ref in request.prefix]
@@ -52,14 +53,14 @@ def validate_prefix(
     if prefix[0].origin_iata in required_via_airports(request.via_airport):
         raise RoutingError("invalid_via_airport", "via_airport must be an intermediate airport")
     if (
-        request.horizon_end < prefix[-1].arrival_scheduled
-        or request.horizon_end == prefix[-1].arrival_scheduled
+        request.horizon_end < prefix[-1].arrival_upper
+        or request.horizon_end == prefix[-1].arrival_upper
         and prefix[-1].destination_iata != request.destination
     ):
         raise RoutingError("invalid_horizon", "horizon_end must follow the selected arrival")
     # A retained first flight may lie at the start of a full search window.
     maximum_span = MAX_DEPARTURE_DAYS + MAX_ONWARD_DAYS
-    if request.horizon_end - prefix[0].departure_scheduled > timedelta(days=maximum_span):
+    if request.horizon_end - prefix[0].departure_lower > timedelta(days=maximum_span):
         raise RoutingError(
             "invalid_horizon",
             f"horizon must be within {maximum_span} days of first departure",
@@ -94,6 +95,7 @@ def validate_prefix(
 
 
 def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) -> RebuiltPlan:
+    snapshot = snapshot.with_time_basis(request.time_basis)
     prefix, connections, visited, policy = validate_prefix(request, snapshot)
     session = RoutingSession(
         snapshot, request, policy, "next_departure_then_tail_arrival_legs_identity"
@@ -145,7 +147,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
                     continue
                 candidate = ((flight, *tail[0]), (assessment.connection, *tail[1]))
                 score = (
-                    candidate[0][-1].arrival_scheduled,
+                    candidate[0][-1].arrival_upper,
                     len(candidate[0]),
                     tuple(flight_key(f) for f in candidate[0]),
                 )

@@ -95,6 +95,55 @@ async function search(
   ).toBeEnabled();
   return data;
 }
+async function chooseDate(page, name, date) {
+  const input = page.locator(`input[name="${name}"]`);
+  await expect(input).toBeEnabled();
+  await input.click();
+  await page.locator(`#${name}-calendar button[data-date="${date}"]`).click();
+}
+
+check("flight details show the flight's stored aircraft type code", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.items[0].legs[0].aircraft_type_code = "B738";
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
+});
+
+check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
+  await page.route("**/v1/dates?*", async (route) => {
+    const origin = new URL(route.request().url()).searchParams.get("origin");
+    await route.fulfill({ json: { origin, timezone: "America/Toronto", dates: origin === "YYZ" ? ["2026-10-17", "2026-10-19"] : [] } });
+  });
+  await result(page, searchPath, () => page.goto(`${base}?date=2025-01-01`));
+  await expect(page.locator("#date")).toHaveValue("2026-10-17");
+  await page.locator("#date").click();
+  await expect(page.locator('#date-calendar [data-date="2026-10-18"]')).toBeDisabled();
+  await expect(page.locator('#date-calendar [data-date="2026-10-19"]')).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#date-calendar")).toBeHidden();
+  await expect(page.locator("#date")).toBeFocused();
+  await page.getByLabel("From", { exact: true }).fill("XYZ");
+  await expect(page.locator("#date-availability")).toContainText("No departures");
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator("#search-button")).toBeDisabled();
+});
+
+check("date availability failures remain disabled until a retry succeeds", async (page) => {
+  let fail = true;
+  await page.route("**/v1/dates?*", (route) => fail
+    ? route.fulfill({ status: 503, json: { detail: "Date data unavailable" } })
+    : route.continue());
+  await page.goto(base);
+  await expect(page.locator("#date-availability")).toContainText("Date data unavailable");
+  await expect(page.locator("#search-button")).toBeDisabled();
+  fail = false;
+  await page.getByLabel("Input clock").selectOption("UTC");
+  await expect(page.locator("#date-availability")).toContainText("UTC");
+  await expect(page.locator("#search-button")).toBeEnabled();
+});
 async function exported(page) {
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
@@ -179,11 +228,11 @@ check(
     assert.equal(new URL(page.url()).searchParams.has("arrival-fold"), false);
 
     await page.locator("#search-details > summary").click();
-    await page
-      .getByLabel("Last departure date", { exact: true })
-      .fill("2026-10-19");
+    await page.getByLabel("From", { exact: true }).fill("LHR");
+    await expect(page.locator("#date-availability")).toContainText("2 departure dates");
+    await chooseDate(page, "last-date", "2026-10-19");
     const ranged = await search(page);
-    assert.equal(ranged.query.departure_end, "2026-10-20T04:00:00Z");
+    assert.equal(ranged.query.departure_end, "2026-10-19T23:00:00Z");
     checkWindow(ranged.query);
     const saved = await exported(page);
     assert.equal(saved.query_inputs["last-date"], "2026-10-19");
@@ -213,7 +262,7 @@ check(
 
     await page.getByLabel("Input clock").selectOption("UTC");
     const utc = await search(page);
-    assert.equal(utc.query.departure_start, "2026-10-17T00:00:00Z");
+    assert.equal(utc.query.departure_start, "2026-10-18T00:00:00Z");
     assert.equal(utc.query.departure_end, "2026-10-20T00:00:00Z");
     checkWindow(utc.query);
     for (const { path, body } of submitted.filter(({ path }) => searchPath.test(path))) {
@@ -520,10 +569,11 @@ check(
     await page.goto(base);
     await expect(
       page.getByRole("button", { name: "Search flights", exact: true }),
-    ).toBeEnabled();
+    ).toBeDisabled();
     await page.getByLabel("From", { exact: true }).fill("yyz");
     await page.getByLabel("To", { exact: true }).fill("cdg");
     await page.getByLabel("Input clock").selectOption("UTC");
+    await expect(page.locator("#date-availability")).toContainText("UTC");
     const date = await page
       .getByLabel("Departure date", { exact: true })
       .inputValue();
@@ -588,14 +638,14 @@ check(
     await page
       .getByRole("button", { name: "Fit journey", exact: true })
       .click();
-    await page.getByLabel("Schedule time", { exact: false }).fill("500");
+    await page.getByRole("slider", { name: /^Journey time/ }).fill("500");
     const cursor = await page
-      .getByLabel("Schedule time", { exact: false })
+      .getByRole("slider", { name: /^Journey time/ })
       .inputValue();
     await page.getByLabel("Leg times").selectOption("UTC");
     assert.deepEqual(identity((await exported(page)).selection.legs), before);
     assert.equal(
-      await page.getByLabel("Schedule time", { exact: false }).inputValue(),
+      await page.getByRole("slider", { name: /^Journey time/ }).inputValue(),
       cursor,
     );
   },
@@ -735,7 +785,7 @@ check("stale timezone metadata is corrected before retry", async (page) => {
   ).toBeEnabled();
   // The error asks the traveler to review dates; retain explicit input rather
   // than silently shifting it when corrected metadata changes the clock.
-  await page.getByLabel("Departure date", { exact: true }).fill(departureDate);
+  await chooseDate(page, "date", departureDate);
   const retried = await search(page);
   assert.equal(retried.departure_timezone, actualZone);
   assert.ok(retried.items.length);

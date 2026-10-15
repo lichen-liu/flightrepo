@@ -1,7 +1,7 @@
 # Running CI
 
 PR checks are label-triggered. Checks on `main` are automatic. Both run pytest
-on Python 3.11 and 3.13, verify Python style, frontend behavior and the installed wheel,
+on Python 3.11, 3.13 and 3.14, verify Python style, frontend behavior and the installed wheel,
 and exercise the served demo in Chromium. Browser tooling is used only for QA;
 the app itself still needs only Python and SQLite.
 

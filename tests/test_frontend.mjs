@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { calendarDays } from "../src/server/web/calendar.mjs";
 import {
   escapeHTML,
   localDate,
@@ -17,6 +18,15 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("calendar disables gaps and handles leap years without using the browser timezone", () => {
+  const available = new Set(["2024-02-01", "2024-02-29"]),
+    days = calendarDays("2024-02", available);
+  assert.equal(days.length, 29);
+  assert.deepEqual(days.filter((day) => day.enabled).map((day) => day.date), [...available]);
+  assert.equal(calendarDays("2025-02", new Set()).length, 28);
+  assert.equal(days[15].enabled, false);
+});
 
 test("via lists preserve travel order across whitespace, commas and trailing separators", () => {
   assert.deepEqual(airportList(" ams,  lhr ,,\n"), ["AMS", "LHR"]);

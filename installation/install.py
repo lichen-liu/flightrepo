@@ -42,6 +42,7 @@ def install(root: Path, repo: Path = REPO):
                     "hostname": "fly.boboji.fyi",
                     "port": 8014,
                     "database_path": str(repo / "var/hosted/flights.db"),
+                    "data_mode": "synthetic",
                 },
                 indent=2,
             ).encode()
@@ -51,7 +52,11 @@ def install(root: Path, repo: Path = REPO):
     database = Path(config["database_path"])
     if not database.resolve().is_relative_to((repo / "var").resolve()):
         raise ValueError("Keep the hosted database under this project's ignored var directory.")
-    if database in (repo / "var/flights.db", repo / "var/connections-demo.db"):
+    if database in (
+        repo / "var/flights.db",
+        repo / "var/connections-demo.db",
+        repo / "var/connections-demo-legs.db",
+    ):
         raise ValueError(
             "Choose a separate hosted database; normal and local-demo data are preserved."
         )
@@ -148,7 +153,7 @@ def install(root: Path, repo: Path = REPO):
                 "runtime_files_sha256": copied,
                 "dependencies": dependencies,
                 "database_path": str(database),
-                "data_mode": "synthetic",
+                "data_mode": config["data_mode"],
             },
             indent=2,
         ).encode()
@@ -156,7 +161,7 @@ def install(root: Path, repo: Path = REPO):
     )
     (root / "installing").unlink()
     print(f"Installed Flyji at {root}")
-    print(f"Synthetic flight database: {database}")
+    print(f"{config['data_mode'].capitalize()} flight database: {database}")
     if dirty:
         print("This snapshot includes uncommitted checkout changes.")
     print(

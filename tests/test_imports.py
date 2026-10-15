@@ -44,6 +44,7 @@ def test_csv_filters_utc_day_and_preserves_optional_facts(tmp_path):
                 arrival_actual="2026-10-18T02:35:00+02:00",
                 codeshares='["UA123"]',
                 fetched_at="2026-10-16T00:00:00Z",
+                aircraft_type_code="A320",
             )
         ],
     )
@@ -57,6 +58,7 @@ def test_csv_filters_utc_day_and_preserves_optional_facts(tmp_path):
     assert flight.departure_actual == datetime(2026, 10, 17, 23, 35, tzinfo=timezone.utc)
     assert flight.arrival_actual == datetime(2026, 10, 18, 0, 35, tzinfo=timezone.utc)
     assert flight.codeshares == ["UA123"]
+    assert flight.aircraft_type_code == "A320"
     assert flight.fetched_at == datetime(2026, 10, 16, tzinfo=timezone.utc)
     assert not asyncio.run(
         provider.flights_for_airport("YYZ", date(2026, 10, 18), date(2026, 10, 18))

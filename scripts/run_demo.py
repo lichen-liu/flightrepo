@@ -8,8 +8,6 @@ import sys
 import uvicorn
 from seed_connection_demo import main as seed_demo
 
-from core.config import LOCAL_DATA_DIR
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -28,8 +26,8 @@ def main():
             file=sys.stderr,
         )
         return 2
-    seed_demo()
-    os.environ["FLIGHT_DATABASE_PATH"] = str(LOCAL_DATA_DIR / "connections-demo.db")
+    database = seed_demo()
+    os.environ["FLIGHT_DATABASE_PATH"] = str(database)
     print(f"\nFlyji demo: http://127.0.0.1:{args.port}/", flush=True)
     uvicorn.run("server.api:app", host="127.0.0.1", port=args.port)
     return 0

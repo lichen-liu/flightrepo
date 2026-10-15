@@ -19,7 +19,7 @@ Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe o
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
-To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). The first hosted version uses a separate synthetic database under `var/hosted/`; building the real flight database is the next phase.
+To host the installed preview at **fly.boboji.fyi**, follow [installation](installation/README.md) and [deployment](deployment/README.md). Hosted settings explicitly select synthetic or real serving; real mode uses the shared flight-leg database under `var/hosted/` and never seeds demo data.
 
 ## What works
 
@@ -40,7 +40,15 @@ provider / CSV → ingestion + updater → SQLite ← reader ← FastAPI + web a
                               └── internal admin ─┘
 ```
 
-`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns read-only queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+`src/core` holds shared models and the routing library. `src/ingestion` owns fetching and mutation. `src/server` owns serving queries, the API and bundled web assets. `src/admin` integrates both modules for local management. Boundary tests enforce this separation.
+
+The [ingestion pipeline reference](docs/ingestion.md) covers ADSB.lol/OurAirports licences, raw data, one-day extraction and storage measurements. Accepted observed legs, scheduled flights and reported actual events share the [typed serving schema](docs/database-schema.md). Each completed ingestion day feeds counts, calendars, routing and admin immediately.
+
+The [admin ingestion workflow](docs/admin.md#ingest-in-separate-sessions) supports
+explicit source commands: `ingest sources`, `ingest adsblol prepare`, then
+`ingest adsblol run --start 2023-07-01 --end 2023-07-03`. Later jobs can overlap or backfill
+other periods; completed days are skipped and stable keys prevent duplicates.
+Configure `--output-db var/hosted/<name>.db` to select an exact hosted destination.
 
 SQLite requires no database service. WAL mode permits separate readers and one writer on the same machine; each calculation uses a consistent snapshot. Ingestion completes provider requests before writing. Routing uses bounded searches with explicit partial-result diagnostics; the [engine guide](docs/engine/routing.md) covers ranking, limits and replay.
 
@@ -56,16 +64,17 @@ The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the
 
 Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 
-Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
+Use `python -m admin --db /absolute/path/to/flights.db` to select a database, or `db PATH` to switch inside the shell. `db PATH --create` initializes a new Flyji database. See the [admin guide](docs/admin.md) for unified `flights` browsing, `flight show/edit/delete/approve`, airport catalog management, and `search` using prompts, flags, or request JSON. Secondary tools live under `maintenance`, `inspect`, and `debug`. Reads leave the database unchanged.
 
-Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Counts include cancelled flights. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize or upgrade a database explicitly.
+Type `overview` in the shell (or run `python -m admin overview`) for a compact database summary: flights, distinct directed routes, airlines, airport catalog coverage, transfer rules, schedule range, fetch range, provider/status counts, and the five busiest routes by stored flight count. Stored-fact counts include cancelled and unreviewed candidates; searchable and
+review totals are separate. Use `overview --json` for structured output. It reads the database selected by `FLIGHT_DATABASE_PATH` without initializing or changing it; use `maintenance init` to initialize a database explicitly.
 
 ```sh
 python -m admin import-json var/flights.json
 python -m admin airports import var/airports.json
 python -m admin export-json var/flights-export.json
 python -m admin airports export var/airport-catalog.json
-python -m admin ingest --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
+python -m admin ingest csv run --csv var/feed.csv --airports YYZ YUL --start 2026-10-17 --end 2026-10-18
 python -m admin flights --origin YYZ --start 2026-10-17T00:00:00Z --end 2026-10-18T00:00:00Z
 ```
 
@@ -79,7 +88,7 @@ AeroDataBox ingestion requires `FLIGHT_PROVIDER_API_KEY`. Provider coverage, cac
 python -m admin maintenance clear-data --yes
 ```
 
-`maintenance clear-data` clears flights, airport metadata and transfer rules transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
+`maintenance clear-data` clears flights, airport metadata, transfer rules and any observed itinerary facts/resume state transactionally, preserving the database schema and other files. It only permits databases under this project's `var/`. Pause ingestion first if the database must stay empty.
 
 ## Development checks
 
@@ -93,6 +102,16 @@ python scripts/verify_package.py var/wheels/*.whl
 ```
 
 The wheel check installs the built package in a temporary environment and probes its CLI, API and bundled assets from outside the checkout. It reuses the current environment's third-party dependencies.
+
+Archive fixtures use explicit gzip `mtime=0` and synthetic tar metadata, so
+regenerating the same input cannot change its identity with the wall clock.
+Compute fixture digests from the generated bytes rather than hard-coding hashes
+across Python/zlib versions. Clock regression tests simulate older Python gzip
+defaults and move time forward/backward without sleeping; changed inputs and
+same-size corrupt downloads must still fail the production integrity checks.
+CI runs the suite and installed-wheel checks on Python 3.11, 3.13 and the deployed
+3.14 runtime. Randomized routing tests use explicit seeds, and archive/SQLite
+tests isolate their files in temporary directories.
 
 For browser tests, start the demo in another terminal, then run:
 

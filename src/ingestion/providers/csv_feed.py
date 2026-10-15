@@ -73,6 +73,7 @@ class CsvProvider(FlightProvider):
                         arrival_actual=optional_timestamp(row.get("arrival_actual")),
                         codeshares=json.loads(row["codeshares"]) if row.get("codeshares") else [],
                         status=FlightStatus(row.get("status") or "scheduled"),
+                        aircraft_type_code=row.get("aircraft_type_code") or None,
                         fetched_at=optional_timestamp(row.get("fetched_at"))
                         or datetime.now(timezone.utc),
                     )
