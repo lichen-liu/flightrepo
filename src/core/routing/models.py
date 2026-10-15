@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-ENGINE_VERSION = "routing-5"
+ENGINE_VERSION = "routing-6"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None
@@ -64,8 +64,8 @@ def validate_via_constraints(value, endpoints, avoided, max_legs, allow_airport_
         raise ValueError("via airports must be intermediate airports")
     if any(code in avoided for code in codes):
         raise ValueError("cannot avoid a required via airport")
-    capacity = (max_legs - 1) * (2 if allow_airport_change else 1)
-    if len(codes) > capacity:
+    capacity = (max_legs - 1) * (2 if allow_airport_change else 1) if max_legs is not None else None
+    if capacity is not None and len(codes) > capacity:
         raise ValueError("increase max_legs or allow airport changes to visit all via airports")
 
 
@@ -92,7 +92,7 @@ class RouteSearchRequest(BaseModel):
     departure_start: datetime
     departure_end: datetime
     horizon_end: datetime
-    max_legs: int = Field(default=3, ge=1, le=4)
+    max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
     maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44_640)
     allow_airport_change: bool = False

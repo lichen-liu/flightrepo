@@ -37,7 +37,7 @@
       <section class="search-section" aria-labelledby="page-title">
         <div class="heading-row">
           <h1 id="page-title">Flight routes</h1>
-          <span id="dataset-tag" class="tag">Connecting to data…</span>
+          <span id="dataset-tag" class="tag">Loading dataset statistics…</span>
         </div>
         <form id="search-form">
           <div class="search-grid">
@@ -55,11 +55,11 @@
                 autocapitalize="characters"
                 spellcheck="false"
                 data-airport-code
-                aria-describedby="origin-name"
+                aria-describedby="origin-name origin-coverage coverage-scope"
                 required
               /><span id="origin-name" class="airport-name"
                 >Three-letter airport code</span
-              ></label
+              ><span id="origin-coverage" class="airport-coverage" role="status" hidden></span></label
             >
             <button
               id="swap"
@@ -82,11 +82,11 @@
                 autocapitalize="characters"
                 spellcheck="false"
                 data-airport-code
-                aria-describedby="destination-name"
+                aria-describedby="destination-name destination-coverage coverage-scope"
                 required
               /><span id="destination-name" class="airport-name"
                 >Three-letter airport code</span
-              ></label
+              ><span id="destination-coverage" class="airport-coverage" role="status" hidden></span></label
             >
             <label
               >Departure date<input name="date" id="date" type="date" required
@@ -95,7 +95,10 @@
               Search flights
             </button>
           </div>
+          <p id="coverage-scope" class="small muted" hidden></p>
+          <p id="coverage-warning" class="small" role="status" hidden></p>
           <p id="date-availability" class="small" role="status">Loading departure dates…</p>
+          <button id="retry-dates" type="button" hidden>Retry departure dates</button>
           <div class="route-filter">
             <label
               >Via airports (optional)<span class="airport-list-input"><input
@@ -153,9 +156,10 @@
               /></label>
               <label
                 >Maximum stops<select name="stops">
+                  <option value="any" selected>Any number</option>
                   <option value="0">Nonstop</option>
                   <option value="1">1 stop</option>
-                  <option value="2" selected>2 stops</option>
+                  <option value="2">2 stops</option>
                   <option value="3">3 stops</option>
                 </select></label
               >
@@ -226,7 +230,7 @@
             <span id="result-count"></span>
           </div>
           <p id="applied-query" class="muted small">
-            Search the imported schedules.
+            Search the loaded flight records.
           </p>
           <p id="partial" class="notice" hidden></p>
           <div id="options">
@@ -253,7 +257,7 @@
                 role="img"
                 aria-label="World map. Choose a flight journey to display its route."
               ></svg
-              ><span class="map-caption" id="map-caption">Scheduled route</span>
+              ><span class="map-caption" id="map-caption">Flight route</span>
             </div>
             <div class="map-toolbar">
               <span id="map-info" class="small muted"
@@ -425,7 +429,7 @@
       </div>
       <footer>
         <span
-          >Scheduled flights · fares and seat availability are outside this
+          >Flight records · fares and seat availability are outside this
           explorer</span
         ><span
           >Coverage and commercial transfer suitability are unverified</span

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.connections import Airport, AirportTransfer
-from core.models import FlightRecord
+from core.models import FlightRecord, FlightStatus
 from core.routing.models import RoutingError
 from core.timezones import resolve_local
 from ingestion.updater import FlightUpdater
@@ -92,6 +92,273 @@ def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
     with demo[0].connect() as connection:
         connection.execute("UPDATE flights SET status='cancelled' WHERE origin_iata='YYZ'")
     assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
+
+
+def test_explicit_destination_date_filter_remains_available_to_api_clients(client, demo):
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={
+            "provider_id": "different-destination",
+            "destination_iata": "YVR",
+            "departure_scheduled": datetime.fromisoformat("2026-10-20T12:00:00Z"),
+            "arrival_scheduled": datetime.fromisoformat("2026-10-20T17:00:00Z"),
+        }
+    )
+    demo[0].upsert([record])
+    params = {"origin": "YYZ", "clock": "UTC", "time_basis": "scheduled"}
+    assert client.get("/v1/dates", params=params).json()["dates"] == [
+        "2026-10-17",
+        "2026-10-20",
+    ]
+    direct = client.get("/v1/dates", params={**params, "destination": "yvr"})
+    assert direct.status_code == 200
+    assert direct.json() == {
+        "origin": "YYZ",
+        "destination": "YVR",
+        "timezone": "UTC",
+        "dates": ["2026-10-20"],
+    }
+    assert client.get("/v1/dates", params={**params, "destination": "LHR"}).json()["dates"] == [
+        "2026-10-17",
+    ]
+    assert client.get("/v1/dates", params={**params, "destination": "bad-code"}).status_code == 422
+
+
+def test_calendar_includes_nearby_departures_to_any_destination(client, demo):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [
+            original.model_copy(
+                update={
+                    "provider_id": "nearby-late",
+                    "origin_iata": "LGW",
+                    "destination_iata": "NRT",
+                    "departure_scheduled": datetime.fromisoformat("2026-10-20T23:30:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-10-21T10:00:00Z"),
+                }
+            ),
+            original.model_copy(
+                update={
+                    "provider_id": "distant",
+                    "origin_iata": "AMS",
+                    "destination_iata": "NRT",
+                    "departure_scheduled": datetime.fromisoformat("2026-10-22T12:00:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-10-23T10:00:00Z"),
+                }
+            ),
+        ]
+    )
+    params = {"origin": "LHR", "include_nearby": True}
+    local = client.get("/v1/dates", params=params).json()
+    assert local["dates"] == ["2026-10-18", "2026-10-19", "2026-10-21"]
+    assert local["departure_airports"] == ["LHR", "LGW"]
+    assert local["nearby_radius_km"] == 100
+    assert local["timezone"] == "Europe/London"
+    utc = client.get("/v1/dates", params={**params, "clock": "UTC"}).json()
+    assert utc["dates"] == ["2026-10-18", "2026-10-19", "2026-10-20"]
+    assert client.get("/v1/dates?origin=LHR").json()["dates"] == ["2026-10-18", "2026-10-19"]
+    with demo[0].connect() as connection:
+        connection.execute("UPDATE flights SET status='cancelled' WHERE origin_iata='LHR'")
+    nearby_only = client.get("/v1/dates", params=params).json()
+    assert nearby_only["dates"] == ["2026-10-18", "2026-10-19", "2026-10-21"]
+    assert nearby_only["departure_airports"] == ["LGW"]
+
+
+def test_nearby_dates_fall_back_to_exact_origin_without_coordinates(client, demo):
+    with demo[0].connect() as connection:
+        connection.execute("UPDATE airports SET latitude=NULL,longitude=NULL WHERE iata='YYZ'")
+    data = client.get("/v1/dates?origin=YYZ&include_nearby=true").json()
+    assert data["dates"] == ["2026-10-17"]
+    assert data["departure_airports"] == ["YYZ"]
+    unknown = client.get("/v1/dates?origin=XYZ&include_nearby=true&clock=UTC").json()
+    assert unknown["dates"] == []
+    assert unknown["departure_airports"] == []
+
+
+def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_precision(client, demo):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    updated = original.model_copy(
+        update={
+            "departure_actual": original.departure_scheduled + timedelta(microseconds=123456),
+            "arrival_actual": original.arrival_scheduled + timedelta(microseconds=654321),
+            "fetched_at": original.fetched_at + timedelta(microseconds=123456),
+        }
+    )
+    demo[0].upsert([updated])
+    catalog = client.get("/v1/catalog").json()["dataset"]
+    assert catalog["flight_count"] == catalog["total_record_count"] == 12
+    assert catalog["time_bases"] == {"scheduled": 12, "observed": 0, "actual": 1}
+    assert datetime.fromisoformat(catalog["newest_fact_refresh"]) == updated.fetched_at
+
+
+def test_airport_coverage_counts_exact_airports_and_missing_directions(client, demo):
+    response = client.get("/v1/airport-coverage?airport=yyz&airport=NRT&time_basis=scheduled")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["time_basis"] == "scheduled"
+    for airport in result["airports"]:
+        code = airport["airport"]
+        inbound = sum(f["destination_iata"] == code for f in demo[2]["flights"])
+        outbound = sum(f["origin_iata"] == code for f in demo[2]["flights"])
+        assert airport == {
+            "airport": code,
+            "inbound": inbound,
+            "outbound": outbound,
+            "stored_inbound": inbound,
+            "stored_outbound": outbound,
+        }
+    assert result["airports"][0]["inbound"] == 0
+    assert result["airports"][1]["outbound"] == 0
+    assert client.get("/v1/airport-coverage?airport=XYZ").json()["airports"] == [
+        {
+            "airport": "XYZ",
+            "inbound": 0,
+            "outbound": 0,
+            "stored_inbound": 0,
+            "stored_outbound": 0,
+        }
+    ]
+    assert len(client.get("/v1/airport-coverage?airport=YYZ&airport=yyz").json()["airports"]) == 1
+    assert client.get("/v1/airport-coverage?airport=bad-code").status_code == 422
+    assert client.get("/v1/airport-coverage?airport=YYZ&time_basis=bad").status_code == 422
+    assert client.get("/v1/airport-coverage?airport=YYZ&airport=NRT&airport=LHR").status_code == 422
+    assert client.get("/v1/airport-coverage").status_code == 422
+
+
+def test_airport_coverage_distinguishes_stored_from_searchable_without_counting_deleted(
+    client, demo
+):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [
+            original.model_copy(update={"provider_id": "review-needed"}),
+            original.model_copy(
+                update={"provider_id": "cancelled", "status": FlightStatus.CANCELLED}
+            ),
+        ]
+    )
+    with demo[0].connect() as connection:
+        connection.execute(
+            "UPDATE flights SET review_reasons=? WHERE provider_id='review-needed'",
+            (json.dumps(["test review"]),),
+        )
+    observed = client.get("/v1/airport-coverage?airport=YYZ&time_basis=observed").json()
+    assert observed["airports"][0]["stored_outbound"] == 3
+    assert observed["airports"][0]["outbound"] == 0
+    scheduled = client.get("/v1/airport-coverage?airport=YYZ&time_basis=scheduled").json()
+    assert scheduled["airports"][0]["stored_outbound"] == 3
+    assert scheduled["airports"][0]["outbound"] == 1
+    with demo[0].connect() as connection:
+        connection.execute(
+            "INSERT INTO flight_tombstones(source_id,source_record_key,deleted_us) "
+            "SELECT source_id,source_record_key,last_seen_us FROM flight_legs "
+            "WHERE source_record_key='cancelled'"
+        )
+    assert (
+        client.get("/v1/airport-coverage?airport=YYZ").json()["airports"][0]["stored_outbound"] == 2
+    )
+
+
+def test_search_availability_uses_departure_day_and_destination_arrival_window(client, demo):
+    params = {
+        "origin": "YYZ",
+        "destination": "CDG",
+        "clock": "UTC",
+        "time_basis": "scheduled",
+        "departure_date": "2026-10-17",
+    }
+    response = client.get("/v1/search-availability", params=params)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["dates"] == ["2026-10-17"]
+    assert data["outbound"] == 1
+    assert data["inbound"] == 5
+    assert data["arrival_start"] == "2026-10-17T00:00:00Z"
+    assert data["arrival_end"] == "2026-10-25T00:00:00Z"
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [
+            original.model_copy(
+                update={
+                    "provider_id": "other-date",
+                    "departure_scheduled": datetime.fromisoformat("2026-12-01T12:00:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-12-01T18:00:00Z"),
+                }
+            ),
+            original.model_copy(
+                update={
+                    "provider_id": "past-inbound",
+                    "origin_iata": "AMS",
+                    "destination_iata": "CDG",
+                    "departure_scheduled": datetime.fromisoformat("2026-10-15T12:00:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-10-16T18:00:00Z"),
+                }
+            ),
+            original.model_copy(
+                update={
+                    "provider_id": "far-inbound",
+                    "origin_iata": "AMS",
+                    "destination_iata": "CDG",
+                    "departure_scheduled": datetime.fromisoformat("2026-11-01T12:00:00Z"),
+                    "arrival_scheduled": datetime.fromisoformat("2026-11-01T18:00:00Z"),
+                }
+            ),
+        ]
+    )
+    data = client.get("/v1/search-availability", params=params).json()
+    assert data["dates"] == ["2026-10-17"]
+    assert data["outbound"] == 1 and data["inbound"] == 5
+    no_arrivals = client.get(
+        "/v1/search-availability", params={**params, "destination": "XYZ"}
+    ).json()
+    assert (
+        no_arrivals["dates"] == [] and no_arrivals["outbound"] == 1 and no_arrivals["inbound"] == 0
+    )
+    no_departures = client.get("/v1/search-availability", params={**params, "origin": "XYZ"}).json()
+    assert no_departures["dates"] == [] and no_departures["outbound"] == 0
+
+
+@pytest.mark.parametrize("day,hours", [("2026-03-08", 23), ("2026-11-01", 25)])
+def test_search_availability_resolves_dst_and_counts_same_day_arrivals(client, demo, day, hours):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    first = datetime.fromisoformat(day + "T12:00:00Z")
+    demo[0].upsert(
+        [
+            original.model_copy(
+                update={
+                    "provider_id": "same-day",
+                    "destination_iata": "CDG",
+                    "departure_scheduled": first,
+                    "arrival_scheduled": first + timedelta(hours=2),
+                }
+            )
+        ]
+    )
+    data = client.get(
+        "/v1/search-availability",
+        params={
+            "origin": "YYZ",
+            "destination": "CDG",
+            "clock": "local",
+            "departure_date": day,
+        },
+    ).json()
+    assert data["selected_date"] == day and data["outbound"] == 1 and data["inbound"] >= 1
+    assert datetime.fromisoformat(data["arrival_end"]) - datetime.fromisoformat(
+        data["arrival_start"]
+    ) == timedelta(days=7, hours=hours)
+
+
+def test_bootstrap_does_not_wait_for_archive_counts(client, demo, monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("Bootstrap must not compute archive-wide counts")
+
+    monkeypatch.setattr(demo[1], "web_catalog", fail)
+    monkeypatch.setattr(demo[1], "_time_bases", fail)
+    result = client.get("/v1/bootstrap")
+    assert result.status_code == 200
+    assert result.json()["available_time_bases"] == ["scheduled"]
+    assert result.json()["default_time_basis"] == "scheduled"
+    assert len(result.json()["airports"]) == 8
 
 
 def test_aircraft_type_survives_storage_edit_and_serving(client, demo):

@@ -23,11 +23,13 @@ const field = (name) => form.elements.namedItem(name),
   editField = (name) => editorForm.elements.namedItem(name);
 const searchLane = new RequestLane(),
   catalogLane = new RequestLane(),
+  bootstrapLane = new RequestLane(),
   datesLane = new RequestLane(),
   editLane = new RequestLane();
 const firstCalendar = new DataCalendar(field("date")),
   lastCalendar = new DataCalendar(field("last-date"), { optional: true });
-let datesKey = null, availableDates = new Set();
+let datesKey = null, availableDates = new Set(), independentSearch = false;
+let availability = null;
 const map = new RouteMap($("route-map"), $("map-info"));
 const state = {
   catalog: null,
@@ -79,7 +81,7 @@ const timeBasisLabel = (basis) => ({
   observed: "Observed historical legs",
   actual: "Reported actual times",
 })[basis] || basis;
-const dateKey = () => `${airportCode(field("origin").value)}/${field("input-clock").value}/${field("time-basis").value}`;
+const dateKey = () => [airportCode(field("origin").value), airportCode(field("destination").value), field("input-clock").value, field("time-basis").value, field("date").value, field("last-date").value].join("/");
 function updateDatasetTag() {
   const data = state.catalog?.dataset;
   if (!data) return;
@@ -91,8 +93,14 @@ function updateDatasetTag() {
 }
 function updateSearchButton() {
   $("search-button").disabled = !!searchLane.controller ||
-    datesKey !== dateKey() || !availableDates.has(field("date").value) ||
+    datesKey !== dateKey() || !availability?.outbound || !availability?.inbound || !availableDates.has(field("date").value) ||
     !availableDates.has(field("last-date").value || field("date").value);
+}
+function updateWorkspaceState(empty) {
+  document.querySelector(".workspace").classList.toggle("empty-results", empty);
+  for (const button of document.querySelectorAll("[data-view]"))
+    if (button.tagName === "BUTTON") button.disabled = empty && button.dataset.view !== "options";
+  if (empty) setView("options");
 }
 function normalizeAirportInput(control) {
   const list = control.hasAttribute("data-airport-list"),
@@ -150,7 +158,7 @@ function updateViaSuggestions(open = false) {
   viaOptions = airportListSuggestions(
     control.value,
     control.selectionStart ?? control.value.length,
-    [...state.airports.keys()],
+    [...state.airports.keys()].filter((code) => ![airportCode(field("origin").value), airportCode(field("destination").value)].includes(code)),
   ).slice(0, 8);
   hideViaSuggestions();
   $("via-suggestions").innerHTML = viaOptions.map(({ code, value }, index) =>
@@ -207,6 +215,9 @@ function restore(values) {
   for (const [name, value] of Object.entries(values)) {
     const control = field(name);
     if (!control) continue;
+    if (name === "stops" && /^\d+$/.test(value) &&
+        ![...control.options].some((option) => option.value === value))
+      control.add(new Option(`${value} stops`, value));
     if (control.type === "checkbox") control.checked = value === "1";
     else control.value = value;
     if (control.hasAttribute("data-airport-code"))
@@ -234,46 +245,91 @@ function updateLastDates() {
   lastCalendar.setDates([...availableDates].filter((date) => date >= first && date <= addDate(first, 30)));
 }
 async function loadDates() {
-  const origin = airportCode(field("origin").value), clock = field("input-clock").value,
-    basis = field("time-basis").value, key = dateKey();
+  const origin = airportCode(field("origin").value), destination = airportCode(field("destination").value),
+    clock = field("input-clock").value, basis = field("time-basis").value, key = dateKey(),
+    requestedDate = field("date").value,
+    focusedDate = [field("date"), field("last-date")].includes(document.activeElement)
+      ? document.activeElement : null;
   if (key === datesKey) return;
   datesKey = key;
   datesLane.cancel();
+  availability = null;
   availableDates = new Set();
-  // Preserve the selection while loading, then check it against the new data.
+  $("retry-dates").hidden = true;
+  $("coverage-warning").hidden = true;
+  $("coverage-scope").hidden = false;
+  $("coverage-scope").textContent = "Checking departures on the selected date and destination arrivals within the search horizon…";
+  for (const name of ["origin", "destination"]) {
+    $(`${name}-coverage`).hidden = false;
+    $(`${name}-coverage`).textContent = "Checking flights…";
+  }
   firstCalendar.close();
   lastCalendar.close();
   field("date").disabled = field("last-date").disabled = true;
   $("search-button").disabled = true;
-  if (!/^[A-Z]{3}$/.test(origin)) {
-    $("date-availability").textContent = "Enter an origin to load available dates.";
+  if (![origin, destination].every((code) => /^[A-Z]{3}$/.test(code))) {
+    $("date-availability").textContent = "Enter an origin and destination to load available dates.";
+    for (const name of ["origin", "destination"]) $(`${name}-coverage`).hidden = true;
     return;
   }
   $("date-availability").textContent = "Loading departure dates…";
-  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${basis}`, undefined, (result) => {
+  const params = new URLSearchParams({ origin, destination, clock, time_basis: basis });
+  if (requestedDate) params.set("departure_date", requestedDate);
+  if (field("last-date").value) params.set("departure_last_date", field("last-date").value);
+  await datesLane.run(`/v1/search-availability?${params}`, undefined, (result) => {
+    availability = result;
     availableDates = new Set(result.dates);
-    firstCalendar.setDates(result.dates);
+    if (result.selected_date) field("date").value = result.selected_date;
+    firstCalendar.setDates(result.dates, { preserveEmptySelection: true });
     updateLastDates();
+    datesKey = dateKey();
     if (clock === "local" && state.airports.has(origin)) {
       state.airports.set(origin, { ...state.airports.get(origin), timezone: result.timezone });
       updateZones();
     }
+    $("origin-coverage").textContent = `Outbound: ${result.outbound.toLocaleString()} on ${result.selected_date || "the departure date"}`;
+    $("destination-coverage").textContent = `Inbound: ${result.inbound.toLocaleString()} within the arrival window`;
+    $("coverage-scope").textContent = `Searchable ${timeBasisLabel(basis).toLowerCase()} · exact airports · ${result.timezone}. Outbound uses the first departure date; inbound uses that date through 7 days after the departure window. Counts do not guarantee a connecting route.`;
+    const warnings = [];
+    if (!result.outbound) warnings.push(`No searchable departures from ${origin} on ${result.selected_date || "the departure date"}.`);
+    if (!result.inbound) warnings.push(`No searchable arrivals into ${destination} in this search window.`);
+    $("coverage-warning").textContent = warnings.join(" ");
+    $("coverage-warning").hidden = !warnings.length;
+    if (!result.outbound || !result.inbound)
+      field("date").disabled = field("last-date").disabled = true;
+    // Disabling an input during refresh removes focus in Chromium. Restore it
+    // only if the traveler has not moved to another control while waiting.
+    if (focusedDate && !focusedDate.disabled && document.activeElement === document.body)
+      focusedDate.focus();
     $("date-availability").textContent = result.dates.length
-      ? `${result.dates.length} departure dates with data from ${origin} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}. Disabled days have no matching departure data. Search checks routes to your destination.`
-      : `No departures loaded for ${origin} · ${timeBasisLabel(basis)} · ${result.timezone}. Try another origin or flight times.`;
+      ? `${result.dates.length} departure dates with data from ${origin} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}. Dates require departures from ${origin} and arrivals into ${destination} within the search horizon; no direct flight is required.`
+      : `No selectable departure dates for ${origin} → ${destination}. Dates need outbound flights and later destination arrivals within the search horizon.`;
+    if (requestedDate && result.dates.length && field("date").value !== requestedDate)
+      $("date-availability").textContent += ` No matching departure data on ${requestedDate}; selected ${field("date").value}.`;
+    if (!state.result) {
+      updateWorkspaceState(!result.dates.length);
+      $("options").innerHTML = result.dates.length
+        ? '<p class="empty">Choose departure dates and search to find a route.</p>'
+        : `<p class="empty">${e($("coverage-warning").textContent || $("date-availability").textContent)}</p>`;
+      $("applied-query").textContent = `${origin} → ${destination}${requestedDate ? ` · ${requestedDate}` : ""}`;
+      $("status").textContent = result.dates.length ? "Departure data loaded. Search to find a route." : "No eligible departure dates for this search.";
+    }
     updateSearchButton();
   }, (error) => {
     datesKey = null;
-    $("date-availability").textContent = `${errorMessage(error)} Change the origin or clock to retry.`;
+    $("date-availability").textContent = errorMessage(error);
+    for (const name of ["origin", "destination"]) $(`${name}-coverage`).textContent = "Flight counts unavailable.";
+    $("retry-dates").hidden = false;
   });
 }
+$("retry-dates").addEventListener("click", loadDates);
 function commonQuery() {
   const via = airportList(field("via").value);
   return {
     origin: airportCode(field("origin").value),
     destination: airportCode(field("destination").value),
     via_airport: via.length ? via : null,
-    max_legs: Number(field("stops").value) + 1,
+    max_legs: field("stops").value === "any" ? null : Number(field("stops").value) + 1,
     ranking: field("ranking").value,
     minimum_connection_minutes: Number(field("minimum").value),
     maximum_connection_minutes:
@@ -294,17 +350,16 @@ function searchRequest() {
   if (!first) throw Error("Choose a departure date.");
   if (datesKey !== dateKey() ||
       !availableDates.has(first) || !availableDates.has(last))
-    throw Error("Choose departure dates with data for this origin and clock.");
+    throw Error("Choose dates with origin departures and destination arrivals within the search horizon.");
   if (last < first)
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
     throw Error("Choose different origin and destination airports.");
-  const capacity = (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
+  const capacity = query.max_legs === null ? Infinity :
+    (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
   if ((query.via_airport?.length || 0) > capacity)
     throw Error(
-      query.max_legs < 4
-        ? "Increase Maximum stops under Search filters to visit all via airports."
-        : "Too many via airports for three stops. Use fewer codes or allow permitted airport changes.",
+      "Increase Maximum stops or choose Any number under Search filters to visit all via airports.",
     );
   for (const code of query.via_airport || []) {
     if ([query.origin, query.destination].includes(code))
@@ -349,7 +404,7 @@ async function search() {
   updateAirportNames();
   closeEditor();
   showError("error", "");
-  $("status").textContent = "Searching imported schedules…";
+  $("status").textContent = "Searching loaded flight data…";
   $("results").setAttribute("aria-busy", "true");
   $("search-button").disabled = true;
   await searchLane.run(
@@ -396,6 +451,7 @@ async function search() {
 function renderOptions() {
   const result = state.result;
   if (!result) return;
+  updateWorkspaceState(!result.items.length);
   $("result-count").textContent = result.diagnostics.result_limit_reached
     ? `${result.items.length} of ${result.diagnostics.stats.routes_found}${result.diagnostics.exhaustive ? "" : " examined"}`
     : String(result.items.length);
@@ -403,8 +459,11 @@ function renderOptions() {
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])} · ${result.query.max_legs === null ? "Any number of stops" : result.query.max_legs === 1 ? "Nonstop" : `Up to ${result.query.max_legs - 1} stops`}`;
   const d = result.diagnostics;
+  const noConnectingPath = d.exhaustive && result.query.max_legs === null &&
+    d.stats.candidates_checked > 0 &&
+    Object.keys(d.stats.rejections).every((reason) => reason === "destination_unreachable");
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
     x === "data_limit"
@@ -431,7 +490,7 @@ function renderOptions() {
     </button>`;
         })
         .join("")
-    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<p class="empty">${noConnectingPath ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} in the loaded data for this window. Stop count is unrestricted. Try different dates or a different destination.` : d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -458,7 +517,7 @@ function renderJourney({ preserveView = false } = {}) {
   if (
     legs.length &&
     !selected.complete &&
-    legs.length < state.result.query.max_legs
+    (state.result.query.max_legs === null || legs.length < state.result.query.max_legs)
   )
     $("legs").insertAdjacentHTML(
       "beforeend",
@@ -502,7 +561,7 @@ function updateCursor() {
     }
   }
   $("cursor-time").textContent = stamp(state.cursor, "UTC");
-  $("cursor-detail").textContent = `${detail} · schedule illustration`;
+  $("cursor-detail").textContent = `${detail} · journey illustration`;
   map.setCursor(state.cursor);
   drawTimeline($("timeline"), legs, state.cursor);
 }
@@ -740,9 +799,10 @@ form.addEventListener("submit", (event) => {
 });
 form.addEventListener("input", (event) => {
   if (!event.target.hasAttribute("data-airport-code")) return;
+  independentSearch = true;
   normalizeAirportInput(event.target);
   updateZones();
-  if (event.target === field("origin")) loadDates();
+  if ([field("origin"), field("destination")].includes(event.target)) loadDates();
   if (event.target.hasAttribute("data-airport-list")) updateViaSuggestions(true);
   closeEditor();
   if (state.result)
@@ -750,6 +810,7 @@ form.addEventListener("input", (event) => {
       "Inputs changed. Search to apply them; previous results remain visible.";
 });
 form.addEventListener("change", (event) => {
+  independentSearch = true;
   updateZones();
   if (event.target === field("date")) updateLastDates();
   if (event.target === field("time-basis")) updateDatasetTag();
@@ -878,7 +939,7 @@ $("undo").addEventListener("click", () => {
   renderOptions();
   renderJourney();
   $("status").textContent =
-    "Previous journey restored from its saved facts. Search again to refresh schedules.";
+    "Previous journey restored from its saved facts. Search again to refresh flight data.";
 });
 $("display-clock").addEventListener("change", () => {
   renderOptions();
@@ -971,69 +1032,48 @@ $("export").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 async function loadCatalog() {
-  showError("error", "");
+  await catalogLane.run("/v1/catalog", undefined, (catalog) => {
+    state.catalog = catalog;
+    updateDatasetTag();
+    renderEvidence();
+  }, () => { $("dataset-tag").textContent = "Dataset statistics unavailable; search remains available."; });
+}
+async function loadBootstrap() {
   $("retry-catalog").hidden = true;
-  $("search-button").disabled = true;
-  await catalogLane.run(
-    "/v1/catalog",
-    undefined,
-    async (catalog) => {
-      state.catalog = catalog;
-      state.airports = new Map(catalog.airports.map((a) => [a.iata, a]));
-      map.setAirports(catalog.airports);
-      $("airport-suggestions").innerHTML = catalog.airports
-        .map(
-          (a) =>
-            `<option value="${e(a.iata)}" label="${e(a.name || a.iata)}"></option>`,
-        )
-        .join("");
-      const codes = catalog.airports.map((a) => a.iata);
+  await bootstrapLane.run("/v1/bootstrap", undefined, async (bootstrap) => {
+    state.airports = new Map(bootstrap.airports.map((a) => [a.iata, a]));
+    map.setAirports(bootstrap.airports);
+    $("airport-suggestions").innerHTML = bootstrap.airports.map((a) =>
+      `<option value="${e(a.iata)}" label="${e(a.name || a.iata)}"></option>`).join("");
+    if (!independentSearch) {
+      const codes = bootstrap.airports.map((a) => a.iata);
       field("origin").value = codes.includes("YYZ") ? "YYZ" : codes[0] || "";
-      field("destination").value = codes.includes("CDG")
-        ? "CDG"
-        : codes.find((c) => c !== field("origin").value) || "";
-      field("time-basis").value = catalog.dataset.default_time_basis || "scheduled";
-      for (const option of field("time-basis").options)
-        option.disabled = !!catalog.dataset.time_bases && !catalog.dataset.time_bases[option.value];
-      if (field("time-basis").value !== "scheduled" && catalog.suggested_route) {
-        field("origin").value = catalog.suggested_route.origin_iata;
-        field("destination").value = catalog.suggested_route.destination_iata;
+      field("destination").value = codes.includes("CDG") ? "CDG" : codes.find((c) => c !== field("origin").value) || "";
+      field("time-basis").value = bootstrap.default_time_basis;
+      if (bootstrap.default_time_basis !== "scheduled" && bootstrap.suggested_route) {
+        field("origin").value = bootstrap.suggested_route.origin_iata;
+        field("destination").value = bootstrap.suggested_route.destination_iata;
       }
-      if (!state.airports.get(field("origin").value)?.timezone)
-        field("input-clock").value = "UTC";
-      const first = catalog.dataset.first_departure || new Date().toISOString();
-      field("date").value = localDate(first, inputZone(field("origin").value));
-      const fromURL = Object.fromEntries(new URLSearchParams(location.search));
-      restore(fromURL);
-      updateZones();
-      const hasFlights = catalog.dataset.flight_count;
-      updateDatasetTag();
-      $("status").textContent = hasFlights
-        ? catalog.dataset.default_time_basis === "observed" ? "Historical observations with inferred time bounds; coverage is partial." : "Dates are based on the imported flight records."
-        : catalog.dataset.needs_review_count ? "Itinerary estimates await admin review. No searchable flights yet." : "No flight records loaded. Import data with the internal client to begin.";
-      if (catalog.airports_truncated)
-        $("status").textContent +=
-          " Suggestions limited to 1,000 airports; enter any exact code.";
+      if (!state.airports.get(field("origin").value)?.timezone) field("input-clock").value = "UTC";
+      field("date").value = localDate(bootstrap.first_departure || new Date().toISOString(), inputZone(field("origin").value));
+      restore(Object.fromEntries(new URLSearchParams(location.search)));
+    }
+    for (const option of field("time-basis").options)
+      option.disabled = !bootstrap.available_time_bases.includes(option.value);
+    updateZones();
+    if (!independentSearch) {
       datesKey = null;
       await loadDates();
-      renderEvidence();
-      if (
-        hasFlights &&
-        availableDates.size &&
-        field("origin").value &&
-        field("destination").value
-      )
-        search();
-    },
-    (error) => {
-      showError("error", errorMessage(error));
-      $("status").textContent =
-        "Data connection unavailable. The page remains usable after retry.";
-      $("retry-catalog").hidden = false;
-    },
-  );
+      if (!independentSearch && availableDates.size && availability?.outbound && availability?.inbound) search();
+    }
+  }, (error) => {
+    showError("error", errorMessage(error));
+    $("status").textContent = "Airport defaults unavailable. Retry or use an exact UTC search link.";
+    $("retry-catalog").hidden = false;
+  });
+  loadCatalog();
 }
-$("retry-catalog").addEventListener("click", loadCatalog);
+$("retry-catalog").addEventListener("click", loadBootstrap);
 map
   .load()
   .catch((error) =>
@@ -1042,4 +1082,17 @@ map
       `${error.message} Flight details and connection editing remain available.`,
     ),
   );
-loadCatalog();
+// Explicit UTC links can load their route dates immediately. Catalog metadata
+// and archive-wide counts must not block or overwrite a user's linked search.
+const linkedValues = Object.fromEntries(new URLSearchParams(location.search));
+independentSearch = linkedValues["input-clock"] === "UTC" &&
+  [linkedValues.origin, linkedValues.destination].every((code) => /^[a-z]{3}$/i.test(code || "")) &&
+  ["scheduled", "observed", "actual"].includes(linkedValues["time-basis"]) &&
+  /^\d{4}-\d{2}-\d{2}$/.test(linkedValues.date || "");
+if (independentSearch) {
+  restore(linkedValues);
+  updateZones();
+}
+loadBootstrap();
+if (independentSearch)
+  loadDates().then(() => { if (availableDates.size) search(); });

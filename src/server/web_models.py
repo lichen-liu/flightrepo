@@ -31,7 +31,7 @@ class LocalRouteSearchRequest(BaseModel):
     arrival_fold: Literal[0, 1] | None = None
     departure_timezone: str | None = None
     arrival_timezone: str | None = None
-    max_legs: int = Field(default=3, ge=1, le=4)
+    max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
     maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44640)
     allow_airport_change: bool = False
@@ -193,15 +193,58 @@ class WebCatalog(BaseModel):
     suggested_route: dict | None = None
 
 
+class AirportTraffic(BaseModel):
+    airport: str
+    inbound: int
+    outbound: int
+    stored_inbound: int
+    stored_outbound: int
+
+
+class AirportCoverage(BaseModel):
+    time_basis: TimeBasis
+    airports: list[AirportTraffic]
+
+
+class SearchAvailability(BaseModel):
+    origin: str
+    destination: str
+    timezone: str
+    time_basis: TimeBasis
+    dates: list[date]
+    selected_date: date | None
+    outbound: int
+    inbound: int
+    arrival_start: datetime | None
+    arrival_end: datetime | None
+
+
+class WebBootstrap(BaseModel):
+    airports: list[CatalogAirport]
+    airports_truncated: bool
+    default_time_basis: TimeBasis
+    available_time_bases: list[TimeBasis]
+    first_departure: datetime | None
+    suggested_route: dict | None
+
+
 class AvailableDates(BaseModel):
     origin: str
+    destination: str | None = None
     timezone: str
     dates: list[date]
     time_basis: TimeBasis = "scheduled"
+    departure_airports: list[str] | None = None
+    nearby_radius_km: int | None = None
 
     @model_serializer(mode="wrap")
     def legacy_schedule(self, handler):
         data = handler(self)
         if self.time_basis == "scheduled":
             data.pop("time_basis", None)
+        if self.destination is None:
+            data.pop("destination", None)
+        if self.departure_airports is None:
+            data.pop("departure_airports", None)
+            data.pop("nearby_radius_km", None)
         return data

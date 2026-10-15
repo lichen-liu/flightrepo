@@ -3,6 +3,8 @@
 import json
 import random
 from datetime import UTC, datetime, timedelta, timezone
+from itertools import islice, product
+from string import ascii_uppercase
 
 import pytest
 from fastapi.testclient import TestClient
@@ -62,6 +64,123 @@ def identity(legs):
     return tuple((f.provider, f.provider_id) for f in legs)
 
 
+def chain(count):
+    codes = ["".join(code) for code in islice(product(ascii_uppercase, repeat=3), count + 1)]
+    return tuple(
+        flight(i, a, b, i * 2, i * 2 + 1) for i, (a, b) in enumerate(zip(codes, codes[1:]))
+    )
+
+
+@pytest.mark.parametrize("count", [6, 1100])
+def test_unbounded_search_and_rebuild_have_no_stop_or_recursion_ceiling(count):
+    records = chain(count)
+    destination = records[-1].destination_iata
+    request = query(destination=destination, max_legs=None, minimum_connection_minutes=1)
+    result = search_routes(request, RoutingSnapshot(records))
+    assert result.diagnostics.exhaustive
+    assert identity(result.items[0].legs) == identity(records)
+    plan = rebuild_from_snapshot(
+        RebuildRequest(
+            prefix=[{"provider": "test", "provider_id": "0"}],
+            destination=destination,
+            horizon_end=request.horizon_end,
+            window={"minimum_minutes": 1},
+        ),
+        RoutingSnapshot(records),
+    )
+    assert plan.complete and plan.diagnostics.exhaustive
+    assert identity(plan.legs) == identity(records)
+    assert not search_routes(
+        request.model_copy(update={"max_legs": 4}), RoutingSnapshot(records)
+    ).items
+
+
+def test_unbounded_reader_and_utc_local_legacy_and_rebuild_apis(tmp_path):
+    records = chain(6)
+    destination = records[-1].destination_iata
+    updater = FlightUpdater(tmp_path / "long-routes.db")
+    updater.initialize()
+    updater.upsert(list(records))
+    updater.update_airports([Airport(iata="AAA", name="Start", timezone="UTC")], [])
+    reader = FlightReader(updater.path)
+    request = query(destination=destination, max_legs=None, minimum_connection_minutes=1)
+    assert len(reader.search_itineraries(request).items[0].legs) == 6
+    assert len(reader.routing_snapshot(request).flights) == 6
+    app.dependency_overrides[get_store] = lambda: reader
+    try:
+        with TestClient(app) as client:
+            payload = request.model_dump(mode="json")
+            payload.pop("max_legs")
+            utc = client.post("/v1/itineraries/search", json=payload)
+            assert utc.status_code == 200, utc.text
+            assert utc.json()["query"]["max_legs"] is None
+            assert len(utc.json()["items"][0]["legs"]) == 6
+            local = client.post(
+                "/v1/itineraries/search/local",
+                json={
+                    "origin": "AAA",
+                    "destination": destination,
+                    "departure_date": "2026-01-01",
+                    "minimum_connection_minutes": 1,
+                },
+            )
+            assert local.status_code == 200, local.text
+            assert len(local.json()["items"][0]["legs"]) == 6
+            legacy = client.get(
+                "/v1/itineraries",
+                params={
+                    "origin": "AAA",
+                    "destination": destination,
+                    "start": BASE.isoformat(),
+                    "end": (BASE + timedelta(days=1)).isoformat(),
+                    "min_connection_minutes": 20,
+                    "max_legs": 20,
+                },
+            )
+            assert legacy.status_code == 200, legacy.text
+            rebuilt = client.post(
+                "/v1/plans/rebuild",
+                json={
+                    "prefix": [
+                        {"provider": f.provider, "provider_id": f.provider_id} for f in records[:5]
+                    ],
+                    "destination": destination,
+                    "horizon_end": request.horizon_end.isoformat(),
+                    "window": {"minimum_minutes": 1},
+                },
+            )
+            assert rebuilt.status_code == 200, rebuilt.text
+            assert rebuilt.json()["complete"] and len(rebuilt.json()["legs"]) == 6
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_unbounded_search_preserves_cycle_prevention_and_budget_diagnostics(tmp_path):
+    records = chain(6)
+    cycle = flight("cycle", records[3].origin_iata, records[0].origin_iata, 6, 7)
+    request = query(
+        destination=records[-1].destination_iata, max_legs=None, minimum_connection_minutes=1
+    )
+    result = search_routes(request, RoutingSnapshot((*records, cycle)))
+    assert identity(result.items[0].legs) == identity(records)
+    assert result.diagnostics.stats.rejections["airport_cycle"] == 1
+    limited = request.model_copy(
+        update={"limits": request.limits.model_copy(update={"max_candidates": 2})}
+    )
+    partial = search_routes(limited, RoutingSnapshot(records))
+    assert not partial.diagnostics.exhaustive
+    assert partial.diagnostics.termination_reasons == ["candidate_limit"]
+    updater = FlightUpdater(tmp_path / "limited.db")
+    updater.initialize()
+    updater.upsert(list(records))
+    data_limited = request.model_copy(
+        update={"limits": request.limits.model_copy(update={"max_records": 3})}
+    )
+    loaded = FlightReader(updater.path).search_itineraries(data_limited)
+    assert not loaded.diagnostics.exhaustive
+    assert loaded.diagnostics.termination_reasons == ["data_limit"]
+
+
 def airport(code, city):
     return Airport(iata=code, name=code, city_id=city, timezone="UTC", latitude=0, longitude=0)
 
@@ -101,7 +220,7 @@ def oracle_paths(records, request, airports=(), transfers=(), prefix=(), active_
             if oracle_via_satisfied(legs, request.via_airport):
                 found.append(legs)
             return
-        if len(legs) >= request.max_legs:
+        if request.max_legs is not None and len(legs) >= request.max_legs:
             return
         for f in records:
             if (

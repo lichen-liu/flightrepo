@@ -90,7 +90,7 @@ class ConnectionWindow(BaseModel):
 
 class RebuildRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    prefix: list[FlightRef] = Field(min_length=1, max_length=4)
+    prefix: list[FlightRef] = Field(min_length=1)
     destination: str = Field(pattern=r"^[A-Z]{3}$")
     horizon_end: datetime
     window: ConnectionWindow = Field(default_factory=ConnectionWindow)
@@ -104,7 +104,7 @@ class RebuildRequest(BaseModel):
         description="Exact destination IATA airport of the immediately next flight only.",
     )
     avoid_airports: list[str] = Field(default_factory=list, max_length=50)
-    max_legs: int = Field(default=4, ge=1, le=4)
+    max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     chosen_next: FlightRef | None = None
     option_limit: int = Field(default=100, ge=1, le=500)
     trace: bool = False

@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -24,11 +24,14 @@ from core.routing.models import (
 from core.routing.results import RouteSearchResult
 from server.reader import FlightReader
 from server.web_models import (
+    AirportCoverage,
     AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
     ResolvedTime,
     ResolveTimeRequest,
+    SearchAvailability,
+    WebBootstrap,
     WebCatalog,
 )
 
@@ -104,15 +107,54 @@ def catalog(store: FlightReader = Depends(get_store)) -> WebCatalog:
     return store.web_catalog()
 
 
+@app.get("/v1/bootstrap", response_model=WebBootstrap)
+def bootstrap(store: FlightReader = Depends(get_store)):
+    return store.web_bootstrap()
+
+
+@app.get("/v1/search-availability", response_model=SearchAvailability)
+def search_availability(
+    origin: str,
+    destination: str,
+    clock: Literal["local", "UTC"] = "local",
+    time_basis: TimeBasis | None = None,
+    departure_date: date | None = None,
+    departure_last_date: date | None = None,
+    store: FlightReader = Depends(get_store),
+):
+    try:
+        return store.search_availability(
+            origin, destination, clock, time_basis, departure_date, departure_last_date
+        )
+    except ValueError as error:
+        raise routing_http_error(error) from error
+
+
 @app.get("/v1/dates", response_model=AvailableDates)
 def available_dates(
     origin: str,
     clock: Literal["local", "UTC"] = "local",
     time_basis: TimeBasis | None = None,
+    destination: str | None = None,
+    include_nearby: bool = False,
     store: FlightReader = Depends(get_store),
 ):
     try:
-        return store.available_dates(origin, clock, time_basis)
+        return store.available_dates(
+            origin, clock, time_basis, destination=destination, include_nearby=include_nearby
+        )
+    except ValueError as error:
+        raise routing_http_error(error) from error
+
+
+@app.get("/v1/airport-coverage", response_model=AirportCoverage)
+def airport_coverage(
+    airport: Annotated[list[str], Query(min_length=1, max_length=2)],
+    time_basis: TimeBasis | None = None,
+    store: FlightReader = Depends(get_store),
+):
+    try:
+        return store.airport_coverage(airport, time_basis)
     except ValueError as error:
         raise routing_http_error(error) from error
 
@@ -238,7 +280,7 @@ def itineraries(
     destination: str,
     start: datetime,
     end: datetime,
-    max_legs: Annotated[int, Query(ge=1, le=3)] = 2,
+    max_legs: Annotated[int | None, Query(ge=1)] = None,
     min_connection_minutes: Annotated[int, Query(ge=20, le=360)] = 45,
     max_connection_minutes: Annotated[int, Query(ge=60, le=1440)] = 360,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,

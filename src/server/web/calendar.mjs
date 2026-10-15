@@ -91,13 +91,13 @@ export class DataCalendar {
       if (!input.parentElement.contains(event.relatedTarget)) this.close();
     });
   }
-  setDates(dates) {
+  setDates(dates, { preserveEmptySelection = false } = {}) {
     this.close();
     this.dates = [...new Set(dates)].sort();
     this.available = new Set(this.dates);
     this.months = [...new Set(this.dates.map((date) => date.slice(0, 7)))];
     this.input.disabled = !this.dates.length;
-    if (!this.available.has(this.input.value))
+    if (!this.available.has(this.input.value) && !(preserveEmptySelection && !this.dates.length))
       this.input.value = this.optional ? "" : this.dates[0] || "";
   }
   open() {
@@ -120,6 +120,9 @@ export class DataCalendar {
       offset = new Date(`${this.month}-01T00:00:00Z`).getUTCDay();
     for (const [selector, month] of [["[data-calendar-previous]", previous], ["[data-calendar-next]", next]]) {
       const button = this.panel.querySelector(selector);
+      // Chromium blurs a focused button when it becomes disabled. Keep focus
+      // inside the calendar before disabling a navigation boundary.
+      if (!month && button === document.activeElement) this.monthControl.focus();
       button.disabled = !month;
       button.dataset.month = month || "";
     }
@@ -133,7 +136,7 @@ export class DataCalendar {
       count = days.filter((day) => day.enabled).length;
     const grid = this.panel.querySelector(".calendar-grid");
     if (grid.contains(document.activeElement)) this.monthControl.focus();
-    grid.innerHTML = `${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => `<span>${day}</span>`).join("")}${"<span></span>".repeat(offset)}${days.map(({ date, day, enabled }) => `<button type="button" data-date="${date}" aria-label="${date}${enabled ? "" : ": no departure data"}" aria-pressed="${date === this.input.value}" ${enabled ? "" : "disabled"}>${day}</button>`).join("")}`;
+    grid.innerHTML = `${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => `<span>${day}</span>`).join("")}${"<span></span>".repeat(offset)}${days.map(({ date, day, enabled }) => `<button type="button" data-date="${date}" aria-label="${date}${enabled ? "" : ": no matching flight data"}" aria-pressed="${date === this.input.value}" ${enabled ? "" : "disabled"}>${day}</button>`).join("")}`;
     this.panel.querySelector(".calendar-summary").textContent =
       `${count} selectable departure date${count === 1 ? "" : "s"} this month. Months without selectable dates are omitted.${this.optional ? " Last date must be within 30 days of the first." : ""}`;
   }

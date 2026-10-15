@@ -102,6 +102,18 @@ async function chooseDate(page, name, date) {
   await page.locator(`#${name}-calendar button[data-date="${date}"]`).click();
 }
 
+async function fulfillAvailability(route, data) {
+  const params = new URL(route.request().url()).searchParams,
+    dates = data.dates || [], requested = params.get("departure_date");
+  await route.fulfill({ json: {
+    origin: params.get("origin"), destination: params.get("destination"),
+    time_basis: params.get("time_basis"), timezone: "UTC",
+    selected_date: dates.includes(requested) ? requested : dates[0] || requested,
+    outbound: dates.length ? 1 : 0, inbound: dates.length ? 5 : 0,
+    ...data,
+  } });
+}
+
 check("flight details show the flight's stored aircraft type code", async (page) => {
   await page.route("**/v1/itineraries/search/local", async (route) => {
     const response = await route.fetch(), data = await response.json();
@@ -112,10 +124,30 @@ check("flight details show the flight's stored aircraft type code", async (page)
   await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
 });
 
+check("stop count defaults to unbounded and survives links exports and connection editing", async (page) => {
+  const initial = await open(page);
+  assert.equal(initial.query.max_legs, null);
+  await expect(page.getByLabel("Maximum stops")).toHaveValue("any");
+  assert.equal(new URL(page.url()).searchParams.get("stops"), "any");
+  assert.equal((await exported(page)).query.max_legs, null);
+  await edit(page);
+  const pending = page.waitForRequest((request) => new URL(request.url()).pathname === "/v1/plans/rebuild");
+  await next(page);
+  assert.equal((await pending).postDataJSON().max_legs, null);
+  await result(page, searchPath, () => page.goto(`${base}?stops=5`));
+  await expect(page.getByLabel("Maximum stops")).toHaveValue("5");
+  const finite = await search(page);
+  assert.equal(finite.query.max_legs, 6);
+  await page.locator("#search-details > summary").click();
+  await page.getByLabel("Maximum stops").selectOption("any");
+  const unlimited = await search(page);
+  assert.equal(unlimited.query.max_legs, null);
+});
+
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
-  await page.route("**/v1/dates?*", async (route) => {
+  await page.route("**/v1/search-availability?*", async (route) => {
     const origin = new URL(route.request().url()).searchParams.get("origin");
-    await route.fulfill({ json: { origin, timezone: "America/Toronto", dates: origin === "YYZ" ? ["2026-10-17", "2026-10-19"] : [] } });
+    await fulfillAvailability(route, { origin, timezone: "America/Toronto", dates: origin === "YYZ" ? ["2026-10-17", "2026-10-19"] : [] });
   });
   await result(page, searchPath, () => page.goto(`${base}?date=2025-01-01`));
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
@@ -126,30 +158,93 @@ check("calendar disables gaps, repairs unavailable links, and handles origins wi
   await expect(page.locator("#date-calendar")).toBeHidden();
   await expect(page.locator("#date")).toBeFocused();
   await page.getByLabel("From", { exact: true }).fill("XYZ");
-  await expect(page.locator("#date-availability")).toContainText("No departures");
+  await expect(page.locator("#coverage-warning")).toContainText("No searchable departures");
   await expect(page.locator("#date")).toBeDisabled();
   await expect(page.locator("#search-button")).toBeDisabled();
 });
 
+check("counts follow the departure date and zero inbound disables every calendar", async (page) => {
+  await open(page);
+  await expect(page.locator("#origin-coverage")).toHaveText("Outbound: 1 on 2026-10-17");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
+  await expect(page.locator("#origin-coverage")).not.toContainText("Inbound");
+  await expect(page.locator("#destination-coverage")).not.toContainText("Outbound");
+  await expect(page.locator("#coverage-scope")).toContainText("7 days after the departure window");
+  await page.getByLabel("To", { exact: true }).fill("XYZ");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 0");
+  await expect(page.locator("#coverage-warning")).toContainText("No searchable arrivals into XYZ");
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator('[name="last-date"]')).toBeDisabled();
+  await expect(page.locator("#search-button")).toBeDisabled();
+  await page.getByLabel("To", { exact: true }).fill("CDG");
+  await expect(page.locator("#date")).toBeEnabled();
+  await expect(page.locator("#search-button")).toBeEnabled();
+});
+
+check("slow dataset statistics do not block initial search", async (page) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/v1/catalog", async (route) => { await gate; await route.continue(); });
+  try {
+    await open(page);
+    await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
+    await expect(page.locator("#search-button")).toBeEnabled();
+  } finally { release(); }
+  await expect(page.locator("#dataset-tag")).toContainText("Published schedules");
+});
+
+check("changing departure date refreshes both directional counts", async (page) => {
+  await page.route("**/v1/search-availability?*", async (route) => {
+    const day = new URL(route.request().url()).searchParams.get("departure_date");
+    await fulfillAvailability(route, {
+      timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"],
+      outbound: day === "2026-10-19" ? 7 : 1,
+      inbound: day === "2026-10-19" ? 2 : 5,
+    });
+  });
+  await open(page);
+  await chooseDate(page, "date", "2026-10-19");
+  await expect(page.locator("#origin-coverage")).toHaveText("Outbound: 7 on 2026-10-19");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 2");
+});
+
+check("delayed bootstrap preserves user input", async (page) => {
+  let release, intercepted;
+  const gate = new Promise((resolve) => { release = resolve; }),
+    started = new Promise((resolve) => { intercepted = resolve; });
+  await page.route("**/v1/bootstrap", async (route) => { intercepted(); await gate; await route.continue(); });
+  await page.goto(base);
+  await started;
+  await page.getByLabel("From", { exact: true }).fill("LHR");
+  await page.getByLabel("To", { exact: true }).fill("NRT");
+  await page.getByLabel("Input clock").selectOption("UTC");
+  release();
+  await expect(page.locator("#origin-coverage")).toContainText("Outbound:");
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue("LHR");
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("NRT");
+});
+
 check("date availability failures remain disabled until a retry succeeds", async (page) => {
   let fail = true;
-  await page.route("**/v1/dates?*", (route) => fail
+  await page.route("**/v1/search-availability?*", (route) => fail
     ? route.fulfill({ status: 503, json: { detail: "Date data unavailable" } })
     : route.continue());
   await page.goto(base);
   await expect(page.locator("#date-availability")).toContainText("Date data unavailable");
   await expect(page.locator("#search-button")).toBeDisabled();
   fail = false;
-  await page.getByLabel("Input clock").selectOption("UTC");
-  await expect(page.locator("#date-availability")).toContainText("UTC");
+  await page.getByRole("button", { name: "Retry departure dates" }).click();
+  await expect(page.locator("#date-availability")).toContainText("America/Toronto");
   await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(page.locator("#retry-dates")).toBeHidden();
+  await expect(page.getByLabel("Input clock")).toHaveValue("local");
 });
 
 check("calendar month controls stay open across sparse months and years", async (page) => {
-  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
     origin: "YYZ", timezone: "America/Toronto",
     dates: ["2026-10-17", "2026-11-18", "2027-02-19"],
-  } }));
+  }));
   await open(page);
   const calendar = page.locator("#date-calendar"),
     month = calendar.getByRole("combobox", { name: "Month with departure data" }),
@@ -166,6 +261,10 @@ check("calendar month controls stay open across sparse months and years", async 
   await expect(next).toBeDisabled();
   await previous.click();
   await expect(month).toHaveValue("2026-11");
+  await previous.click();
+  await expect(calendar).toBeVisible();
+  await expect(previous).toBeDisabled();
+  await expect(month).toHaveValue("2026-10");
   await month.selectOption("2026-10");
   await expect(calendar).toBeVisible();
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
@@ -183,10 +282,10 @@ check("calendar month controls stay open across sparse months and years", async 
 });
 
 check("last departure calendar navigates months within the selected range", async (page) => {
-  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
     origin: "YYZ", timezone: "America/Toronto",
     dates: ["2026-10-17", "2026-11-01", "2026-11-16", "2026-12-01"],
-  } }));
+  }));
   await open(page);
   await page.locator("#search-details > summary").click();
   const input = page.locator('[name="last-date"]'),
@@ -208,22 +307,51 @@ check("last departure calendar navigates months within the selected range", asyn
   await expect(calendar).toBeHidden();
 });
 
+check("date refresh does not steal focus when the traveler moves to another input", async (page) => {
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
+    timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"],
+  }));
+  await open(page);
+  let release, intercepted;
+  const gate = new Promise((resolve) => { release = resolve; }),
+    started = new Promise((resolve) => { intercepted = resolve; });
+  await page.route("**/v1/search-availability?*", async (route) => {
+    intercepted();
+    await gate;
+    await fulfillAvailability(route, {
+      timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"],
+    });
+  });
+  try {
+    await chooseDate(page, "date", "2026-10-19");
+    await started;
+    await page.getByLabel("To", { exact: true }).focus();
+  } finally { release(); }
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(page.getByLabel("To", { exact: true })).toBeFocused();
+});
+
 check("availability and counts follow the selected flight times without duplicate requests", async (page) => {
   await page.route("**/v1/catalog", async (route) => {
     const response = await route.fetch(), data = await response.json();
     data.dataset.time_bases = { scheduled: 12, observed: 3, actual: 1 };
     await route.fulfill({ response, json: data });
   });
+  await page.route("**/v1/bootstrap", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.available_time_bases = ["scheduled", "observed", "actual"];
+    await route.fulfill({ response, json: data });
+  });
   const dateRequests = [];
-  await page.route("**/v1/dates?*", async (route) => {
+  await page.route("**/v1/search-availability?*", async (route) => {
     const params = new URL(route.request().url()).searchParams,
       basis = params.get("time_basis");
     dateRequests.push(basis);
-    await route.fulfill({ json: {
+    await fulfillAvailability(route, {
       origin: params.get("origin"),
       timezone: params.get("clock") === "UTC" ? "UTC" : "America/Toronto",
       dates: basis === "observed" ? ["2025-01-02"] : basis === "actual" ? [] : ["2026-10-17"],
-    } });
+    });
   });
   await open(page);
   const times = page.getByLabel("Flight times"),
@@ -238,9 +366,9 @@ check("availability and counts follow the selected flight times without duplicat
   await search(page);
   await expect(page.locator("#applied-query")).toContainText("Observed historical legs");
   await times.selectOption("actual");
-  await expect(availability).toContainText("No departures loaded for YYZ · Reported actual times");
+  await expect(availability).toContainText("No selectable departure dates for YYZ → CDG");
   await expect(page.locator("#date")).toBeDisabled();
-  await expect(page.locator("#date")).toHaveValue("");
+  await expect(page.locator("#date")).toHaveValue("2025-01-02");
   await expect(page.locator("#search-button")).toBeDisabled();
   await expect(page.locator("#dataset-tag")).toContainText("Reported actual times · 1");
   await times.selectOption("scheduled");
@@ -255,23 +383,23 @@ check("late availability responses cannot overwrite a new origin and clock", asy
   const delayed = new Promise((resolve) => { release = resolve; }),
     intercepted = new Promise((resolve) => { started = resolve; }),
     finished = new Promise((resolve) => { completed = resolve; });
-  await page.route("**/v1/dates?*", async (route) => {
+  await page.route("**/v1/search-availability?*", async (route) => {
     const params = new URL(route.request().url()).searchParams;
     if (params.get("origin") !== "LHR") return route.continue();
     if (params.get("clock") === "local") {
       started();
       await delayed;
       try {
-        await route.fulfill({ json: {
+        await fulfillAvailability(route, {
           origin: "LHR", timezone: "Europe/London", dates: ["2025-01-01"],
-        } });
+        });
       } finally {
         completed();
       }
     } else {
-      await route.fulfill({ json: {
+      await fulfillAvailability(route, {
         origin: "LHR", timezone: "UTC", dates: ["2026-10-18", "2026-11-02"],
-      } });
+      });
     }
   });
   await page.getByLabel("From", { exact: true }).fill("LHR");
@@ -291,9 +419,9 @@ check("late availability responses cannot overwrite a new origin and clock", asy
 });
 
 check("phone calendar can switch months by touch without overflowing", async (page) => {
-  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
     origin: "YYZ", timezone: "America/Toronto", dates: ["2026-10-17", "2026-11-18"],
-  } }));
+  }));
   await open(page);
   const calendar = page.locator("#date-calendar");
   await page.locator("#date").tap();
@@ -307,6 +435,37 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await expect(page.locator("#date")).toHaveValue("2026-11-18");
   await expect(calendar).toBeHidden();
 }, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
+
+check("linked search disables calendar before statistics load when destination has no arrivals", async (page) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; }), searches = [];
+  await page.route("**/v1/catalog", async (route) => { await gate; await route.continue(); });
+  page.on("request", (r) => { if (searchPath.test(new URL(r.url()).pathname)) searches.push(r.url()); });
+  try {
+    await page.goto(`${base}?origin=YYZ&destination=XYZ&date=2026-10-17&stops=any&input-clock=UTC&time-basis=scheduled`);
+    await expect(page.locator("#coverage-warning")).toContainText("No searchable arrivals into XYZ");
+    await expect(page.locator("#date")).toBeDisabled();
+    await expect(page.locator('[name="last-date"]')).toBeDisabled();
+    await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
+    await expect(page.locator("#search-button")).toBeDisabled();
+    assert.deepEqual(searches, []);
+  } finally { release(); }
+});
+
+check("endpoint airports are excluded from via suggestions and rejected when typed", async (page) => {
+  await open(page);
+  const via = page.getByLabel("Via airports", { exact: true });
+  await via.fill("Y");
+  await expect(page.locator('#via-suggestions [data-value="YYZ"]')).toHaveCount(0);
+  await via.fill("C");
+  await expect(page.locator('#via-suggestions [data-value="CDG"]')).toHaveCount(0);
+  for (const code of ["YYZ", "CDG"]) {
+    await via.fill(code);
+    await via.press("Enter");
+    await expect(page.locator("#error")).toContainText("Via airports must be intermediate airports");
+  }
+});
+
 async function exported(page) {
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
@@ -603,7 +762,7 @@ check("via suggestions preserve other codes and invalid lists preserve the journ
   await page.locator("#search-form [name=stops]").selectOption("3");
   await via.fill("LHR, AMS, KEF, YUL");
   await via.press("Enter");
-  await expect(page.locator("#error")).toContainText("Use fewer codes or allow permitted airport changes");
+  await expect(page.locator("#error")).toContainText("choose Any number");
   assert.deepEqual(
     identity((await exported(page)).selection.legs),
     identity(before.legs),
@@ -684,21 +843,20 @@ check("partial searches differ from exhaustive empty results", async (page) => {
     /no matching route/i,
   );
   await page.unroute("**/v1/itineraries/search/local");
-  await page.getByLabel("To", { exact: true }).fill("ABC");
+  await page.getByLabel("To", { exact: true }).fill("NRT");
   await page.getByLabel("Input clock").selectOption("UTC");
   const empty = await search(page);
   assert.equal(empty.diagnostics.exhaustive, true);
   assert.deepEqual(empty.items, []);
   await expect(page.locator("#partial")).toBeHidden();
   await expect(page.locator("[data-option]")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Export JSON", exact: true }),
-  ).toBeDisabled();
+  await expect(page.locator("#export")).toBeDisabled();
+  await expect(page.locator(".map-panel")).toBeHidden();
 });
 
 check("storage failure can be retried", async (page) => {
   let fail = true;
-  await page.route("**/v1/catalog", (route) =>
+  await page.route("**/v1/bootstrap", (route) =>
     fail
       ? route.fulfill({
           status: 503,
@@ -724,7 +882,7 @@ check("storage failure can be retried", async (page) => {
 check(
   "UTC search works without suggestions and ignores browser timezone",
   async (page) => {
-    await page.route("**/v1/catalog", async (route) => {
+    await page.route("**/v1/bootstrap", async (route) => {
       const response = await route.fetch(),
         data = await response.json();
       await route.fulfill({ response, json: { ...data, airports: [] } });
@@ -924,7 +1082,7 @@ check(
 );
 
 check("stale catalog timezone is corrected by date availability before search", async (page) => {
-  await page.route("**/v1/catalog", async (route) => {
+  await page.route("**/v1/bootstrap", async (route) => {
     const response = await route.fetch(), data = await response.json();
     data.airports.find((a) => a.iata === "YYZ").timezone = "Asia/Tokyo";
     await route.fulfill({ response, json: data });
@@ -937,17 +1095,17 @@ check("stale catalog timezone is corrected by date availability before search", 
 
 check("timezone changes after loading dates are corrected before retry", async (page) => {
   let actualZone, departureDate;
-  await page.route("**/v1/catalog", async (route) => {
+  await page.route("**/v1/bootstrap", async (route) => {
     const response = await route.fetch(),
       catalog = await response.json();
     const origin = catalog.airports.find((a) => a.iata === "YYZ");
     actualZone = origin.timezone;
     const { localDate } = await import("../src/server/web/format.mjs");
-    departureDate = localDate(catalog.dataset.first_departure, actualZone);
+    departureDate = localDate(catalog.first_departure, actualZone);
     origin.timezone = "Asia/Tokyo";
     await route.fulfill({ response, json: catalog });
   });
-  await page.route("**/v1/dates?*", async (route) => {
+  await page.route("**/v1/search-availability?*", async (route) => {
     const response = await route.fetch(), data = await response.json();
     data.timezone = "Asia/Tokyo";
     await route.fulfill({ response, json: data });

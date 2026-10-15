@@ -52,7 +52,7 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
     )
     best = []
 
-    def walk(legs, connections, seen, via_progress):
+    def frame(legs, connections, seen, via_progress):
         session.stats.states_expanded += 1
         if legs:
             candidates = session.onward(legs[-1], window)
@@ -64,7 +64,17 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
                 upper_inclusive=False,
             )
             session.stats.candidates_skipped_by_time += skipped
-        for flight in candidates:
+        return legs, connections, seen, via_progress, iter(candidates)
+
+    try:
+        stack = [frame([], [], {request.origin}, 0)]
+        while stack:
+            legs, connections, seen, via_progress, candidates = stack[-1]
+            try:
+                flight = next(candidates)
+            except StopIteration:
+                stack.pop()
+                continue
             session.take()
             decision = policy.assess(
                 legs[-1] if legs else None, flight, window, seen, request.horizon_end
@@ -79,15 +89,19 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
                 decision.reason == "accepted"
                 and (
                     flight.destination_iata == request.destination
-                    or len(legs) + 1 == request.max_legs
+                    or len(legs) + 1 == session.max_legs
                 )
                 and not session.via_satisfied(next_via)
             ):
                 decision = Assessment("required_via_not_visited")
             if decision.reason == "accepted" and not session.reachable(
-                flight.destination_iata, request.max_legs - len(legs) - 1
+                flight.destination_iata, session.max_legs - len(legs) - 1
             ):
-                decision = Assessment("destination_unreachable_within_legs")
+                decision = Assessment(
+                    "destination_unreachable"
+                    if request.max_legs is None
+                    else "destination_unreachable_within_legs"
+                )
             session.record(legs, flight, decision)
             if decision.reason != "accepted":
                 continue
@@ -103,16 +117,15 @@ def search_routes(request: RouteSearchRequest, snapshot: RoutingSnapshot) -> Rou
                     heappush(best, item)
                 elif item.score < best[0].score:
                     heapreplace(best, item)
-            elif len(next_legs) < request.max_legs:
-                walk(
-                    next_legs,
-                    links,
-                    next_seen,
-                    next_via,
+            elif len(next_legs) < session.max_legs:
+                stack.append(
+                    frame(
+                        next_legs,
+                        links,
+                        next_seen,
+                        next_via,
+                    )
                 )
-
-    try:
-        walk([], [], {request.origin}, 0)
     except SearchBudgetReached:
         pass
     items = [

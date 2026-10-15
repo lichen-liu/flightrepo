@@ -48,7 +48,7 @@ def validate_prefix(
             "a selected flight is missing from this snapshot",
             context={"flight_ref": error.args[0]},
         ) from error
-    if len(prefix) > request.max_legs:
+    if request.max_legs is not None and len(prefix) > request.max_legs:
         raise RoutingError("prefix_too_long", "prefix exceeds max_legs")
     if prefix[0].origin_iata in required_via_airports(request.via_airport):
         raise RoutingError("invalid_via_airport", "via_airport must be an intermediate airport")
@@ -104,7 +104,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
     prefix_via = session.via_progress(prefix)
     memo, options, total, chosen = {}, [], 0, None
 
-    def best_tail(previous, remaining, seen, path, via_progress):
+    def tail_frame(previous, remaining, seen, path, via_progress):
         if via_progress is None:
             return None
         if previous.destination_iata == request.destination:
@@ -136,7 +136,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
                 session.record(path, flight, assessment)
                 if assessment.reason != "accepted":
                     continue
-                tail = best_tail(
+                tail = yield (
                     flight,
                     remaining - 1,
                     next_seen,
@@ -158,6 +158,20 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         if not session.search_truncated:
             memo[key] = best
         return best
+
+    def best_tail(*args):
+        # Drive recursive subproblems with generators so long valid journeys
+        # do not depend on Python's recursion limit.
+        stack, result = [tail_frame(*args)], None
+        while stack:
+            try:
+                child = stack[-1].send(result)
+                stack.append(tail_frame(*child))
+                result = None
+            except StopIteration as done:
+                stack.pop()
+                result = done.value
+        return result
 
     def option(flight, assessment):
         return ContinuationOption(
@@ -184,7 +198,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
             session.record(prefix, item.flight, Assessment("required_via_not_visited"))
         tail = best_tail(
             item.flight,
-            request.max_legs - len(prefix) - 1,
+            session.max_legs - len(prefix) - 1,
             next_seen,
             [*prefix, item.flight],
             next_via,
@@ -198,7 +212,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
             session.stats.routes_found += 1
 
     if request.chosen_next is not None:
-        if prefix[-1].destination_iata == request.destination or len(prefix) == request.max_legs:
+        if prefix[-1].destination_iata == request.destination or len(prefix) == session.max_legs:
             raise RoutingError("no_next_leg", "selected prefix has no editable next leg")
         selected = session.records.get(
             (request.chosen_next.provider, request.chosen_next.provider_id)
@@ -245,7 +259,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
                 ),
             )
             fill_tail(chosen)
-        if prefix[-1].destination_iata != request.destination and len(prefix) < request.max_legs:
+        if prefix[-1].destination_iata != request.destination and len(prefix) < session.max_legs:
             for flight in session.onward(prefix[-1], request.window):
                 if (
                     request.chosen_next is not None
@@ -306,7 +320,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         )
     elif legs[-1].destination_iata == request.destination and not complete:
         message = "Selected flights reach destination without all required via airports"
-    elif len(prefix) == request.max_legs:
+    elif request.max_legs is not None and len(prefix) == request.max_legs:
         message = "Maximum leg count reached; destination not reached"
     if partial and final_via is None:
         message += ". Search is partial."
