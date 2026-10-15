@@ -48,7 +48,14 @@ def run(root, day, traces, **options):
         transport=httpx.MockTransport(lambda request: httpx.Response(200, content=content))
     ) as client:
         receipt = extract_day(
-            root, day, [item], AIRPORTS, rules(), download=True, client=client, **options
+            root,
+            day,
+            [item],
+            options.pop("airports", AIRPORTS),
+            rules(),
+            download=True,
+            client=client,
+            **options,
         )
     return receipt, item
 
@@ -498,3 +505,28 @@ def test_airborne_origin_climb_can_be_confirmed_across_midnight(tmp_path, order)
     data = json.loads(raw)
     assert data["origin_iata"] == "AAA" and data["destination_iata"] == "BBB"
     assert data["evidence"] == "airport_proximity_and_time_window"
+
+
+def test_new_leg_marker_without_arrival_prevents_a_false_midnight_join(tmp_path):
+    first = leg_trace()
+    first["trace"] = [
+        [86300, 40, -70, "ground", 0, 0, 0, 0, {"flight": "UAL123"}],
+        [86310, 40, -70, 500, 150, 0, 0, 0, None],
+        [86390, 40.5, -70.5, 20000, 400, 0, 0, 0, None],
+    ]
+    second = leg_trace()
+    second["timestamp"] += 86400
+    second["trace"] = [
+        [20, 40.5, -70.5, 20000, 400, 0, 0, 0, {"flight": "UAL123"}],
+        [300, 41, -71, 500, 150, 0, 2, 0, {"flight": "ZZZ456"}],
+        [400, 41.5, -71.5, 20000, 400, 0, 0, 0, None],
+        [500, 42, -72, 500, 150, 0, 0, 0, None],
+        [510, 42, -72, "ground", 0, 0, 0, 0, None],
+    ]
+    airports = [*AIRPORTS, ("CCC", 42, -72)]
+    run(tmp_path, date(2025, 1, 1), [first], airports=airports)
+    run(tmp_path, date(2025, 1, 2), [second], airports=airports)
+    records = [json.loads(raw) for _, _, raw in rows(tmp_path, "itinerary_legs")]
+    assert [(r["origin_iata"], r["destination_iata"], r["callsign"]) for r in records] == [
+        ("BBB", "CCC", "ZZZ456")
+    ]
