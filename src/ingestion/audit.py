@@ -12,7 +12,7 @@ from core.admission import requires_review
 from core.database_roles import is_ingestion, require_ingestion
 from core.disk_quota import database_bytes
 from core.file_lock import file_mutex
-from core.storage import SQLiteConnection, refresh_admission_view, utc_us
+from core.storage import EPOCH, SQLiteConnection, refresh_admission_view, utc_us
 from ingestion.adsblol.legs import distance_km
 from ingestion.publish import PARTITION_TIME_SQL
 from ingestion.store import IngestionStore
@@ -202,7 +202,7 @@ def audit_database(
                     counts["manually_reviewed"] += bool(row["itinerary_reviewed"])
                     counts["locally_modified"] += row["locally_modified_us"] is not None
                     month = (
-                        datetime.fromtimestamp(row["event_us"] / 1_000_000, UTC).strftime("%Y-%m")
+                        (EPOCH + timedelta(microseconds=row["event_us"])).strftime("%Y-%m")
                         if row["event_us"] is not None
                         and -62135596800000000 <= row["event_us"] <= 253402300799999999
                         else "missing_time_evidence"

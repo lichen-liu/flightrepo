@@ -135,7 +135,9 @@ def adopt_archive(
                 raise ValueError(
                     "Source or destination has an active producer/extractor; retry after it finishes"
                 )
-        if any(Path(str(destination) + suffix).exists() for suffix in ("", "-wal", "-shm")):
+        if any(
+            Path(str(destination) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal")
+        ):
             raise ValueError("Adoption never overwrites an existing database or SQLite sidecars")
         with SQLiteConnection(source_db, read_only=True).connect() as source:
             source.execute("BEGIN")

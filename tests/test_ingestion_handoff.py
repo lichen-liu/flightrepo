@@ -128,22 +128,25 @@ def test_adoption_refuses_unfinished_batch_even_when_day_receipt_exists(archive,
         adopt_archive(source, tmp_path / "new.db", DAY, DAY, source_root=root)
 
 
-@pytest.mark.parametrize("existing", ["file", "sidecar", "alias"])
+@pytest.mark.parametrize("existing", ["file", "sidecar", "journal", "alias"])
 def test_adoption_never_overwrites_database_family(archive, tmp_path, existing):
     source, root = archive
     target = tmp_path / "new.db"
     if existing == "alias":
         target.hardlink_to(source)
-    elif existing == "sidecar":
-        Path(str(target) + "-wal").write_bytes(b"keep")
+    elif existing in {"sidecar", "journal"}:
+        Path(str(target) + ("-wal" if existing == "sidecar" else "-journal")).write_bytes(b"keep")
     else:
         target.write_bytes(b"keep")
     with pytest.raises(ValueError):
         adopt_archive(source, target, DAY, DAY, source_root=root)
     if existing == "file":
         assert target.read_bytes() == b"keep"
-    if existing == "sidecar":
-        assert Path(str(target) + "-wal").read_bytes() == b"keep"
+    if existing in {"sidecar", "journal"}:
+        assert (
+            Path(str(target) + ("-wal" if existing == "sidecar" else "-journal")).read_bytes()
+            == b"keep"
+        )
 
 
 def test_adoption_failed_validation_or_quota_leaves_no_destination(archive, tmp_path, monkeypatch):
