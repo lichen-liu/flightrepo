@@ -1,7 +1,8 @@
 """Flight queries over the shared local itinerary database."""
 
 import json
-from datetime import datetime, timedelta
+from bisect import bisect_left
+from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,6 +23,8 @@ from server.web_models import (
     AvailableDates,
     LocalRouteSearchRequest,
     LocalRouteSearchResult,
+    SearchAvailability,
+    WebBootstrap,
     WebCatalog,
 )
 
@@ -356,8 +359,16 @@ class FlightReader(SQLiteConnection):
 
     @classmethod
     def _default_basis(cls, connection):
-        counts = cls._time_bases(connection)
-        return next((basis for basis, count in counts.items() if count), "scheduled")
+        return next(
+            (
+                basis
+                for basis in ("scheduled", "observed", "actual")
+                if connection.execute(
+                    "SELECT 1 FROM searchable_legs WHERE time_basis=? LIMIT 1", (basis,)
+                ).fetchone()
+            ),
+            "scheduled",
+        )
 
     def rebuild_snapshot(self, request: RebuildRequest) -> RoutingSnapshot:
         with self.connect() as connection:
@@ -541,6 +552,141 @@ class FlightReader(SQLiteConnection):
             airports_truncated=len(rows) > 1000,
             dataset=facts,
             suggested_route=dict(suggestion) if suggestion else None,
+        )
+
+    def web_bootstrap(self) -> WebBootstrap:
+        """Load search defaults and suggestions without archive-wide statistics."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            first = {}
+            for basis in ("scheduled", "observed", "actual"):
+                column = (
+                    "departure_observed_lower_us"
+                    if basis == "observed"
+                    else f"departure_{basis}_us"
+                )
+                condition = (
+                    "departure_observed_lower_us IS NOT NULL"
+                    if basis == "observed"
+                    else f"departure_{basis}_us IS NOT NULL AND arrival_{basis}_us IS NOT NULL"
+                )
+                row = connection.execute(
+                    f"SELECT origin_iata,destination_iata,{column} FROM flight_legs f "
+                    f"WHERE status <> 'cancelled' AND ({condition}) "
+                    "AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0) OR itinerary_reviewed=1) "
+                    "AND NOT EXISTS (SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
+                    "AND t.source_record_key=f.source_record_key) "
+                    f"ORDER BY {column},source_id,source_record_key LIMIT 1",
+                ).fetchone()
+                if row:
+                    first[basis] = row
+            basis = next(iter(first), "scheduled")
+            suggested = first.get(basis)
+            rows = connection.execute("""WITH active_codes(iata) AS (
+                SELECT origin_iata FROM flight_legs UNION SELECT destination_iata FROM flight_legs)
+                SELECT a.iata,a.name,a.city_id,a.timezone,a.latitude,a.longitude
+                FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata
+                LIMIT 1001""").fetchall()
+        return WebBootstrap(
+            airports=sorted((dict(row) for row in rows[:1000]), key=lambda row: row["iata"]),
+            airports_truncated=len(rows) > 1000,
+            default_time_basis=basis,
+            available_time_bases=list(first),
+            first_departure=(EPOCH + timedelta(microseconds=suggested[2])) if suggested else None,
+            suggested_route={"origin_iata": suggested[0], "destination_iata": suggested[1]}
+            if suggested
+            else None,
+        )
+
+    def search_availability(
+        self,
+        origin: str,
+        destination: str,
+        clock="local",
+        time_basis=None,
+        departure_date: date | None = None,
+        departure_last_date: date | None = None,
+    ) -> SearchAvailability:
+        origin, destination = airport_code(origin), airport_code(destination)
+        if clock not in ("local", "UTC"):
+            raise ValueError("clock must be local or UTC")
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            basis = time_basis or self._default_basis(connection)
+            if basis not in ("scheduled", "observed", "actual"):
+                raise ValueError("Unknown flight time basis")
+            zone = "UTC"
+            if clock == "local":
+                row = connection.execute(
+                    "SELECT timezone FROM airports WHERE iata=?", (origin,)
+                ).fetchone()
+                if not row or not row[0]:
+                    raise RoutingError(
+                        "airport_metadata_missing", "Load airport timezone metadata or choose UTC."
+                    )
+                zone = row[0]
+            timezone = ZoneInfo(zone)
+            outbound = {}
+            for lower, upper in connection.execute(
+                "SELECT departure_lower_us,departure_upper_us FROM searchable_legs "
+                "WHERE origin_iata=? AND time_basis=?",
+                (origin, basis),
+            ):
+                day = (EPOCH + timedelta(microseconds=lower)).astimezone(timezone).date()
+                if day == (EPOCH + timedelta(microseconds=upper)).astimezone(timezone).date():
+                    outbound[day] = outbound.get(day, 0) + 1
+            arrivals = sorted(
+                (lower, upper)
+                for lower, upper in connection.execute(
+                    "SELECT arrival_lower_us,arrival_upper_us FROM searchable_legs "
+                    "WHERE destination_iata=? AND time_basis=?",
+                    (destination, basis),
+                )
+            )
+
+        def bounds(day, last=None):
+            try:
+                start = resolve_local(datetime.combine(day, time.min), zone)
+                end = resolve_local(
+                    datetime.combine((last or day) + timedelta(days=1), time.min), zone
+                )
+                return start, end + timedelta(days=7)
+            except (OverflowError, ValueError) as error:
+                raise RoutingError(
+                    "invalid_local_dates", "Departure date is outside the supported range."
+                ) from error
+
+        def inbound_count(start, end):
+            lower, upper = utc_us(start), utc_us(end)
+            index = bisect_left(arrivals, (lower, -1))
+            count = 0
+            for earliest, latest in arrivals[index:]:
+                if earliest > upper:
+                    break
+                count += latest <= upper
+            return count
+
+        dates = [day for day in sorted(outbound) if inbound_count(*bounds(day))]
+        selected = departure_date if departure_date in dates else next(iter(dates), departure_date)
+        last = (
+            departure_last_date
+            if departure_last_date in dates and selected and departure_last_date >= selected
+            else None
+        )
+        if last and (last - selected).days >= 31:
+            raise RoutingError("invalid_local_dates", "Choose at most 31 departure dates.")
+        start, end = bounds(selected, last) if selected else (None, None)
+        return SearchAvailability(
+            origin=origin,
+            destination=destination,
+            timezone=zone,
+            time_basis=basis,
+            dates=dates,
+            selected_date=selected,
+            outbound=outbound.get(selected, 0),
+            inbound=inbound_count(start, end) if selected else 0,
+            arrival_start=start,
+            arrival_end=end,
         )
 
     def airport_coverage(self, airports: list[str], time_basis=None) -> AirportCoverage:

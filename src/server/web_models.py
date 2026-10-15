@@ -206,6 +206,28 @@ class AirportCoverage(BaseModel):
     airports: list[AirportTraffic]
 
 
+class SearchAvailability(BaseModel):
+    origin: str
+    destination: str
+    timezone: str
+    time_basis: TimeBasis
+    dates: list[date]
+    selected_date: date | None
+    outbound: int
+    inbound: int
+    arrival_start: datetime | None
+    arrival_end: datetime | None
+
+
+class WebBootstrap(BaseModel):
+    airports: list[CatalogAirport]
+    airports_truncated: bool
+    default_time_basis: TimeBasis
+    available_time_bases: list[TimeBasis]
+    first_departure: datetime | None
+    suggested_route: dict | None
+
+
 class AvailableDates(BaseModel):
     origin: str
     destination: str | None = None

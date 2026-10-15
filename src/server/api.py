@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -30,6 +30,8 @@ from server.web_models import (
     LocalRouteSearchResult,
     ResolvedTime,
     ResolveTimeRequest,
+    SearchAvailability,
+    WebBootstrap,
     WebCatalog,
 )
 
@@ -103,6 +105,29 @@ def readiness(store: FlightReader = Depends(get_store)):
 @app.get("/v1/catalog", response_model=WebCatalog)
 def catalog(store: FlightReader = Depends(get_store)) -> WebCatalog:
     return store.web_catalog()
+
+
+@app.get("/v1/bootstrap", response_model=WebBootstrap)
+def bootstrap(store: FlightReader = Depends(get_store)):
+    return store.web_bootstrap()
+
+
+@app.get("/v1/search-availability", response_model=SearchAvailability)
+def search_availability(
+    origin: str,
+    destination: str,
+    clock: Literal["local", "UTC"] = "local",
+    time_basis: TimeBasis | None = None,
+    departure_date: date | None = None,
+    departure_last_date: date | None = None,
+    store: FlightReader = Depends(get_store),
+):
+    try:
+        return store.search_availability(
+            origin, destination, clock, time_basis, departure_date, departure_last_date
+        )
+    except ValueError as error:
+        raise routing_http_error(error) from error
 
 
 @app.get("/v1/dates", response_model=AvailableDates)
