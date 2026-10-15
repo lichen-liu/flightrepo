@@ -31,7 +31,7 @@ class LocalRouteSearchRequest(BaseModel):
     arrival_fold: Literal[0, 1] | None = None
     departure_timezone: str | None = None
     arrival_timezone: str | None = None
-    max_legs: int = Field(default=3, ge=1, le=4)
+    max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
     maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44640)
     allow_airport_change: bool = False

@@ -112,6 +112,26 @@ check("flight details show the flight's stored aircraft type code", async (page)
   await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
 });
 
+check("stop count defaults to unbounded and survives links exports and connection editing", async (page) => {
+  const initial = await open(page);
+  assert.equal(initial.query.max_legs, null);
+  await expect(page.getByLabel("Maximum stops")).toHaveValue("any");
+  assert.equal(new URL(page.url()).searchParams.get("stops"), "any");
+  assert.equal((await exported(page)).query.max_legs, null);
+  await edit(page);
+  const pending = page.waitForRequest((request) => new URL(request.url()).pathname === "/v1/plans/rebuild");
+  await next(page);
+  assert.equal((await pending).postDataJSON().max_legs, null);
+  await result(page, searchPath, () => page.goto(`${base}?stops=5`));
+  await expect(page.getByLabel("Maximum stops")).toHaveValue("5");
+  const finite = await search(page);
+  assert.equal(finite.query.max_legs, 6);
+  await page.locator("#search-details > summary").click();
+  await page.getByLabel("Maximum stops").selectOption("any");
+  const unlimited = await search(page);
+  assert.equal(unlimited.query.max_legs, null);
+});
+
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
   await page.route("**/v1/dates?*", async (route) => {
     const origin = new URL(route.request().url()).searchParams.get("origin");
@@ -667,7 +687,7 @@ check("via suggestions preserve other codes and invalid lists preserve the journ
   await page.locator("#search-form [name=stops]").selectOption("3");
   await via.fill("LHR, AMS, KEF, YUL");
   await via.press("Enter");
-  await expect(page.locator("#error")).toContainText("Use fewer codes or allow permitted airport changes");
+  await expect(page.locator("#error")).toContainText("choose Any number");
   assert.deepEqual(
     identity((await exported(page)).selection.legs),
     identity(before.legs),

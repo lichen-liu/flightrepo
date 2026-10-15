@@ -216,6 +216,9 @@ function restore(values) {
   for (const [name, value] of Object.entries(values)) {
     const control = field(name);
     if (!control) continue;
+    if (name === "stops" && /^\d+$/.test(value) &&
+        ![...control.options].some((option) => option.value === value))
+      control.add(new Option(`${value} stops`, value));
     if (control.type === "checkbox") control.checked = value === "1";
     else control.value = value;
     if (control.hasAttribute("data-airport-code"))
@@ -300,7 +303,7 @@ function commonQuery() {
     origin: airportCode(field("origin").value),
     destination: airportCode(field("destination").value),
     via_airport: via.length ? via : null,
-    max_legs: Number(field("stops").value) + 1,
+    max_legs: field("stops").value === "any" ? null : Number(field("stops").value) + 1,
     ranking: field("ranking").value,
     minimum_connection_minutes: Number(field("minimum").value),
     maximum_connection_minutes:
@@ -326,12 +329,11 @@ function searchRequest() {
     throw Error("Last departure date must be on or after the first.");
   if (query.origin === query.destination)
     throw Error("Choose different origin and destination airports.");
-  const capacity = (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
+  const capacity = query.max_legs === null ? Infinity :
+    (query.max_legs - 1) * (query.allow_airport_change ? 2 : 1);
   if ((query.via_airport?.length || 0) > capacity)
     throw Error(
-      query.max_legs < 4
-        ? "Increase Maximum stops under Search filters to visit all via airports."
-        : "Too many via airports for three stops. Use fewer codes or allow permitted airport changes.",
+      "Increase Maximum stops or choose Any number under Search filters to visit all via airports.",
     );
   for (const code of query.via_airport || []) {
     if ([query.origin, query.destination].includes(code))
@@ -431,8 +433,11 @@ function renderOptions() {
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])} · ${result.query.max_legs === null ? "Any number of stops" : result.query.max_legs === 1 ? "Nonstop" : `Up to ${result.query.max_legs - 1} stops`}`;
   const d = result.diagnostics;
+  const noConnectingPath = d.exhaustive && result.query.max_legs === null &&
+    d.stats.candidates_checked > 0 &&
+    Object.keys(d.stats.rejections).every((reason) => reason === "destination_unreachable");
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
     x === "data_limit"
@@ -459,7 +464,7 @@ function renderOptions() {
     </button>`;
         })
         .join("")
-    : `<p class="empty">${d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<p class="empty">${noConnectingPath ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} in the loaded data for this window. Stop count is unrestricted. Try different dates or a different destination.` : d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -486,7 +491,7 @@ function renderJourney({ preserveView = false } = {}) {
   if (
     legs.length &&
     !selected.complete &&
-    legs.length < state.result.query.max_legs
+    (state.result.query.max_legs === null || legs.length < state.result.query.max_legs)
   )
     $("legs").insertAdjacentHTML(
       "beforeend",

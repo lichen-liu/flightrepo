@@ -13,7 +13,7 @@ def build_itineraries(
     destination: str,
     start: datetime,
     end: datetime,
-    max_legs: int = 2,
+    max_legs: int | None = None,
     min_connection_minutes: int = 45,
     max_connection_minutes: int = 360,
     limit: int = 20,

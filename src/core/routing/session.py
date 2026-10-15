@@ -34,6 +34,14 @@ class RoutingSession:
             ranking,
         )
         self.records = snapshot.records()
+        # Simple paths cannot revisit airports. This is a graph-derived bound,
+        # not a user-facing stop ceiling, and keeps unbounded searches finite.
+        airports = {
+            code for f in self.records.values() for code in (f.origin_iata, f.destination_iata)
+        }
+        self.max_legs = (
+            request.max_legs if request.max_legs is not None else max(1, len(airports) - 1)
+        )
         anchors = len(getattr(request, "prefix", ())) + int(
             getattr(request, "chosen_next", None) is not None
         )

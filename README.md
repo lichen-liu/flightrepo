@@ -32,6 +32,12 @@ To host the installed preview at **fly.boboji.fyi**, follow [installation](insta
 | Inspect | Coverage/refresh evidence, bounded search diagnostics, exact exports and offline routing replay |
 | Manage data | Internal shell, validated JSON/CSV imports, exports, ingestion and guarded reset |
 
+Search defaults to **Any number** of stops. UTC/local search and connection-edit
+requests use `max_legs: null` (or omit it) for no stop-count limit; positive integers
+apply an optional explicit limit. Routes cannot revisit airports. Date windows and
+record/candidate budgets still bound computation, with partial results identified
+in the search diagnostics.
+
 ## Architecture
 
 ```text

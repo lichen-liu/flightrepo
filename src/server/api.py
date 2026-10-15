@@ -239,7 +239,7 @@ def itineraries(
     destination: str,
     start: datetime,
     end: datetime,
-    max_legs: Annotated[int, Query(ge=1, le=3)] = 2,
+    max_legs: Annotated[int | None, Query(ge=1)] = None,
     min_connection_minutes: Annotated[int, Query(ge=20, le=360)] = 45,
     max_connection_minutes: Annotated[int, Query(ge=60, le=1440)] = 360,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,

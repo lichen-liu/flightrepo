@@ -268,7 +268,9 @@ class FlightReader(SQLiteConnection):
                 if f.has_time_basis(basis)
             )
         start = prefix[-1].arrival_upper if is_rebuild else request.departure_start
-        remaining = request.max_legs - len(prefix) if is_rebuild else request.max_legs
+        remaining = request.max_legs
+        if is_rebuild and remaining is not None:
+            remaining -= len(prefix)
         policy = ConnectionPolicy(
             airports,
             transfers,
@@ -282,9 +284,13 @@ class FlightReader(SQLiteConnection):
             frontier = set()
         records = {flight_key(f): f for f in anchors}
         queried, loaded, truncated = set(), 0, False
-        for depth in range(remaining):
+        depth = 0
+        while remaining is None or depth < remaining:
+            pending_origins = frontier - queried - {request.destination}
+            if not pending_origins:
+                break
             batch = []
-            for origin in sorted(frontier - queried - {request.destination}):
+            for origin in sorted(pending_origins):
                 queried.add(origin)
                 first = not is_rebuild and depth == 0
                 end = request.departure_end if first else request.horizon_end
@@ -321,6 +327,7 @@ class FlightReader(SQLiteConnection):
                 and f.destination_iata not in policy.avoid
                 for origin in policy.origins(f.destination_iata)
             }
+            depth += 1
         return RoutingSnapshot(
             tuple(records.values()), airports, transfers, truncated, len(queried)
         )
