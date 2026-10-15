@@ -199,7 +199,6 @@ class AvailableDates(BaseModel):
     timezone: str
     dates: list[date]
     time_basis: TimeBasis = "scheduled"
-    pending_review_dates: dict[date, int] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def legacy_schedule(self, handler):
@@ -208,6 +207,4 @@ class AvailableDates(BaseModel):
             data.pop("time_basis", None)
         if self.destination is None:
             data.pop("destination", None)
-        if not self.pending_review_dates:
-            data.pop("pending_review_dates", None)
         return data

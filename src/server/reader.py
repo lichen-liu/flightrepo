@@ -555,10 +555,6 @@ class FlightReader(SQLiteConnection):
                         "airport_metadata_missing", "Load airport timezone metadata or choose UTC."
                     )
                 zone = row[0]
-            first_column = (
-                "departure_observed_lower" if basis == "observed" else f"departure_{basis}"
-            )
-            arrival_column = "arrival_observed_upper" if basis == "observed" else f"arrival_{basis}"
             route_clause = " AND destination_iata=?" if destination is not None else ""
             route_params = [origin, *([destination] if destination is not None else [])]
             rows = connection.execute(
@@ -572,26 +568,12 @@ class FlightReader(SQLiteConnection):
                 return (EPOCH + timedelta(microseconds=value)).astimezone(timezone).date()
 
             dates = sorted({day(row[0]) for row in rows if day(row[0]) == day(row[1])})
-            pending = {}
-            for row in connection.execute(
-                f"""SELECT {first_column}_us FROM flight_legs f
-                WHERE origin_iata=?{route_clause} AND status <> 'cancelled'
-                AND {first_column}_us IS NOT NULL AND {arrival_column}_us IS NOT NULL
-                AND itinerary_reviewed=0
-                AND (evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)
-                AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
-                    WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)""",
-                route_params,
-            ):
-                date = day(row[0])
-                pending[date] = pending.get(date, 0) + 1
         return AvailableDates(
             origin=origin,
             destination=destination,
             timezone=zone,
             dates=dates,
             time_basis=basis,
-            pending_review_dates=pending,
         )
 
     def airports(

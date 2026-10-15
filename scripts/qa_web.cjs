@@ -140,9 +140,11 @@ check("date availability failures remain disabled until a retry succeeds", async
   await expect(page.locator("#date-availability")).toContainText("Date data unavailable");
   await expect(page.locator("#search-button")).toBeDisabled();
   fail = false;
-  await page.getByLabel("Input clock").selectOption("UTC");
-  await expect(page.locator("#date-availability")).toContainText("UTC");
+  await page.getByRole("button", { name: "Retry departure dates" }).click();
+  await expect(page.locator("#date-availability")).toContainText("America/Toronto");
   await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(page.locator("#retry-dates")).toBeHidden();
+  await expect(page.getByLabel("Input clock")).toHaveValue("local");
 });
 
 check("calendar month controls stay open across sparse months and years", async (page) => {
@@ -308,7 +310,7 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await expect(calendar).toBeHidden();
 }, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-check("linked nonstop searches explain excluded observations before catalog metadata arrives", async (page) => {
+check("linked search loads route dates before catalog metadata without losing inputs", async (page) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   await page.route("**/v1/catalog", async (route) => {
@@ -324,13 +326,13 @@ check("linked nonstop searches explain excluded observations before catalog meta
     assert.equal(params.get("destination"), "YVR");
     await route.fulfill({ json: {
       origin: "YYZ", destination: "YVR", timezone: "UTC", time_basis: "observed",
-      dates: [], pending_review_dates: { "2023-07-20": 25 },
+      dates: [],
     } });
   });
   try {
     await page.goto(`${base}?origin=YYZ&destination=YVR&date=2023-07-20&stops=0&input-clock=UTC&time-basis=observed`);
-    await expect(page.locator("#date-availability")).toContainText("No searchable nonstop departures for YYZ → YVR");
-    await expect(page.locator("#options")).toContainText("25 uncertain observations are excluded pending review on 2023-07-20");
+    await expect(page.locator("#date-availability")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
+    await expect(page.locator("#options")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
     await expect(page.locator("#applied-query")).toContainText("2023-07-20");
     await expect(page.locator("#date")).toBeDisabled();
     await expect(page.locator("#date")).toHaveValue("2023-07-20");
@@ -342,7 +344,7 @@ check("linked nonstop searches explain excluded observations before catalog meta
   }
   await expect(page.locator("#dataset-tag")).toContainText("Observed historical legs");
   await expect(page.getByLabel("To", { exact: true })).toHaveValue("YVR");
-  await expect(page.locator("#options")).toContainText("25 uncertain observations");
+  await expect(page.locator("#options")).toContainText("No loaded nonstop departure dates for YYZ → YVR");
 });
 
 check("nonstop date availability follows destination and stop-count changes", async (page) => {
@@ -361,7 +363,7 @@ check("nonstop date availability follows destination and stop-count changes", as
   ));
   await expect(page.locator("#date-availability")).toContainText("YYZ → LHR nonstop");
   await page.getByLabel("To", { exact: true }).fill("CDG");
-  await expect(page.locator("#date-availability")).toContainText("No searchable nonstop departures for YYZ → CDG");
+  await expect(page.locator("#date-availability")).toContainText("No loaded nonstop departure dates for YYZ → CDG");
   await expect(page.locator("#search-button")).toBeDisabled();
   await page.locator("#search-details > summary").click();
   await page.getByLabel("Maximum stops").selectOption("2");

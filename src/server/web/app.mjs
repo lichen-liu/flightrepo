@@ -248,6 +248,7 @@ async function loadDates() {
     destination = directDestination(), requestedDate = field("date").value;
   if (key === datesKey) return;
   datesKey = key;
+  $("retry-dates").hidden = true;
   datesLane.cancel();
   availableDates = new Set();
   // Preserve the selection while loading, then check it against the new data.
@@ -268,15 +269,10 @@ async function loadDates() {
       state.airports.set(origin, { ...state.airports.get(origin), timezone: result.timezone });
       updateZones();
     }
-    const scope = destination ? `${origin} → ${destination} nonstop` : `from ${origin}`,
-      pending = result.pending_review_dates || {},
-      pendingCount = pending[requestedDate] || Object.values(pending).reduce((a, b) => a + b, 0),
-      reviewMessage = pendingCount
-        ? ` ${pendingCount.toLocaleString()} uncertain observation${pendingCount === 1 ? " is" : "s are"} excluded pending review${pending[requestedDate] ? ` on ${requestedDate}` : " in this data"}.`
-        : "";
+    const scope = destination ? `${origin} → ${destination} nonstop` : `from ${origin}`;
     $("date-availability").textContent = result.dates.length
-      ? `${result.dates.length} departure dates with data ${scope} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}.${destination ? " Dates match this nonstop route." : " Dates show departures from the origin; search checks connecting routes to your destination."}${reviewMessage}`
-      : `${destination ? `No searchable nonstop departures for ${origin} → ${destination}` : `No departures loaded for ${origin}`} · ${timeBasisLabel(basis)} · ${result.timezone}.${reviewMessage} Try another route or flight times.`;
+      ? `${result.dates.length} departure dates with data ${scope} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}.${destination ? " Dates match this nonstop route." : " Dates show departures from the origin; search checks connecting routes to your destination."}`
+      : `${destination ? `No loaded nonstop departure dates for ${origin} → ${destination}` : `No departures loaded for ${origin}`} · ${timeBasisLabel(basis)} · ${result.timezone}. Try another route or flight times.`;
     if (requestedDate && result.dates.length && field("date").value !== requestedDate)
       $("date-availability").textContent += ` No matching departure data on ${requestedDate}; selected ${field("date").value}.`;
     if (!state.result) {
@@ -284,7 +280,7 @@ async function loadDates() {
       if (!result.dates.length) {
         $("options").innerHTML = `<p class="empty">${e($("date-availability").textContent)}</p>`;
         $("applied-query").textContent = `${origin} → ${airportCode(field("destination").value)}${requestedDate ? ` · ${requestedDate}` : ""}`;
-        $("status").textContent = "No searchable departures for the selected route and flight times.";
+        $("status").textContent = "No departure dates returned for the selected route and flight times.";
       } else {
         $("options").innerHTML = '<p class="empty">Choose departure dates and search to find a route.</p>';
         $("status").textContent = "Departure data loaded. Search to find a route.";
@@ -293,9 +289,11 @@ async function loadDates() {
     updateSearchButton();
   }, (error) => {
     datesKey = null;
-    $("date-availability").textContent = `${errorMessage(error)} Change the origin or clock to retry.`;
+    $("date-availability").textContent = errorMessage(error);
+    $("retry-dates").hidden = false;
   });
 }
+$("retry-dates").addEventListener("click", loadDates);
 function commonQuery() {
   const via = airportList(field("via").value);
   return {

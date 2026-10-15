@@ -94,48 +94,32 @@ def test_cancelled_departures_do_not_enable_calendar_dates(client, demo):
     assert client.get("/v1/dates?origin=YYZ").json()["dates"] == []
 
 
-def test_nonstop_calendar_does_not_enable_other_destinations_or_unreviewed_estimates(client, demo):
-    start = datetime.fromisoformat("2023-07-20T12:00:00Z")
-    candidates = [
-        FlightRecord(
-            provider="observations",
-            provider_id=f"candidate-{i}",
-            origin_iata="YYZ",
-            destination_iata="YVR",
-            fetched_at=start,
-            departure_observed_lower=start,
-            departure_observed_upper=start + timedelta(minutes=2),
-            arrival_observed_lower=start + timedelta(hours=5),
-            arrival_observed_upper=start + timedelta(hours=5, minutes=2),
-            evidence_kind="inferred_airport_proximity",
-        )
-        for i in range(25)
-    ]
-    other_route = candidates[0].model_copy(
+def test_nonstop_calendar_scopes_dates_to_both_airports(client, demo):
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
         update={
-            "provider_id": "other-route",
-            "destination_iata": "BOS",
-            "itinerary_reviewed": True,
+            "provider_id": "different-destination",
+            "destination_iata": "YVR",
+            "departure_scheduled": datetime.fromisoformat("2026-10-20T12:00:00Z"),
+            "arrival_scheduled": datetime.fromisoformat("2026-10-20T17:00:00Z"),
         }
     )
-    demo[0].upsert([*candidates, other_route])
-    params = {"origin": "YYZ", "clock": "UTC", "time_basis": "observed"}
-    assert client.get("/v1/dates", params=params).json()["dates"] == ["2023-07-20"]
+    demo[0].upsert([record])
+    params = {"origin": "YYZ", "clock": "UTC", "time_basis": "scheduled"}
+    assert client.get("/v1/dates", params=params).json()["dates"] == [
+        "2026-10-17",
+        "2026-10-20",
+    ]
     direct = client.get("/v1/dates", params={**params, "destination": "yvr"})
     assert direct.status_code == 200
     assert direct.json() == {
         "origin": "YYZ",
         "destination": "YVR",
         "timezone": "UTC",
-        "time_basis": "observed",
-        "dates": [],
-        "pending_review_dates": {"2023-07-20": 25},
+        "dates": ["2026-10-20"],
     }
-    approved = candidates[0].model_copy(update={"itinerary_reviewed": True})
-    demo[0].upsert([approved])
-    available = client.get("/v1/dates", params={**params, "destination": "YVR"}).json()
-    assert available["dates"] == ["2023-07-20"]
-    assert available["pending_review_dates"] == {"2023-07-20": 24}
+    assert client.get("/v1/dates", params={**params, "destination": "LHR"}).json()["dates"] == [
+        "2026-10-17",
+    ]
     assert client.get("/v1/dates", params={**params, "destination": "bad-code"}).status_code == 422
 
 
