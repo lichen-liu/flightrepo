@@ -1,6 +1,7 @@
 """Database identity is stored in SQLite, never inferred from a filename."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 
@@ -26,7 +27,7 @@ def ingestion_path(path):
     path = Path(path)
     if not sqlite_file(path):
         return False
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         return is_ingestion(connection)
 
 
@@ -50,7 +51,7 @@ def ingestion_target(path):
     path = Path(path)
     if not path.is_file():
         return
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         tables = connection.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()

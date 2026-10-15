@@ -218,6 +218,11 @@ local/internal; no ingestion HTTP endpoint is exposed by the public backend.
 
 ### Publication
 
+For legacy adoption, bulk audit/cohort review and preserving canonical admin state,
+see the [adoption and audit workflow](ingestion-review.md). Producer `adopt` and
+`audit` are separate from admin; audit writes require `--apply` and a private store.
+
+
 Publish an explicit inclusive UTC range, one atomic transaction per day. It
 copies non-held flight facts (including partial/cancelled records for lookup),
 the airport/transfer catalog and relevant source attribution. Search keeps its

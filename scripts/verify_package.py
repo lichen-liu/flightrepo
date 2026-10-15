@@ -165,6 +165,69 @@ def probe_ingestion(executable, directory, environment):
     )
     assert blocked.returncode != 0 and "read/query-only" in blocked.stderr
 
+    # Exercise the installed handoff on a disposable legacy-shaped snapshot.
+    legacy, adopted = root / "legacy.db", root / "adopted.db"
+    snapshot_code = """import sqlite3,sys
+from contextlib import closing
+with closing(sqlite3.connect(sys.argv[1])) as source, closing(sqlite3.connect(sys.argv[2])) as target:
+    source.backup(target)
+    for name in ('ingestion_audit_changes','ingestion_audit_runs','ingestion_adoptions','ingestion_documents','ingestion_store_metadata'):
+        target.execute('DROP TABLE '+name)
+    target.execute('DROP INDEX ingestion_publication_time')
+    target.commit()
+"""
+    subprocess.run(
+        [str(executable), "-c", snapshot_code, str(root / "ingestion.db"), str(legacy)],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    handoff = json.loads(
+        invoke(
+            [
+                "--db",
+                str(adopted),
+                "adopt",
+                "--from-db",
+                str(legacy),
+                "--source-root",
+                str(root),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert handoff["role"] == "ingestion" and handoff["source_changed"] is False
+    audited = json.loads(
+        invoke(
+            ["--db", str(adopted), "audit", "--apply", "--report", str(root / "audit.json")]
+        ).stdout
+    )
+    assert audited["health"]["passed"] and audited["counts"]["records"] == 2
+    replacement = root / "replacement.db"
+    released = json.loads(
+        invoke(
+            [
+                "--db",
+                str(adopted),
+                "publish",
+                "--serving-db",
+                str(replacement),
+                "--preserve-serving",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert released["inserted"] == 2
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

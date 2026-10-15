@@ -38,3 +38,28 @@ CREATE INDEX IF NOT EXISTS ingestion_publication_time ON flight_legs (CASE
     WHEN departure_actual_us IS NOT NULL OR arrival_actual_us IS NOT NULL THEN COALESCE(departure_actual_us,arrival_actual_us)
     ELSE COALESCE(departure_scheduled_us,arrival_scheduled_us)
 END);
+
+-- Private handoff and machine-correction provenance; never copied to serving.
+CREATE TABLE IF NOT EXISTS ingestion_adoptions (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    adopted_us INTEGER NOT NULL,
+    summary_json TEXT NOT NULL CHECK(json_valid(summary_json))
+) STRICT;
+CREATE TABLE IF NOT EXISTS ingestion_audit_runs (
+    id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    finished_us INTEGER NOT NULL,
+    summary_json TEXT NOT NULL CHECK(json_valid(summary_json))
+) STRICT;
+CREATE TABLE IF NOT EXISTS ingestion_audit_changes (
+    run_id TEXT NOT NULL REFERENCES ingestion_audit_runs(id) ON DELETE CASCADE,
+    source_id INTEGER NOT NULL REFERENCES data_sources(id),
+    source_record_key TEXT NOT NULL,
+    revision_before INTEGER NOT NULL,
+    revision_after INTEGER NOT NULL,
+    before_json TEXT NOT NULL CHECK(json_valid(before_json)),
+    after_json TEXT NOT NULL CHECK(json_valid(after_json)),
+    evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+    PRIMARY KEY(run_id,source_id,source_record_key)
+) STRICT, WITHOUT ROWID;

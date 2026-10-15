@@ -230,10 +230,14 @@ def publish_day(ingestion_db, serving_db, day):
     )
 
 
-def publish_range(ingestion_db, serving_db, start, end):
+def publish_range(ingestion_db, serving_db, start, end, *, preserve_serving=None):
     if end < start:
         raise ValueError("Publish end must follow start")
     # One committed publication per day; readers remain live, retries are idempotent.
     with file_mutex(Path(str(Path(serving_db).resolve()) + ".publish.lock")):
+        if preserve_serving is not None:
+            from ingestion.serving_controls import prepare_serving
+
+            prepare_serving(preserve_serving, serving_db)
         for offset in range((end - start).days + 1):
             yield publish_day(ingestion_db, serving_db, start + timedelta(days=offset))

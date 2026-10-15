@@ -36,6 +36,8 @@ never synthesize a flight number, schedule, airport timezone or city membership.
 | `ingestion_profiles` (private) | Configured source/input paths for repeatable producer jobs |
 | `ingestion_store_metadata` (private) | Role/version, immutable store identity and reset generation |
 | `ingestion_documents` (private) | Source/kind/key, validity, normalized JSON, content hash and revision |
+| `ingestion_adoptions` (private) | Verified legacy-copy fingerprints and inherited quota provenance |
+| `ingestion_audit_runs`, `ingestion_audit_changes` (private) | Scoped machine audit/correction receipts and per-record before/after evidence |
 | `publication_origin`, `publication_membership`, `publication_runs` (serving) | Publisher identity, owned source keys and per-day publication receipts |
 | `searchable_legs` (view) | Common departure/arrival intervals, filtered by explicit time basis |
 
@@ -227,8 +229,9 @@ The production ingestor already running in a frozen older runtime may finish
 without interruption. Its file is not a clean serving replacement under this
 architecture. Preserve it and its explicit human decisions; validate/import into
 a dedicated ingestion store before publishing a clean serving replacement.
-Never rename/copy the entire ingestion SQLite file over serving. No legacy
-conversion, production publication or serving cutover occurs automatically.
+Never rename/copy the entire ingestion SQLite file over serving. Use the explicit, tested `adopt` handoff described in the
+[adoption/audit workflow](ingestion-review.md). No production adoption,
+publication or serving cutover occurs automatically.
 
 API routing still supports `scheduled`, `actual` and `observed` modes. Calendars
 use the same eligibility predicate; lookup/export retain incomplete facts. The

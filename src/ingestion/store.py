@@ -129,7 +129,14 @@ class IngestionStore(FlightUpdater):
             with SQLiteConnection(self.path).connect() as connection:
                 require_ingestion(connection)
                 connection.execute("BEGIN IMMEDIATE")
+                tables = {
+                    r[0]
+                    for r in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")
+                }
                 for table in (
+                    "ingestion_audit_changes",
+                    "ingestion_audit_runs",
+                    "ingestion_adoptions",
                     "flight_legs",
                     "flight_tombstones",
                     "ingestion_documents",
@@ -137,7 +144,8 @@ class IngestionStore(FlightUpdater):
                     "airport_transfers",
                     "airports",
                 ):
-                    connection.execute(f'DELETE FROM "{table}"')
+                    if table in tables:
+                        connection.execute(f'DELETE FROM "{table}"')
                 tables = {
                     r[0]
                     for r in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")

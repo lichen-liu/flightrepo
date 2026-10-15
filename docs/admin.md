@@ -189,6 +189,9 @@ candidates, evidence, airports/transfers and extraction receipts/boundaries whil
 preserving producer profiles, source notices and quota. `maintenance reset --yes`
 also clears configuration and resets quota to 20 GiB. Both reject active jobs and
 leave serving untouched. Inspecting/querying never opens a writable connection.
+Producer `adopt` and `audit --apply` also remain outside admin; audit journal
+tables are available through SELECT inspection. See [bulk review](ingestion-review.md).
+
 Manual edits/imports, approvals, creation, admission-policy and quota updates are
 rejected for ingestion stores. SQL inspection remains SELECT-only.
 
