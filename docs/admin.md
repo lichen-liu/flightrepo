@@ -93,6 +93,16 @@ Automatic admission never sets `itinerary_reviewed`. You may explicitly review a
 already searchable estimate with the same command. An edit alone does not approve
 a held record. Website counts distinguish searchable legs from held candidates.
 
+For a supporting manual route check, open the FlightRoutes airport-pair page,
+for example [YYZ → SEA](https://www.flightroutes.com/YYZ-SEA). Its
+[documented focus](https://www.flightroutes.com/about) is current/upcoming schedules.
+A route match can support plausibility but cannot verify a particular historical
+flight, its aircraft type or continuity through missing observations. A missing
+current route does not disprove historical, private or charter movements. Keep
+such references separate from source facts and manual approval. They do not
+change admission or trigger automated fetching; no public API, historical-query
+coverage or data-reuse agreement has been established for this integration.
+
 ## Create, edit, and delete flights
 
 ```text
