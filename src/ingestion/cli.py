@@ -80,6 +80,11 @@ def parser():
         required=True,
         help="last UTC INPUT day, including arrival context",
     )
+    adopt.add_argument(
+        "--profiles-db",
+        type=Path,
+        help="preserve producer configuration from the old selected database",
+    )
     adopt.add_argument("--report", type=Path)
     audit = commands.add_parser(
         "audit",
@@ -184,6 +189,7 @@ def run(arguments, *, database_path=None, interactive=False):
                 args.end,
                 source_root=args.source_root,
                 policy_db=args.policy_db,
+                profiles_db=args.profiles_db,
                 progress=progress,
             )
         else:

@@ -463,3 +463,44 @@ def test_adoption_rejects_invalid_retained_contract_even_if_sqlite_allows_it(
     with pytest.raises(ValueError, match="validation failed"):
         adopt_archive(source, target, DAY, DAY, source_root=root)
     assert not target.exists()
+
+
+def test_adoption_preserves_old_selected_producer_configuration_privately(archive, tmp_path):
+    source, root = archive
+    selected = tmp_path / "selected.db"
+    with sqlite3.connect(selected) as c:
+        c.execute(
+            "CREATE TABLE ingestion_profiles(source TEXT PRIMARY KEY,data TEXT,last_used INTEGER)"
+        )
+        c.execute(
+            "INSERT INTO ingestion_profiles VALUES(?,?,?)",
+            (
+                "adsblol",
+                json.dumps(
+                    {"data_root": str(root), "output_db": str(source), "manifest": "manifest.json"}
+                ),
+                2,
+            ),
+        )
+        c.execute(
+            "INSERT INTO ingestion_profiles VALUES(?,?,?)",
+            ("csv", json.dumps({"csv": "licensed.csv", "airports": ["AAA"]}), 1),
+        )
+    target = tmp_path / "private.db"
+    result = adopt_archive(source, target, DAY, DAY, source_root=root, profiles_db=selected)
+    assert set(result["profiles_copied"]) == {"adsblol", "csv"}
+    with sqlite3.connect(target) as c:
+        profile = json.loads(
+            c.execute("SELECT data FROM ingestion_profiles WHERE source='adsblol'").fetchone()[0]
+        )
+        assert profile["output_db"] == str(target) and profile["data_root"] == str(root)
+        assert (
+            json.loads(
+                c.execute("SELECT data FROM ingestion_profiles WHERE source='csv'").fetchone()[0]
+            )["csv"]
+            == "licensed.csv"
+        )
+    with sqlite3.connect(selected) as c:
+        assert json.loads(
+            c.execute("SELECT data FROM ingestion_profiles WHERE source='adsblol'").fetchone()[0]
+        )["output_db"] == str(source)

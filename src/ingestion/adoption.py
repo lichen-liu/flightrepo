@@ -103,7 +103,15 @@ def completed_archive(connection, start, end):
 
 
 def adopt_archive(
-    source_db, destination, start, end, *, source_root, policy_db=None, progress=None
+    source_db,
+    destination,
+    start,
+    end,
+    *,
+    source_root,
+    policy_db=None,
+    profiles_db=None,
+    progress=None,
 ):
     """Publish a NEW ingestion file only after a consistent backup and exact row checks.
 
@@ -190,6 +198,27 @@ def adopt_archive(
                         quota_policy_database=str(Path(policy_db or source_db).resolve()),
                         quota_bytes=live_policy["quota_bytes"],
                     )
+                    summary["profiles_database"] = (
+                        str(Path(profiles_db).resolve()) if profiles_db else None
+                    )
+                    summary["profiles_copied"] = []
+                    if profiles_db is not None:
+                        with SQLiteConnection(profiles_db, read_only=True).connect() as profiles:
+                            profiles.execute("BEGIN")
+                            if profiles.execute(
+                                "SELECT 1 FROM sqlite_schema WHERE name='ingestion_profiles'"
+                            ).fetchone():
+                                for profile in profiles.execute(
+                                    "SELECT source,data,last_used FROM ingestion_profiles ORDER BY last_used"
+                                ):
+                                    data = json.loads(profile["data"])
+                                    if profile["source"] == "adsblol":
+                                        data["output_db"] = str(destination)
+                                    copy.execute(
+                                        "INSERT INTO ingestion_profiles VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET data=excluded.data,last_used=excluded.last_used",
+                                        (profile["source"], json.dumps(data), profile["last_used"]),
+                                    )
+                                    summary["profiles_copied"].append(profile["source"])
                     copy.execute(
                         "INSERT INTO ingestion_adoptions VALUES(1,?,?)",
                         (utc_us(datetime.now(UTC)), json.dumps(summary, separators=(",", ":"))),

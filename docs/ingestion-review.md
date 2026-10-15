@@ -19,7 +19,7 @@ as a rollback copy.
 python -m ingestion --db var/ingestion/ingestion.db adopt \
   --from-db var/hosted/flights-2023-relaxed.db \
   --source-root var/hosted/adsblol-2023-jul-dec-v5 \
-  --policy-db var/hosted/flights.db \
+  --policy-db var/hosted/flights.db --profiles-db var/hosted/flights.db \
   --start 2023-07-01 --end 2024-01-01 \
   --report var/ingestion/adoption.json
 ```
@@ -35,7 +35,10 @@ Only the verified copy receives the private role and publication index.
 The destination must be new: existing files/sidecars are never overwritten.
 Integrity, foreign keys and quota are checked before atomic no-clobber creation.
 `--policy-db` copies the latest persisted quota once; the new file then owns its
-policy. Raw/staging space remains excluded. No source or serving facts change.
+policy. `--profiles-db` preserves producer profiles from the old selected DB in
+the private store, updating the ADSB output path to its new destination. Source
+extraction configuration remains unchanged; profiles never enter serving.
+Raw/staging space remains excluded. No source or serving facts change.
 Adoption is an explicit compatibility handoff, not an automatic migration at startup.
 
 ## 3. Audit and group held records
