@@ -32,6 +32,7 @@ from ingestion.adsblol.movements import (
     advance_boundary,
     reduce_movement,
 )
+from ingestion.adsblol.scratch import raw_directory
 from ingestion.store import IDENTITY_SCHEMA, STORE_SCHEMA
 
 PIPELINE_VERSION = "observed-itinerary-v5"
@@ -355,7 +356,12 @@ class ExtractionBudget:
             for path in databases
             for item in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"))
         }
-        return sum(file_bytes(path) for path in self.root.rglob("*") if path not in excluded)
+        used = sum(file_bytes(path) for path in self.root.rglob("*") if path not in excluded)
+        # pathlib does not recurse through the configured RAM symlink.
+        raw = raw_directory(self.root)
+        if raw.is_symlink():
+            used += directory_bytes(raw.resolve())
+        return used
 
     def check_database(self, connection=None):
         limit = self.database_ceiling()
@@ -393,7 +399,7 @@ class ExtractionBudget:
 def cleanup_raw(root, receipt):
     """Remove only recorded inputs that still match their committed hashes."""
     for item in receipt["inputs"]:
-        path = root / "raw" / receipt["day"] / item["name"]
+        path = raw_directory(root) / receipt["day"] / item["name"]
         if not path.exists():
             continue
         saved = {**item, "date": receipt["day"]}
@@ -631,7 +637,7 @@ def _extract_day(
                     canonical(assets),
                 ),
             ).lastrowid
-        output = root / "raw"
+        output = raw_directory(root)
         diagnostics.phase = "download"
         if download:
             other = budget.used() - directory_bytes(output) if output.exists() else budget.used()
@@ -813,6 +819,7 @@ def extract_day(
     # Serialize by destination as well as scratch directory when these differ.
     lock = budget.database.with_name(budget.database.name + ".extraction.lock")
     with file_mutex(root / ".extract.lock"), file_mutex(lock):
+        raw_directory(root)
         counters = Counter(
             records_inserted=0,
             records_updated=0,

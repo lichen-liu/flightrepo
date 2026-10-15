@@ -238,6 +238,53 @@ Clearing ingestion alone does not change serving; a later explicit publication
 reconciles only its requested dates. Never swap or rename an ingestion database
 into the serving path: the backend rejects its stored role.
 
+## RAM-backed raw downloads
+
+For this host, temporary daily archives use a **4 GiB RAM disk**. Durable SQLite
+files, receipts, boundary state and logs remain on disk. Only one raw day is held;
+verified inputs are removed after commit. The largest selected 2023 daily copy is
+about 1.81 GiB, leaving room for the downloader's mandatory 1 GiB free-space reserve.
+Larger future daily selections fail the free-space check rather than overflow.
+RAM filesystems may be swapped by the OS; this reduces archive writes but cannot
+promise zero SSD writes. Do not disable system swap to run ingestion.
+
+Mount a bounded RAM filesystem before starting: macOS `hdiutil attach -nomount
+ram://8388608` creates a 4 GiB device. Format **only that newly returned empty
+RAM device** with `diskutil eraseVolume HFS+ FlightIngestRaw <returned-device>`.
+On Linux, use an explicitly size-limited `tmpfs` mount. Then bind a working root:
+
+```sh
+python -m ingestion.adsblol.scratch \
+  --data-root var/ingestion/adsblol-work \
+  --mount /Volumes/FlightIngestRaw \
+  --output-db var/ingestion/ingestion.db \
+  --wait
+```
+
+Use that same `--data-root` for the normal producer job. This operation only
+configures temporary storage; it neither initializes nor changes database rows.
+It verifies the mount is a macOS `ram://` device or Linux `tmpfs`, obtains the
+extractor's daily/output locks, and links `raw` into a dedicated RAM directory.
+`--wait` lets a running day finish, commit and clean its input before switching;
+unfinished archives/partial downloads are never moved or discarded. A small
+`raw.disk-before-ram` directory retains old selection/lock metadata only.
+
+The durable `.raw-storage.json` and a volatile session marker identify the mount.
+New producers recheck mount/device/link/session during working-space IO and stop
+if it disappears; they never silently download to the old disk directory. The
+working-space budget includes RAM raw/partial files independently of DB quota.
+The already-running frozen legacy worker can use this same link without changing
+its code; it retains its existing filesystem free-space guard. Keep its volume
+mounted until the entire job stops. Before resuming any frozen worker, explicitly
+check the recorded mount/session: it does not have the new per-IO mount checks.
+
+RAM inputs are disposable and vanish on reboot. To recover, create/remount RAM,
+bind a **fresh working root**, and resume the same date range/output database with
+that root. Completed days and cross-day boundaries are in SQLite and are reused;
+only an uncommitted day is downloaded again. Do not reset the database or remove
+its receipts. Never unmount while a worker is running. After all workers stop and
+raw archives are gone, detach the recorded RAM device to release its memory.
+
 ## Quota and observability
 
 `database_policy.quota_bytes` stores the live database limit (default 20 GiB).
