@@ -120,6 +120,9 @@ export class DataCalendar {
       offset = new Date(`${this.month}-01T00:00:00Z`).getUTCDay();
     for (const [selector, month] of [["[data-calendar-previous]", previous], ["[data-calendar-next]", next]]) {
       const button = this.panel.querySelector(selector);
+      // Chromium blurs a focused button when it becomes disabled. Keep focus
+      // inside the calendar before disabling a navigation boundary.
+      if (!month && button === document.activeElement) this.monthControl.focus();
       button.disabled = !month;
       button.dataset.month = month || "";
     }

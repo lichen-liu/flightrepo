@@ -261,6 +261,10 @@ check("calendar month controls stay open across sparse months and years", async 
   await expect(next).toBeDisabled();
   await previous.click();
   await expect(month).toHaveValue("2026-11");
+  await previous.click();
+  await expect(calendar).toBeVisible();
+  await expect(previous).toBeDisabled();
+  await expect(month).toHaveValue("2026-10");
   await month.selectOption("2026-10");
   await expect(calendar).toBeVisible();
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
@@ -301,6 +305,30 @@ check("last departure calendar navigates months within the selected range", asyn
   await calendar.getByRole("button", { name: "Use first date only" }).click();
   await expect(input).toHaveValue("");
   await expect(calendar).toBeHidden();
+});
+
+check("date refresh does not steal focus when the traveler moves to another input", async (page) => {
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
+    timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"],
+  }));
+  await open(page);
+  let release, intercepted;
+  const gate = new Promise((resolve) => { release = resolve; }),
+    started = new Promise((resolve) => { intercepted = resolve; });
+  await page.route("**/v1/search-availability?*", async (route) => {
+    intercepted();
+    await gate;
+    await fulfillAvailability(route, {
+      timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"],
+    });
+  });
+  try {
+    await chooseDate(page, "date", "2026-10-19");
+    await started;
+    await page.getByLabel("To", { exact: true }).focus();
+  } finally { release(); }
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(page.getByLabel("To", { exact: true })).toBeFocused();
 });
 
 check("availability and counts follow the selected flight times without duplicate requests", async (page) => {

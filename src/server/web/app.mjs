@@ -247,7 +247,9 @@ function updateLastDates() {
 async function loadDates() {
   const origin = airportCode(field("origin").value), destination = airportCode(field("destination").value),
     clock = field("input-clock").value, basis = field("time-basis").value, key = dateKey(),
-    requestedDate = field("date").value;
+    requestedDate = field("date").value,
+    focusedDate = [field("date"), field("last-date")].includes(document.activeElement)
+      ? document.activeElement : null;
   if (key === datesKey) return;
   datesKey = key;
   datesLane.cancel();
@@ -295,6 +297,10 @@ async function loadDates() {
     $("coverage-warning").hidden = !warnings.length;
     if (!result.outbound || !result.inbound)
       field("date").disabled = field("last-date").disabled = true;
+    // Disabling an input during refresh removes focus in Chromium. Restore it
+    // only if the traveler has not moved to another control while waiting.
+    if (focusedDate && !focusedDate.disabled && document.activeElement === document.body)
+      focusedDate.focus();
     $("date-availability").textContent = result.dates.length
       ? `${result.dates.length} departure dates with data from ${origin} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}. Dates require departures from ${origin} and arrivals into ${destination} within the search horizon; no direct flight is required.`
       : `No selectable departure dates for ${origin} → ${destination}. Dates need outbound flights and later destination arrivals within the search horizon.`;
