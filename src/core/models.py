@@ -35,7 +35,12 @@ class FlightRecord(BaseModel):
         "source_reported", "inferred_ground_brackets", "inferred_airport_proximity", "manual"
     ] = "source_reported"
     review_reasons: list[
-        Literal["airborne_airport_estimate", "observation_gap", "callsign_variation"]
+        Literal[
+            "airborne_airport_estimate",
+            "observation_gap",
+            "callsign_variation",
+            "implausible_airport_timing",
+        ]
     ] = Field(default_factory=list)
     itinerary_reviewed: bool = False
 

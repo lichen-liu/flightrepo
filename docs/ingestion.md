@@ -73,6 +73,10 @@ manifest → download/verify one day → stream aircraft members → filter/reco
   hidden intermediate stops can otherwise resemble one flight. Shorter reception
   gaps and changing callsigns no longer require review on their own. Keep the
   dominant callsign and log variations; source leg markers still split movements.
+  Candidates whose airport distance requires more than 1,500 km/h even across
+  their widest retained time window also require review (`implausible_airport_timing`).
+  This is a generous best-effort plausibility bound, independent of aircraft type;
+  it retains the record and does not certify slower candidates as correct.
   These checks retain candidates rather than rejecting them; the six-hour parsing
   limit is independent of the serving review gate.
 - Allow internal observation gaps up to six hours; terminal brackets up to 30
@@ -125,7 +129,7 @@ Optional `--policy FILE` contains fields from
 or callsign lists. `{"allow_airborne_endpoints":false}` requires ground evidence
 at both ends without adding any aircraft/operator whitelist. Defaults need no
 configuration file. Policy and algorithm
-`observed-itinerary-v4` are recorded in batch/configuration provenance; changed
+`observed-itinerary-v5` are recorded in batch/configuration provenance; changed
 rules require a fresh output database so old receipts cannot silently skip work.
 `review_gap_seconds` adjusts the 1,800-second review threshold independently of
 the six-hour parsing limit. The source identity namespace remains stable across

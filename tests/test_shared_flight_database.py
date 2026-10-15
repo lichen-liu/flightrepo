@@ -321,7 +321,9 @@ def test_admin_quota_updates_during_staged_parsing(tmp_path, monkeypatch, quota,
     assert not list((tmp_path / "inputs").glob(".day-stage-*"))
 
 
-@pytest.mark.parametrize("reason", ["observation_gap", "callsign_variation"])
+@pytest.mark.parametrize(
+    "reason", ["observation_gap", "callsign_variation", "implausible_airport_timing"]
+)
 def test_ground_candidates_with_uncertain_continuity_require_review(tmp_path, capsys, reason):
     updater = FlightUpdater(tmp_path / "review.db")
     updater.initialize()
@@ -358,3 +360,35 @@ def test_review_gate_applies_even_when_estimate_also_has_schedules(tmp_path):
     assert reader.web_catalog().dataset.time_bases == {"scheduled": 0, "observed": 0, "actual": 0}
     assert reader.available_dates("AAA", "UTC", "scheduled").dates == []
     assert reader.search_itineraries(query(time_basis="scheduled")).items == []
+
+
+def test_implausibly_fast_airport_hop_is_retained_for_review_not_served(tmp_path):
+    database = tmp_path / "hosted.db"
+    data = leg_trace()
+    for row in data["trace"]:
+        row[0] /= 4
+    receipt, _ = run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
+    reader = FlightReader(database)
+    (record,) = reader.all_records()
+    assert record.evidence_kind == "inferred_ground_brackets"
+    assert record.review_reasons == ["implausible_airport_timing"]
+    assert record.aircraft_type_code == "A320" and record.callsign == "UAL123"
+    assert reader.available_dates("AAA", "UTC").dates == []
+    assert reader.search_itineraries(query()).items == []
+    assert receipt["diagnostics"]["counts"]["review_reasons"]["implausible_airport_timing"] == 1
+    repeated, _ = run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
+    assert repeated["result"] == "already_committed"
+    assert len(reader.all_records()) == 1
+
+
+def test_airport_timing_check_respects_uncertain_event_windows(tmp_path):
+    database = tmp_path / "hosted.db"
+    data = leg_trace()
+    for row in data["trace"]:
+        row[0] /= 4
+    data["trace"] = data["trace"][1:-1]
+    data["trace"][0][8] = {"flight": "UAL123"}
+    run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
+    (record,) = FlightReader(database).all_records()
+    assert record.review_reasons == ["airborne_airport_estimate"]
+    assert record.needs_review  # Airport estimate still needs review independently.

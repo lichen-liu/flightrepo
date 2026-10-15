@@ -23,6 +23,7 @@ from ingestion.adsblol.archive import (
     verified,
 )
 from ingestion.adsblol.diagnostics import LOGGER, Diagnostics
+from ingestion.adsblol.legs import distance_km
 from ingestion.adsblol.movements import (
     AirportLookup,
     LeadingMovement,
@@ -31,7 +32,7 @@ from ingestion.adsblol.movements import (
     reduce_movement,
 )
 
-PIPELINE_VERSION = "observed-itinerary-v4"
+PIPELINE_VERSION = "observed-itinerary-v5"
 
 SOURCE_ROWS = [
     (
@@ -155,6 +156,33 @@ def save_leg(connection, leg, counters, *, diagnostics=None):
     )
 
 
+def implausible_airport_timing(connection, data):
+    """Flag inconsistent airport/time claims using the widest retained time window.
+
+    This deliberately generous civil-flight bound does not depend on a type or
+    operator whitelist. It catches false short hops without discarding evidence.
+    Missing airport coordinates cannot establish a contradiction.
+    """
+    points = {
+        code: (lat, lon)
+        for code, lat, lon in connection.execute(
+            "SELECT iata,latitude,longitude FROM airports WHERE iata IN (?,?)",
+            (data["origin_iata"], data["destination_iata"]),
+        )
+        if lat is not None and lon is not None
+    }
+    if len(points) != 2:
+        return False
+    hours = (
+        datetime.fromisoformat(data["arrival_upper"])
+        - datetime.fromisoformat(data["departure_lower"])
+    ).total_seconds() / 3600
+    if hours <= 0:
+        return False  # The typed record rejects invalid chronology separately.
+    distance = distance_km(*points[data["origin_iata"]], *points[data["destination_iata"]])
+    return distance > 1500 * hours
+
+
 def save_candidate(connection, key, data, counters, *, diagnostics=None):
     protected = connection.execute(
         "SELECT 1 FROM flight_tombstones WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? UNION ALL SELECT 1 FROM flight_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? AND locally_modified_us IS NOT NULL",
@@ -163,6 +191,12 @@ def save_candidate(connection, key, data, counters, *, diagnostics=None):
     if protected:
         counters["records_protected"] += 1
         return False
+    if implausible_airport_timing(connection, data):
+        reasons = data.get("review_reasons", [])
+        if "implausible_airport_timing" not in reasons:
+            data = {**data, "review_reasons": [*reasons, "implausible_airport_timing"]}
+            if diagnostics is not None:
+                diagnostics.count("review_reasons", "implausible_airport_timing")
     old = connection.execute("SELECT data FROM itinerary_legs WHERE key=?", (key,)).fetchone()
     if old is not None and json.loads(old[0]) != data:
         previous = json.loads(old[0])
