@@ -144,6 +144,169 @@ check("date availability failures remain disabled until a retry succeeds", async
   await expect(page.locator("#date-availability")).toContainText("UTC");
   await expect(page.locator("#search-button")).toBeEnabled();
 });
+
+check("calendar month controls stay open across sparse months and years", async (page) => {
+  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+    origin: "YYZ", timezone: "America/Toronto",
+    dates: ["2026-10-17", "2026-11-18", "2027-02-19"],
+  } }));
+  await open(page);
+  const calendar = page.locator("#date-calendar"),
+    month = calendar.getByRole("combobox", { name: "Month with departure data" }),
+    next = calendar.getByRole("button", { name: "Next month with data" }),
+    previous = calendar.getByRole("button", { name: "Previous month with data" });
+  await page.locator("#date").click();
+  await expect(previous).toBeDisabled();
+  await next.click();
+  await expect(calendar).toBeVisible();
+  await expect(month).toHaveValue("2026-11");
+  await next.click();
+  await expect(calendar).toBeVisible();
+  await expect(month).toHaveValue("2027-02");
+  await expect(next).toBeDisabled();
+  await previous.click();
+  await expect(month).toHaveValue("2026-11");
+  await month.selectOption("2026-10");
+  await expect(calendar).toBeVisible();
+  await expect(page.locator("#date")).toHaveValue("2026-10-17");
+  await expect(page.locator("#status")).not.toContainText("Inputs changed");
+  await month.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(month).toHaveValue("2026-11");
+  await expect(calendar).toBeVisible();
+  await calendar.locator('[data-date="2026-11-18"]').click();
+  await expect(calendar).toBeHidden();
+  await expect(page.locator("#date")).toHaveValue("2026-11-18");
+  await expect(page.locator("#date")).toBeFocused();
+  await expect(page.locator("#search-button")).toBeEnabled();
+});
+
+check("last departure calendar navigates months within the selected range", async (page) => {
+  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+    origin: "YYZ", timezone: "America/Toronto",
+    dates: ["2026-10-17", "2026-11-01", "2026-11-16", "2026-12-01"],
+  } }));
+  await open(page);
+  await page.locator("#search-details > summary").click();
+  const input = page.locator('[name="last-date"]'),
+    calendar = page.locator("#last-date-calendar"),
+    month = calendar.getByRole("combobox", { name: "Month with departure data" });
+  await input.click();
+  await calendar.getByRole("button", { name: "Next month with data" }).click();
+  await expect(calendar).toBeVisible();
+  await expect(month).toHaveValue("2026-11");
+  await expect(calendar.locator('[data-date="2026-11-01"]')).toBeEnabled();
+  await expect(calendar.locator('[data-date="2026-11-17"]')).toBeDisabled();
+  await expect(month.locator('option[value="2026-12"]')).toHaveCount(0);
+  await calendar.locator('[data-date="2026-11-01"]').click();
+  await expect(input).toHaveValue("2026-11-01");
+  await chooseDate(page, "date", "2026-10-17");
+  await input.click();
+  await calendar.getByRole("button", { name: "Use first date only" }).click();
+  await expect(input).toHaveValue("");
+  await expect(calendar).toBeHidden();
+});
+
+check("availability and counts follow the selected flight times without duplicate requests", async (page) => {
+  await page.route("**/v1/catalog", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.dataset.time_bases = { scheduled: 12, observed: 3, actual: 1 };
+    await route.fulfill({ response, json: data });
+  });
+  const dateRequests = [];
+  await page.route("**/v1/dates?*", async (route) => {
+    const params = new URL(route.request().url()).searchParams,
+      basis = params.get("time_basis");
+    dateRequests.push(basis);
+    await route.fulfill({ json: {
+      origin: params.get("origin"),
+      timezone: params.get("clock") === "UTC" ? "UTC" : "America/Toronto",
+      dates: basis === "observed" ? ["2025-01-02"] : basis === "actual" ? [] : ["2026-10-17"],
+    } });
+  });
+  await open(page);
+  const times = page.getByLabel("Flight times"),
+    availability = page.locator("#date-availability");
+  await expect(page.locator("#dataset-tag")).toContainText("Published schedules · 12");
+  await times.selectOption("observed");
+  await expect(availability).toContainText("Observed historical legs · America/Toronto");
+  await expect(availability).toContainText("from YYZ");
+  await expect(page.locator("#date")).toHaveValue("2025-01-02");
+  await expect(page.locator("#dataset-tag")).toContainText("Observed historical legs · 3");
+  await expect(page.locator("#applied-query")).toContainText("Published schedules");
+  await search(page);
+  await expect(page.locator("#applied-query")).toContainText("Observed historical legs");
+  await times.selectOption("actual");
+  await expect(availability).toContainText("No departures loaded for YYZ · Reported actual times");
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator("#date")).toHaveValue("");
+  await expect(page.locator("#search-button")).toBeDisabled();
+  await expect(page.locator("#dataset-tag")).toContainText("Reported actual times · 1");
+  await times.selectOption("scheduled");
+  await expect(page.locator("#date")).toHaveValue("2026-10-17");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  assert.deepEqual(dateRequests, ["scheduled", "observed", "actual", "scheduled"]);
+});
+
+check("late availability responses cannot overwrite a new origin and clock", async (page) => {
+  await open(page);
+  let release, started, completed;
+  const delayed = new Promise((resolve) => { release = resolve; }),
+    intercepted = new Promise((resolve) => { started = resolve; }),
+    finished = new Promise((resolve) => { completed = resolve; });
+  await page.route("**/v1/dates?*", async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get("origin") !== "LHR") return route.continue();
+    if (params.get("clock") === "local") {
+      started();
+      await delayed;
+      try {
+        await route.fulfill({ json: {
+          origin: "LHR", timezone: "Europe/London", dates: ["2025-01-01"],
+        } });
+      } finally {
+        completed();
+      }
+    } else {
+      await route.fulfill({ json: {
+        origin: "LHR", timezone: "UTC", dates: ["2026-10-18", "2026-11-02"],
+      } });
+    }
+  });
+  await page.getByLabel("From", { exact: true }).fill("LHR");
+  await intercepted;
+  await expect(page.locator("#search-button")).toBeDisabled();
+  await expect(page.locator("#date")).toBeDisabled();
+  await page.getByLabel("Input clock").selectOption("UTC");
+  await expect(page.locator("#date")).toHaveValue("2026-10-18");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  release();
+  await finished;
+  await expect(page.locator("#date-availability")).toContainText("from LHR · Published schedules · UTC");
+  await expect(page.locator("#date-zones")).toContainText("UTC");
+  await expect(page.locator("#date")).toHaveValue("2026-10-18");
+  await page.locator("#date").click();
+  await expect(page.locator('#date-calendar [data-date="2026-10-18"]')).toBeEnabled();
+});
+
+check("phone calendar can switch months by touch without overflowing", async (page) => {
+  await page.route("**/v1/dates?*", (route) => route.fulfill({ json: {
+    origin: "YYZ", timezone: "America/Toronto", dates: ["2026-10-17", "2026-11-18"],
+  } }));
+  await open(page);
+  const calendar = page.locator("#date-calendar");
+  await page.locator("#date").tap();
+  await calendar.getByRole("button", { name: "Next month with data" }).tap();
+  await expect(calendar).toBeVisible();
+  await expect(calendar.getByRole("combobox")).toHaveValue("2026-11");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const bounds = await calendar.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 320);
+  await calendar.locator('[data-date="2026-11-18"]').tap();
+  await expect(page.locator("#date")).toHaveValue("2026-11-18");
+  await expect(calendar).toBeHidden();
+}, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 async function exported(page) {
   const pending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
@@ -760,7 +923,19 @@ check(
   },
 );
 
-check("stale timezone metadata is corrected before retry", async (page) => {
+check("stale catalog timezone is corrected by date availability before search", async (page) => {
+  await page.route("**/v1/catalog", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.airports.find((a) => a.iata === "YYZ").timezone = "Asia/Tokyo";
+    await route.fulfill({ response, json: data });
+  });
+  const data = await open(page);
+  assert.equal(data.departure_timezone, "America/Toronto");
+  await expect(page.locator("#date-zones")).toContainText("America/Toronto");
+  await expect(page.locator("#error")).toBeHidden();
+});
+
+check("timezone changes after loading dates are corrected before retry", async (page) => {
   let actualZone, departureDate;
   await page.route("**/v1/catalog", async (route) => {
     const response = await route.fetch(),
@@ -771,6 +946,11 @@ check("stale timezone metadata is corrected before retry", async (page) => {
     departureDate = localDate(catalog.dataset.first_departure, actualZone);
     origin.timezone = "Asia/Tokyo";
     await route.fulfill({ response, json: catalog });
+  });
+  await page.route("**/v1/dates?*", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.timezone = "Asia/Tokyo";
+    await route.fulfill({ response, json: data });
   });
   const pending = page.waitForResponse((r) =>
     searchPath.test(new URL(r.url()).pathname),

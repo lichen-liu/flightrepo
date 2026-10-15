@@ -74,6 +74,26 @@ function acceptTimeError(error) {
 }
 
 const airportCode = (value) => value.trim().toUpperCase();
+const timeBasisLabel = (basis) => ({
+  scheduled: "Published schedules",
+  observed: "Observed historical legs",
+  actual: "Reported actual times",
+})[basis] || basis;
+const dateKey = () => `${airportCode(field("origin").value)}/${field("input-clock").value}/${field("time-basis").value}`;
+function updateDatasetTag() {
+  const data = state.catalog?.dataset;
+  if (!data) return;
+  const basis = field("time-basis").value,
+    count = data.time_bases?.[basis] ?? data.flight_count,
+    demo = data.providers.length === 1 && data.providers[0] === "demo";
+  $("dataset-tag").textContent =
+    `${demo ? "Demo · " : ""}${timeBasisLabel(basis)} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} awaiting itinerary review` : ""}`;
+}
+function updateSearchButton() {
+  $("search-button").disabled = !!searchLane.controller ||
+    datesKey !== dateKey() || !availableDates.has(field("date").value) ||
+    !availableDates.has(field("last-date").value || field("date").value);
+}
 function normalizeAirportInput(control) {
   const list = control.hasAttribute("data-airport-list"),
     value = list ? control.value.toUpperCase() : airportCode(control.value);
@@ -215,7 +235,7 @@ function updateLastDates() {
 }
 async function loadDates() {
   const origin = airportCode(field("origin").value), clock = field("input-clock").value,
-    key = `${origin}/${clock}/${field("time-basis").value}`;
+    basis = field("time-basis").value, key = dateKey();
   if (key === datesKey) return;
   datesKey = key;
   datesLane.cancel();
@@ -230,14 +250,18 @@ async function loadDates() {
     return;
   }
   $("date-availability").textContent = "Loading departure dates…";
-  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${field("time-basis").value}`, undefined, (result) => {
+  await datesLane.run(`/v1/dates?origin=${origin}&clock=${clock}&time_basis=${basis}`, undefined, (result) => {
     availableDates = new Set(result.dates);
     firstCalendar.setDates(result.dates);
     updateLastDates();
+    if (clock === "local" && state.airports.has(origin)) {
+      state.airports.set(origin, { ...state.airports.get(origin), timezone: result.timezone });
+      updateZones();
+    }
     $("date-availability").textContent = result.dates.length
-      ? `${result.dates.length} departure dates with data · ${result.timezone}. Unavailable days are disabled.`
-      : `No departures loaded for ${origin}.`;
-    $("search-button").disabled = !availableDates.size || !!searchLane.controller;
+      ? `${result.dates.length} departure dates with data from ${origin} · ${timeBasisLabel(basis)} · ${result.timezone} · ${result.dates[0]} to ${result.dates.at(-1)}. Disabled days have no matching departure data. Search checks routes to your destination.`
+      : `No departures loaded for ${origin} · ${timeBasisLabel(basis)} · ${result.timezone}. Try another origin or flight times.`;
+    updateSearchButton();
   }, (error) => {
     datesKey = null;
     $("date-availability").textContent = `${errorMessage(error)} Change the origin or clock to retry.`;
@@ -268,7 +292,7 @@ function searchRequest() {
     first = field("date").value,
     last = field("last-date").value || first;
   if (!first) throw Error("Choose a departure date.");
-  if (datesKey !== `${query.origin}/${field("input-clock").value}/${field("time-basis").value}` ||
+  if (datesKey !== dateKey() ||
       !availableDates.has(first) || !availableDates.has(last))
     throw Error("Choose departure dates with data for this origin and clock.");
   if (last < first)
@@ -364,7 +388,7 @@ async function search() {
         : "Search failed. Adjust the input or retry.";
     },
     () => {
-      $("search-button").disabled = !availableDates.size;
+      updateSearchButton();
       $("results").setAttribute("aria-busy", "false");
     },
   );
@@ -379,7 +403,7 @@ function renderOptions() {
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : state.airports.get(result.query.origin)?.timezone || "local"}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])}`;
   const d = result.diagnostics;
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
@@ -491,7 +515,10 @@ function renderEvidence() {
       "Imported records",
       `${data.total_record_count ?? data.flight_count} (${data.cancelled_count} cancelled)`,
     ],
-    ["Searchable legs", String(data.flight_count)],
+    ["Searchable legs across all flight times and origins", String(data.flight_count)],
+    ...Object.entries(data.time_bases || {}).map(([basis, count]) =>
+      [`${timeBasisLabel(basis)} across all origins`, String(count)],
+    ),
     ["Awaiting itinerary review", String(data.needs_review_count || 0)],
     ["Providers", data.providers.join(", ") || "None"],
     ["Provider coverage", "Unknown"],
@@ -725,7 +752,9 @@ form.addEventListener("input", (event) => {
 form.addEventListener("change", (event) => {
   updateZones();
   if (event.target === field("date")) updateLastDates();
+  if (event.target === field("time-basis")) updateDatasetTag();
   loadDates();
+  updateSearchButton();
   closeEditor();
   if (state.result)
     $("status").textContent =
@@ -977,12 +1006,8 @@ async function loadCatalog() {
       const fromURL = Object.fromEntries(new URLSearchParams(location.search));
       restore(fromURL);
       updateZones();
-      const demo =
-        catalog.dataset.providers.length === 1 &&
-        catalog.dataset.providers[0] === "demo";
       const hasFlights = catalog.dataset.flight_count;
-      $("dataset-tag").textContent =
-        `${catalog.dataset.default_time_basis === "observed" ? "Observed historical legs" : demo ? "Demo schedules" : "Imported flight legs"} · ${catalog.dataset.flight_count} searchable legs${catalog.dataset.needs_review_count ? ` · ${catalog.dataset.needs_review_count} awaiting itinerary review` : ""}`;
+      updateDatasetTag();
       $("status").textContent = hasFlights
         ? catalog.dataset.default_time_basis === "observed" ? "Historical observations with inferred time bounds; coverage is partial." : "Dates are based on the imported flight records."
         : catalog.dataset.needs_review_count ? "Itinerary estimates await admin review. No searchable flights yet." : "No flight records loaded. Import data with the internal client to begin.";
@@ -1018,5 +1043,3 @@ map
     ),
   );
 loadCatalog();
-
-field("time-basis").addEventListener("change", () => { datesKey = null; loadDates(); });
