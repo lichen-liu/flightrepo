@@ -7,6 +7,7 @@ from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from core.admission import ADMITTED_SQL, REVIEW_REQUIRED_SQL
 from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
 from core.models import FlightRecord, RouteSummary
 from core.planning import rebuild_from_snapshot, validate_prefix
@@ -84,13 +85,9 @@ class FlightReader(SQLiteConnection):
         """Query shared facts with typed time bounds and deterministic limits."""
         clauses, params = [], []
         if needs_review:
-            clauses.append(
-                "(evidence_kind = 'inferred_airport_proximity' OR json_array_length(review_reasons) > 0) AND itinerary_reviewed = 0"
-            )
+            clauses.append(REVIEW_REQUIRED_SQL)
         if searchable_only or time_basis is not None:
-            clauses.append(
-                "((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1)"
-            )
+            clauses.append(ADMITTED_SQL)
         departure_column, arrival_column = "departure", "arrival"
         if time_basis is not None:
             departure_column = (
@@ -341,10 +338,9 @@ class FlightReader(SQLiteConnection):
     @staticmethod
     def _review_counts(connection):
         return dict(
-            connection.execute("""SELECT
+            connection.execute(f"""SELECT
             (SELECT COUNT(DISTINCT leg_id) FROM searchable_legs) searchable_flights,
-            COUNT(*) FILTER (WHERE (evidence_kind = 'inferred_airport_proximity' OR json_array_length(review_reasons) > 0)
-                AND itinerary_reviewed = 0) needs_review_count FROM flights""").fetchone()
+            COUNT(*) FILTER (WHERE {REVIEW_REQUIRED_SQL}) needs_review_count FROM flights""").fetchone()
         )
 
     @staticmethod
@@ -490,16 +486,13 @@ class FlightReader(SQLiteConnection):
             complete = " OR ".join(f"({condition})" for condition in conditions.values())
             facts = dict(
                 connection.execute(f"""WITH live AS (
-                SELECT f.*, status <> 'cancelled' AND (
-                    (evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
-                    OR itinerary_reviewed=1) eligible
+                SELECT f.*, status <> 'cancelled' AND {ADMITTED_SQL} eligible
                 FROM flight_legs f WHERE NOT EXISTS (
                     SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key
                 )) SELECT COUNT(*) total_record_count,
                 COALESCE(SUM(eligible AND ({complete})),0) flight_count,
-                COALESCE(SUM((evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)
-                    AND itinerary_reviewed=0),0) needs_review_count,
+                COALESCE(SUM({REVIEW_REQUIRED_SQL}),0) needs_review_count,
                 COALESCE(SUM(status = 'cancelled'), 0) cancelled_count,
                 MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh,
                 {aggregates} FROM live""").fetchone()
@@ -535,8 +528,7 @@ class FlightReader(SQLiteConnection):
             suggestion = connection.execute(
                 f"""SELECT origin_iata,destination_iata FROM flight_legs f
                 WHERE status <> 'cancelled' AND ({conditions[basis]})
-                AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
-                    OR itinerary_reviewed=1)
+                AND {ADMITTED_SQL}
                 AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)
                 ORDER BY {columns[basis]},source_id,source_record_key LIMIT 1""",
@@ -573,7 +565,7 @@ class FlightReader(SQLiteConnection):
                 row = connection.execute(
                     f"SELECT origin_iata,destination_iata,{column} FROM flight_legs f "
                     f"WHERE status <> 'cancelled' AND ({condition}) "
-                    "AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0) OR itinerary_reviewed=1) "
+                    f"AND {ADMITTED_SQL} "
                     "AND NOT EXISTS (SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
                     "AND t.source_record_key=f.source_record_key) "
                     f"ORDER BY {column},source_id,source_record_key LIMIT 1",
@@ -886,7 +878,7 @@ class FlightReader(SQLiteConnection):
         limit: int = 500,
     ) -> list[RouteSummary]:
         where, params = self._where(start, end, origin, destination)
-        where += " AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1)"
+        where += f" AND {ADMITTED_SQL}"
         with self.connect() as connection:
             rows = connection.execute(
                 f"""SELECT origin_iata, destination_iata, COUNT(*) flight_count,

@@ -144,6 +144,25 @@ check("stop count defaults to unbounded and survives links exports and connectio
   assert.equal(unlimited.query.max_legs, null);
 });
 
+check("admitted airport estimates stay visibly labeled without claiming manual review", async (page) => {
+  let reviewed = false;
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json(),
+      flight = data.items[0].legs[0];
+    flight.evidence_kind = "inferred_airport_proximity";
+    flight.review_reasons = ["airborne_airport_estimate"];
+    flight.itinerary_reviewed = reviewed;
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("[data-option]").first()).toContainText("Estimated airports");
+  await expect(page.locator("#legs")).toContainText("Estimated airports; not manually verified");
+  await expect(page.locator("#legs")).not.toContainText("awaiting admin review");
+  reviewed = true;
+  await search(page);
+  await expect(page.locator("#legs")).toContainText("Estimated airports; manually reviewed");
+});
+
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
   await page.route("**/v1/search-availability?*", async (route) => {
     const origin = new URL(route.request().url()).searchParams.get("origin");

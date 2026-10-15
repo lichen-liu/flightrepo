@@ -125,6 +125,14 @@ def _compatibility_schema():
 SCHEMA = Path(__file__).with_name("schema.sql").read_text() + _compatibility_schema()
 
 
+def refresh_admission_view(connection):
+    """Apply the current read view inside an explicit writer transaction."""
+    marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
+    statement = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"
+    connection.execute("DROP VIEW IF EXISTS searchable_legs")
+    connection.execute(statement)
+
+
 def source_id(connection, code):
     connection.execute("INSERT OR IGNORE INTO data_sources(code,name) VALUES (?,?)", (code, code))
     return connection.execute("SELECT id FROM data_sources WHERE code=?", (code,)).fetchone()[0]

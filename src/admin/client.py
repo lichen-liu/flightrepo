@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from admin.admission import apply_admission
 from admin.ingestion import add_ingestion_commands, run_ingestion
 from admin.management import (
     approve_flight,
@@ -235,7 +236,7 @@ def parser():
     flights.add_argument(
         "--needs-review",
         action="store_true",
-        help="only uncertain itinerary estimates awaiting approval",
+        help="only records held by blocking quality reasons",
     )
     flights.add_argument("--origin", type=airport_code)
     flights.add_argument("--destination", type=airport_code)
@@ -328,9 +329,15 @@ def parser():
     sql.add_argument("sql")
     sql.add_argument("--limit", type=query_limit, default=20)
 
-    maintenance = commands.add_parser("maintenance", help="initialize schema or clear local data")
+    maintenance = commands.add_parser(
+        "maintenance", help="initialize schema, apply admission policy or clear local data"
+    )
     operations = maintenance.add_subparsers(dest="maintenance_action", required=True)
     operations.add_parser("init", help="explicitly initialize the Flyji schema")
+    operations.add_parser(
+        "apply-admission",
+        help="admit labeled airport estimates; retain timing/gap review and manual decisions",
+    )
     clear = operations.add_parser(
         "clear-data", help="delete all flights, airports and transfers; keep schema"
     )
@@ -407,6 +414,8 @@ def run(arguments, *, database_path=None, interactive=False):
         if args.maintenance_action == "init":
             FlightUpdater(path).initialize()
             output({"initialized": path})
+        elif args.maintenance_action == "apply-admission":
+            output(apply_admission(path))
         else:
             if not args.yes:
                 raise ValueError(

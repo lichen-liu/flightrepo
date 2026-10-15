@@ -68,7 +68,9 @@ manifest → download/verify one day → stream aircraft members → filter/reco
   rejects airports more than 45 degrees off the approach/departure heading
   (outside 3 km, where airport-center/runway offsets matter).
   A later climb/exit from the airport area cancels an arrival hint. Such records
-  have separate evidence labels and require admin review before search.
+  have separate evidence labels and can appear in search without manual approval
+  when airport estimation is their only review reason. Route options and leg
+  details explicitly identify estimated airports and whether they were manually verified.
   Ground candidates with sample gaps over 30 minutes still require review:
   hidden intermediate stops can otherwise resemble one flight. Shorter reception
   gaps and changing callsigns no longer require review on their own. Keep the
@@ -116,7 +118,7 @@ fields alone.
 | Airborne endpoint fallback | Within 3,500 ft of airport elevation; origin needs a 100-ft observed climb or 300 ft/min upward rate; destination descending/nonascending; available heading within 45 degrees beyond 3 km; estimated window 30 minutes |
 | Ground endpoints | Preferred, but no longer required at both ends |
 | Continuity | Maximum six-hour gap between usable samples, including overnight joins |
-| Search review | Airport estimates or sample gaps over 30 minutes; callsign changes alone do not block search |
+| Search review | Sample gaps over 30 minutes, implausible airport timing and other blocking reasons stay held; airport-estimate-only records are admitted with labels |
 | Terminal bounds/duration | Maximum 30-minute endpoint bracket; minimum 60-second airborne span |
 | Bad samples | Skip without advancing evidence; report the reason |
 | Reception-gap flag | Keep the newly received position; log flag `1` rather than discarding it |
@@ -137,8 +139,21 @@ algorithm versions, so changing quality rules does not invent new flight IDs.
 Malformed/unordered archive records, checksum failures and quota violations fail
 an entire day without applying partial flight facts. Endpoint estimates still
 need empirical validation; higher retained counts do not prove flight coverage.
-`flights --needs-review` lists uncertain candidates; `flight approve PROVIDER ID`
-makes a checked/corrected record searchable without erasing its inference label.
+`flights --needs-review` lists held candidates. `flight approve PROVIDER ID`
+marks an individually checked/corrected record as manually reviewed without
+erasing its inference label. Automatically admitting an estimate never sets
+`itinerary_reviewed`; manual review remains a separate decision.
+
+For an existing database, run `maintenance apply-admission` in the admin shell
+(or `python -m admin --db PATH maintenance apply-admission`). It refreshes the
+searchable view and checks retained ADSB airport/time fields for the v5 timing
+rule. The read scan does not hold the writer lock; revision checks protect
+concurrent edits, and flags/view changes commit together. It is resumable and
+idempotent, preserves IDs, receipts, quota, tombstones and manual decisions, and
+does not download raw data. Deploy matching readers and estimate labels before
+serving that database. This admission change does not alter v5 extraction or
+require restarting a running daily ingestor. Use the new admin runtime for
+admission counts; an older running worker can print counts under its old rule.
 
 ## Interactive jobs and resume
 
@@ -225,8 +240,9 @@ Treat a pilot as operationally successful only after all days commit, database
 integrity/foreign-key and duplicate checks pass, itinerary time bounds are valid,
 and search/calendar can read eligible records. Inspect representative airport
 pairs and unusually long legs using retained itinerary fields. This is a
-best-effort reconstruction, not a completeness or accuracy guarantee. Uncertain
-airport estimates remain available to admin and excluded from search.
+best-effort reconstruction, not a completeness or accuracy guarantee. Airport
+estimates alone are searchable with visible labels; gap and timing cases remain
+available to admin for review.
 
 ## Measured storage
 
@@ -235,10 +251,10 @@ about **283.93 GiB** across 185 daily inputs; its largest day is **1.81 GiB**.
 Only the current day needs raw working space. A relaxed July 10, 2023 pilot
 reconstructed **21,048 candidates** from a **1.13 GiB** archive containing 42,846
 aircraft-days: 1,322 had ground endpoints and 19,726 used airborne proximity.
-After per-record review reasons were added, **287** candidates were searchable
+Under the earlier blanket estimate exclusion, **287** candidates were searchable
 and **20,761** awaited review. The shared database occupied about **31.5 MiB**, including airport metadata,
-receipts and overnight summaries. Candidates with uncertainty remain unserved
-until review; this is not a measurement of complete flight coverage.
+receipts and overnight summaries. These historical admission counts predate the
+current labeled-estimate policy and do not measure complete flight coverage.
 
 A limited independent comparison against the official
 [BTS July 2023 reporting-carrier file](https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_2023_7.zip)
@@ -246,10 +262,12 @@ found 4,992 matching airport pairs and 375 disagreements among comparable numeri
 callsigns for nine US carrier prefixes. Most disagreements were proximity
 estimates; some ground candidates crossed unobserved stops. This check does not
 verify tail identity, timestamps, types or worldwide recall. It motivated the
-review gate, rather than a claim of lossless extraction. With that gate applied,
+earlier blanket review gate, rather than a claim of lossless extraction. Under that earlier gate,
 all 375 disagreements were retained for review; 70 comparable searchable records
 agreed and one had no reference match. This small subset does not establish
-global accuracy.
+global accuracy. The current labeled-estimate admission intentionally accepts
+some airport-assignment risk; those earlier agreement results do not establish
+accuracy for the expanded searchable set.
 
 Under the older strict extractor, a historical December 30, 2025 pilot
 processed 2.98 GiB/61,215 aircraft-days into 2,138 accepted legs across 39 types.

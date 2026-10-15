@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
+from core.admission import requires_review
 from core.routing.models import airport_code, airport_codes, utc_instant
 
 
@@ -46,10 +47,7 @@ class FlightRecord(BaseModel):
 
     @property
     def needs_review(self):
-        return (
-            bool(self.review_reasons or self.evidence_kind == "inferred_airport_proximity")
-            and not self.itinerary_reviewed
-        )
+        return requires_review(self.review_reasons, self.itinerary_reviewed)
 
     departure_observed_lower: datetime | None = None
     departure_observed_upper: datetime | None = None

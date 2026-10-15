@@ -132,6 +132,10 @@ def probe_ingestion(executable, directory, environment):
     status = json.loads(invoke(["ingest", "adsblol", "status"]).stdout)
     assert status["records"] == 2 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
+    admission = json.loads(invoke(["maintenance", "apply-admission"]).stdout)
+    assert admission["admission_policy"] == "labeled-airport-estimates-v1"
+    assert admission["manual_approvals_added"] == 0
+    assert admission["searchable_before"] == admission["searchable_after"] == 2
 
 
 def main():

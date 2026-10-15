@@ -54,13 +54,15 @@ def test_relaxed_adsb_gap_and_callsign_policy_reaches_search_and_calendar(tmp_pa
     assert metadata.get("accepted_under_relaxed_review", 0) == (0 if blocked else 1)
 
 
-@pytest.mark.parametrize("airborne_only", [False, True])
-def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(
-    tmp_path, capsys, airborne_only
-):
+@pytest.mark.parametrize("case", ["ground", "estimate", "estimate_gap"])
+def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_path, capsys, case):
     database = tmp_path / "hosted.db"
     data = leg_trace()
     data["timestamp"] += 3600
+    airborne_only = case != "ground"
+    if case == "estimate_gap":
+        for row in data["trace"][3:]:
+            row[0] += 7200
     if airborne_only:
         data["trace"] = data["trace"][1:-1]
         data["trace"][0][8] = {"flight": "UAL123"}
@@ -75,7 +77,10 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(
     )
     assert record.flight_number is None and record.departure_scheduled is None
     assert reader.flight(record.provider, record.provider_id) == record
-    if airborne_only:
+    if case == "estimate":
+        assert not record.needs_review and not record.itinerary_reviewed
+        assert record.review_reasons == ["airborne_airport_estimate"]
+    if case == "estimate_gap":
         assert reader.list_flights(needs_review=True) == [record]
         assert reader.available_dates("AAA", "UTC").dates == []
         assert reader.search_itineraries(query()).items == []
@@ -351,6 +356,7 @@ def test_review_gate_applies_even_when_estimate_also_has_schedules(tmp_path):
     record = observed("review", "AAA", "BBB", 10, 70).model_copy(
         update={
             "evidence_kind": "inferred_airport_proximity",
+            "review_reasons": ["airborne_airport_estimate", "observation_gap"],
             "departure_scheduled": query().departure_start + timedelta(hours=1),
             "arrival_scheduled": query().departure_start + timedelta(hours=2),
         }
@@ -391,4 +397,4 @@ def test_airport_timing_check_respects_uncertain_event_windows(tmp_path):
     run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
     (record,) = FlightReader(database).all_records()
     assert record.review_reasons == ["airborne_airport_estimate"]
-    assert record.needs_review  # Airport estimate still needs review independently.
+    assert not record.needs_review and not record.itinerary_reviewed

@@ -44,3 +44,10 @@ def distance_km(lat1, lon1, lat2, lon2):
         + math.cos(a) * math.cos(b) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
     )
     return 6371 * 2 * math.asin(math.sqrt(min(1, chord)))
+
+
+def airport_timing_is_implausible(origin, destination, elapsed_seconds):
+    """Use the widest retained event window and a generous civil-flight bound."""
+    if origin is None or destination is None or elapsed_seconds <= 0:
+        return False
+    return distance_km(*origin, *destination) > 1500 * (elapsed_seconds / 3600)

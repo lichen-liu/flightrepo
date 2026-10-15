@@ -80,15 +80,18 @@ flyji> flight edit adsblol RECORD_ID
 flyji> flight approve adsblol RECORD_ID
 ```
 
-Airborne airport estimates, observation gaps over 120 seconds, and changing
-callsigns are retained with `review_reasons` for inspection/export. They cannot
-power route search, continuation planning or calendar dates until explicitly
-reviewed. Check the airports and time bounds against an independent flight source;
+Airport-estimate-only records can power search, continuation planning and calendar
+dates with visible estimate labels, even before manual verification. Gaps over
+30 minutes, implausible airport timing and other blocking `review_reasons` remain
+held unless explicitly reviewed. Callsign changes alone no longer block new
+extractions; legacy callsign review flags remain held. Check the airports and time
+bounds using the retained evidence;
 edit incorrect fields before approving. Approval previews the record and defaults
 to no; scripts can supply `--yes`. It preserves inference provenance and marks
 `itinerary_reviewed`, protecting the reviewed record from passive reingestion.
-An edit alone does not approve an unreviewed estimate. Website counts distinguish
-searchable legs from candidates awaiting review.
+Automatic admission never sets `itinerary_reviewed`. You may explicitly review an
+already searchable estimate with the same command. An edit alone does not approve
+a held record. Website counts distinguish searchable legs from held candidates.
 
 ## Create, edit, and delete flights
 
@@ -242,6 +245,12 @@ flight facts.
 
 ## Secondary tools
 
+- `maintenance apply-admission` applies labeled-estimate admission to an existing
+  database, refreshes the search view and flags implausible ADSB airport/time
+  claims using retained fields. It is safe to rerun and protects concurrent admin
+  edits. It preserves IDs, ingestion receipts, quota and manual decisions; it
+  neither downloads raw archives nor marks human approvals. Use a compatible
+  backend/frontend with estimate labels before serving the updated database.
 - `maintenance clear-data --yes` deletes flights, airports, transfer rules, and
   any extracted observed facts/configuration/receipts/boundary state
   transactionally while preserving the SQLite file, schema and ingestion profiles. It only permits

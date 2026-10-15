@@ -69,9 +69,12 @@ registration or seat configuration. An ADSB candidate has
 airport endpoints; neither evidence class certifies commercial service or an
 official landed status. Inference policy belongs in batch provenance, not a
 fabricated fact. `review_reasons` retains per-record uncertainty (airborne airport
-estimate, observation gap, callsign variation). Unreviewed estimates remain in the
-fact table and export, while `searchable_legs`, API routing, calendar availability
-and pure snapshot routing exclude them. Explicit admin approval sets
+estimate, observation gap, implausible airport timing, legacy callsign variation).
+Airport-estimate-only records are admitted with visible estimate labels. Other
+reasons block `searchable_legs`, API routing, calendar availability and pure
+snapshot routing unless explicitly approved. `needs_review` means held by those
+blocking reasons, not every record containing an estimate. The model and SQL
+admission predicates follow the same rule. Explicit admin approval sets
 `itinerary_reviewed`, preserves the reasons/evidence, and protects the record
 against passive reingestion. Catalog counts distinguish all stored records,
 searchable legs and pending reviews.

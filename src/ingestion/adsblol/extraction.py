@@ -23,7 +23,7 @@ from ingestion.adsblol.archive import (
     verified,
 )
 from ingestion.adsblol.diagnostics import LOGGER, Diagnostics
-from ingestion.adsblol.legs import distance_km
+from ingestion.adsblol.legs import airport_timing_is_implausible
 from ingestion.adsblol.movements import (
     AirportLookup,
     LeadingMovement,
@@ -173,14 +173,13 @@ def implausible_airport_timing(connection, data):
     }
     if len(points) != 2:
         return False
-    hours = (
+    elapsed = (
         datetime.fromisoformat(data["arrival_upper"])
         - datetime.fromisoformat(data["departure_lower"])
-    ).total_seconds() / 3600
-    if hours <= 0:
-        return False  # The typed record rejects invalid chronology separately.
-    distance = distance_km(*points[data["origin_iata"]], *points[data["destination_iata"]])
-    return distance > 1500 * hours
+    ).total_seconds()
+    return airport_timing_is_implausible(
+        points[data["origin_iata"]], points[data["destination_iata"]], elapsed
+    )
 
 
 def save_candidate(connection, key, data, counters, *, diagnostics=None):

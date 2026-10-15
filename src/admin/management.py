@@ -138,14 +138,16 @@ def edit_flight(path, provider, provider_id, output):
 
 def approve_flight(path, provider, provider_id, confirmed, output):
     original = FlightReader(path).flight(provider, provider_id)
-    if not original.needs_review:
-        raise ValueError("This flight has no pending itinerary estimates to approve")
+    if original.itinerary_reviewed:
+        raise ValueError("This flight has already been manually reviewed")
+    if not (original.review_reasons or original.evidence_kind == "inferred_airport_proximity"):
+        raise ValueError("This flight has no itinerary uncertainty to review")
     if not confirmed:
         print(f"Database: {path.resolve()}")
         output(original)
         print("Check both airports and time bounds; use flight edit first for corrections.")
         try:
-            if not yes_no("Approve this itinerary for route search?"):
+            if not yes_no("Mark this itinerary as manually reviewed?"):
                 print("Approval cancelled.")
                 return
         except (EOFError, KeyboardInterrupt):
