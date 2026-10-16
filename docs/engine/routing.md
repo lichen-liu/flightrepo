@@ -2,20 +2,24 @@
 
 ## Behavior and limits
 
-The engine finds **schedule-feasible, simple airport paths** through exact dated flight records. It uses scheduled timestamps, excludes cancelled records, keeps provider identities, and checks configured transfer rules. It does not infer ticket protection, immigration, baggage transfer, inventory, published MCT or successful historical passenger connections from those records. Actual timestamps remain facts but are not the time basis for this search.
+The engine finds **schedule-feasible, simple airport paths** through exact dated flight records. It uses the selected scheduled, observed or actual time basis, excludes cancelled records, keeps provider identities, and checks configured transfer rules. It does not infer ticket protection, immigration, baggage transfer, inventory, published MCT or successful historical passenger connections from those records. Observed searches preserve complete uncertainty intervals when assessing waits.
 
 - Initial departure is in `[departure_start, departure_end)`. All arrivals must be at or before the inclusive `horizon_end`. Inputs require UTC offsets and normalize to UTC; local wall-clock/DST interpretation is a separate client/boundary concern.
 - Connection minima and maxima are inclusive. Same-airport allowance defaults to 45 minutes; changing airports needs opt-in, same-city metadata and an explicitly configured directed rule. The larger of the user minimum and rule minimum applies. These are supplied allowances, not guarantees.
 - A path stops at the exact destination airport. It cannot revisit an airport, including returning through a ground transfer to an earlier departure airport. City membership does not merge physical airport vertices. Roundtrips/repeated-airport tours and ground-only arrival at the destination are outside this request grammar.
-- Full search supports one to four flight legs, avoided airports, and an explicit ranking. A departure window is at most 31 elapsed days, with an arrival horizon at most 31 days after its end. A continuation horizon remains within 62 days of the first preserved departure, so valid search results remain editable across the full departure window.
+- Full search supports an optional flight-leg bound (`null` means unrestricted), avoided airports, and an explicit ranking. Simple paths cannot revisit airports, which supplies a finite graph-derived maximum. A departure window is at most 31 elapsed days, with an arrival horizon at most 31 days after its end. A continuation horizon remains within 62 days of the first preserved departure, so valid search results remain editable across the full departure window.
 - Rebuild retains and validates every prefix identity and cancellation status. Retained same-airport gaps must be nonnegative; changing the current minimum does not rewrite an earlier gap. Configured physical airport-change minima still apply. Airport-change permission is request-wide. The active maximum/not-before applies only to the edited gap; subsequent gaps use its minimum. Per-gap policies are a future extension.
 - Rebuild keeps an explicit next flight even if no complete suffix is loaded. Budget exhaustion preserves a feasible suffix already found, labels search partial and avoids an optimality claim.
 
 `complete` on a plan means it reaches the requested destination. `diagnostics.exhaustive` means the search/continuation calculation finished over the request's **loaded, scoped snapshot** without a data/candidate cutoff. It is not evidence of exhaustive provider coverage or commercial feasibility. An empty result with partial diagnostics is not proof that no route exists.
 
-Default budgets are 10,000 candidate rows and 100,000 candidate visits. Requests may lower them; hard maxima are 20,000 rows and 200,000 visits. Exact prefix/explicit-choice anchors are separately retained, adding at most five records. The search retains at most 100 ranked results. The default continuation option page has 100 entries (maximum 500), always including the selected continuation; `options_total` counts eligible next flights in loaded data and is unknown when the candidate budget interrupts enumeration. `options_truncated` identifies an incomplete option list.
+Database-backed search and connection editing have **no 10,000-flight loading cap**. SQL filters by time basis, departure/horizon bounds, avoided airports and airport reachability, then projects only flight identities, airport endpoints and time bounds. A time-compatible reverse traversal removes flights that cannot reach the destination and supplies a safe remaining-leg lower bound. Connection editing retains dead-end next-flight options. The core receives compact immutable edges, without airline/codeshare, aircraft, refresh or source-evidence metadata.
 
-The row budget bounds loaded flight facts, not SQLite VM steps, metadata rows, elapsed time or concurrent memory. These resource limits do not establish production throughput.
+Only after calculation does the server fetch full details for the distinct flights and airports actually returned. Shared flights are fetched once in a batch. Explicit prefix/next-flight anchors are loaded for validation. Normalization, SQL projection, routing and result-detail reads share one SQLite read transaction, so a concurrent writer cannot mix old routing facts with newer display details. The browser receives completed journeys and display metadata; it does no route search.
+
+The candidate-work budget remains 100,000 visits by default, with a hard maximum of 200,000. Results remain explicitly partial if that work budget is exhausted. Departure/horizon bounds and simple-path rules still apply. There is no SQL row `LIMIT` in database route projection. The caller-supplied full-record snapshot/replay path retains `max_records` (default 10,000; maximum 20,000) to bound explicit debug documents; ordinary database routing ignores that legacy full-record limit. CLI search uses SQL projection unless `--snapshot-out` explicitly requests a replayable full-record snapshot.
+
+The search returns at most 100 ranked results. The default continuation option page has 100 entries (maximum 500), always including an explicit selection; `options_total` is unknown when the work budget interrupts enumeration. These budgets do not establish production throughput or global provider coverage.
 
 ## Modules
 
@@ -24,11 +28,13 @@ The row budget bounds loaded flight facts, not SQLite VM steps, metadata rows, e
 | `core/routing/models.py` | UTC/query validation, allowed rankings, hard budgets, diagnostics and stable error codes |
 | `core/routing/policy.py` | Shared connection assessment, directed transfer permissions, airport avoidance and cycle checks |
 | `core/routing/index.py` | Departure arrays per airport, binary-search windows, sorted merges and a safe static hop lower bound |
+| `core/routing/projection.py` | Compact routing edges and a digest of routing inputs, independent of display metadata |
 | `core/routing/snapshot.py` | Supplied fact set, duplicate-identity validation, content digest and replay serialization |
 | `core/routing/session.py` | Request-local index, counters, bounded trace and candidate budget; no shared mutable cache |
 | `core/routing/search.py` | Full simple-path traversal and bounded heap for exact ranked top-k |
 | `core/planning.py` | Prefix validation, earliest eligible next departure and memoized best suffix |
 | `core/routing/debug.py` | Pure replay document/calculation; no DB or filesystem access |
+| `server/routing_projection.py` | SQL time/basis filtering, conservative forward/reverse airport components and compact edge projection |
 | `server/reader.py` | Read-only, query-scoped loading from one SQLite transaction snapshot |
 | `server/api.py`, `admin/client.py` | HTTP/terminal adapters; admin can save scoped facts for replay |
 
@@ -36,11 +42,11 @@ Public calculation functions receive validated typed requests/facts and perform 
 
 ## Traversal and ranking
 
-The reader first reads airport metadata and flight anchors in a read transaction. It loads flight departures only from airports reachable within the flight-leg bound. Roots use the exact initial departure window. Onward reads conservatively cover the remaining time horizon: a city airport considered as a short first connection may be reached later by another path. Reusing that airport's too-narrow initial window would drop valid later departures; a regression test covers this case. Irrelevant disconnected airport schedules do not consume the row budget.
+The reader projects admitted `searchable_legs` columns from the existing schema. Recursive SQL traversals use distinct airport sets rather than enumerating paths in SQL. Exact transfer eligibility, waits, via order and cycles remain engine decisions. Dataset/source metadata is hydrated only for the response. No ingestion, admission or schema changes are involved.
 
-The partial SQLite index is `(origin_iata, departure_scheduled, provider, provider_id) WHERE status != 'cancelled'`. SQL orders deterministically before applying limits. The pure index then uses binary searches on actual minimum/maximum/not-before windows. Its range iterator starts at the calculated position without scanning preceding records or copying a full schedule. Allowed transfer origins and reverse memberships are pre-indexed.
+The in-memory departure index uses binary searches on minimum/maximum/not-before windows. Reverse time-compatible traversals give each flight a minimum suffix length and an earliest possible destination arrival. These independent bounds may come from different paths; ignoring visited airports and required vias makes them optimistic. Database search uses a best-first frontier with these admissible bounds for each supported ranking. It stops only when every unexpanded bound is no better than the worst retained result, or when the work budget is reached. Thus finding 20 routes alone is insufficient to claim a complete ranking. Full-record snapshots retain their deterministic exhaustive traversal for replay.
 
-The engine traverses every eligible simple path inside its leg/work bounds. A reverse graph supplies a minimum required number of remaining flight legs, ignoring time and visited airports. It is a safe lower bound, used only to reject branches that cannot reach the destination within the remaining count. It is not a guessed geographic/time score. There is no unsafe “earliest arrival per airport wins” pruning: different visited airports and maximum waits can make an apparently later arrival necessary.
+There is no unsafe “earliest arrival per airport wins” pruning: different visited airports and maximum waits can make a later arrival necessary. Connection metadata and flight choices remain exact, dated identities.
 
 Full-search ranking is explicit and deterministic:
 
@@ -50,7 +56,7 @@ Full-search ranking is explicit and deterministic:
 | `shortest_elapsed` | exact elapsed seconds, leg count, final arrival, initial departure, provider/ID sequence |
 | `earliest_arrival` | final arrival, leg count, exact elapsed seconds, initial departure, provider/ID sequence |
 
-The displayed duration is whole minutes; ranking uses full timestamp precision. A worst-first heap retains the best `limit` paths in `O(log limit)` per retained replacement. Finding enough results does not stop traversal. If candidate/data budgets interrupt it, the engine returns only proven feasible results and explicitly withholds an exhaustive ranking claim.
+The displayed duration is whole minutes; ranking uses full timestamp precision. A worst-first heap retains the best `limit` paths in `O(log limit)` per retained replacement. Database search may stop when lower bounds prove that no remaining path can improve the ranking; result count alone is not a stopping condition. If candidate/data budgets interrupt it, the engine returns only proven feasible results and explicitly withholds an exhaustive ranking claim.
 
 Automatic continuation chooses the earliest departing next flight that has a complete suffix. Each suffix ranks by final arrival, suffix leg count, then exact ID sequence. Explicit `chosen_next` overrides that automatic choice. Memoization keys include preceding dated identity, remaining legs, every visited airport and ordered via progress; caches are request-local. Incompletely searched suffixes are not cached as optimal. Option paging changes response size, not the automatic selection decision.
 
@@ -62,11 +68,11 @@ Responses include:
 
 - `engine_version`, a SHA-256 `snapshot_id` over the actual flight/airport/transfer facts and data-cutoff flag, and a `request_id` over that digest plus the normalized request/version. Conflicting records for the same identity are rejected; identical repeated flight records are deduplicated. Input order does not affect route order, IDs or traces.
 - Ranking, scoped `exhaustive`, `termination_reasons` (`data_limit`, `candidate_limit`) and a separate result-page limit indicator.
-- Loaded row/origin counts, checked candidates, time-window skips, expanded states, memo hits and route count. Window skips count rejected entries per lookup, not distinct physical flights. Full-search route count counts completed examined paths; continuation route count counts completed assessed next-flight suffixes, not all possible suffix paths.
+- `scope: "sql_projection"` for database calculations; `rows_loaded` counts compact routing edges and `records_hydrated` counts distinct full flight details fetched for the response (including validation anchors for editing). Explicit snapshot calculations retain `scope: "loaded_snapshot"`. Also included are origin counts, checked candidates, time-window skips, expanded states, memo hits and route count. Window skips count rejected entries per lookup, not distinct physical flights. Full-search route count counts completed examined paths; continuation route count counts completed assessed next-flight suffixes, not all possible suffix paths.
 - Optional capped events (`trace: true`): current dated path, candidate identity, decision reason and measured wait/minimum. Default cap is 200, hard cap 500. Events omitted after the cap are counted. Index-pruned time ranges are summarized rather than producing one event per skipped record.
 - HTTP 422 selection errors with stable codes and flight/gap context where known, e.g. `chosen_next_connection_too_short`, wait 30, minimum 45. Missing/cancelled choices are rejected rather than substituted.
 
-Itinerary IDs hash the exact provider/ID sequence. A schedule/provenance revision changes the snapshot digest even when the path identity remains the same. This ID is not a persisted historical DB snapshot address. To replay, save the scoped facts with the request/result. Replay checks the engine/format version, performs no DB access and compares the complete regenerated result against the saved result. It preserves partial-search budgets and diagnostics too.
+Itinerary IDs hash the exact provider/ID sequence. SQL-projection digests cover the routing fields, selected time basis and connection metadata. Display-only changes do not alter that digest. Full-record replay digests also cover provenance fields. This ID is not a persisted historical DB snapshot address. To replay, save the scoped facts with the request/result. Replay checks the engine/format version, performs no DB access and compares the complete regenerated result against the saved result. It preserves partial-search budgets and diagnostics too.
 
 ## API and compatibility
 

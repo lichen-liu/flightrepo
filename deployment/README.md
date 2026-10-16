@@ -108,3 +108,10 @@ validate real readiness and a route from the actual dataset, rather than hardcod
 demo airports/dates. `/health/ready` exposes schema identity and selected time basis;
 admin `overview --json` reports the file path and same schema. Historical ADSB records use
 observed time bounds and partial coverage; they cannot supply future schedules.
+
+Application overlays recorded in `installation.json` are verified before serving.
+Replacing the installed wheel while retaining an overlay receipt fails startup
+if it discards those fixes. Build subsequent deployments from a revision that
+includes both the ingestion changes and the application fixes, then use the
+installer to produce a fresh receipt. A successful readiness probe alone does
+not establish that the intended routing version is running.

@@ -106,8 +106,8 @@ def readiness(store: FlightReader = Depends(get_store)):
 
 
 @app.get("/v1/catalog", response_model=PublicCatalog)
-def catalog(store: FlightReader = Depends(get_store)):
-    return to_public(store, store.web_catalog())
+def catalog(include_airports: bool = True, store: FlightReader = Depends(get_store)):
+    return to_public(store, store.web_catalog(include_airports=include_airports))
 
 
 @app.get("/v1/bootstrap", response_model=WebBootstrap)

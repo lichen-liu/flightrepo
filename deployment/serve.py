@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -49,6 +50,26 @@ def read_settings(root: Path) -> dict:
         "database_path": str(Path(database).resolve()),
         "data_mode": data_mode,
     }
+
+
+def verify_application_overlay(root: Path):
+    """Reject a wheel replacement that silently discards recorded application fixes."""
+    receipt = root / "installation.json"
+    if not receipt.exists():
+        return
+    import server
+
+    installed = Path(server.__file__).resolve().parent.parent
+    overlay = json.loads(receipt.read_text()).get("application_overlay", {})
+    for name, expected in overlay.get("files_sha256", {}).items():
+        path = (installed / name).resolve()
+        if not path.is_relative_to(installed):
+            raise ValueError("Invalid application overlay path in installation receipt")
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise ValueError(
+                f"Installed application differs from its deployment receipt: {name}. "
+                "Install a build containing the recorded application fixes before starting."
+            )
 
 
 def validate_database(database: Path, *, data_mode="synthetic") -> int:
@@ -188,7 +209,7 @@ class BoundedBody:
         await self.app(scope, buffered_receive, send)
 
 
-def create_server(root: Path):
+def create_server(root: Path, *, verify_receipt=True):
     from fastapi import FastAPI
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     from starlette.routing import Mount
@@ -197,6 +218,8 @@ def create_server(root: Path):
     from server.api import get_store
     from server.reader import FlightReader
 
+    if verify_receipt:
+        verify_application_overlay(root)
     settings = read_settings(root)
     database = Path(settings["database_path"])
     validate_database(database, data_mode=settings["data_mode"])
@@ -235,7 +258,8 @@ def create_server(root: Path):
 async def check_installation(root: Path) -> None:
     import httpx
 
-    app, _ = create_server(root)
+    # The installer validates its new wheel before replacing the prior receipt.
+    app, _ = create_server(root, verify_receipt=not (root / "installing").exists())
     settings = read_settings(root)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"

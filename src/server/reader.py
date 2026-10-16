@@ -1,26 +1,35 @@
 """Flight queries over the shared local itinerary database."""
 
+import json
 import sqlite3
 from bisect import bisect_left
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 from core.admission import ADMITTED_SQL
-from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
+from core.connections import Airport, AirportTransfer, ConnectionWindow, RebuildRequest, RebuiltPlan
 from core.database_roles import require_serving
 from core.models import FlightRecord, RouteSummary
-from core.planning import rebuild_from_snapshot, validate_prefix
+from core.planning import calculate_rebuild, validate_prefix
 from core.quality import review_recommended_sql
-from core.routing.models import RouteSearchRequest, RoutingError, airport_code
+from core.routing.models import (
+    RouteSearchRequest,
+    RoutingError,
+    airport_code,
+    required_via_airports,
+)
 from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
-from core.routing.search import search_routes
+from core.routing.search import calculate_routes
 from core.routing.snapshot import RoutingSnapshot, flight_key
 from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
+from server.reachability import TimeEdge, reverse_reachable_flights
+from server.routing_projection import project_routes
 from server.web_models import (
     AirportCoverage,
     AirportTraffic,
@@ -36,6 +45,8 @@ from server.web_models import (
 class FlightReader(SQLiteConnection):
     def __init__(self, path: Path, *, serving_only=False):
         super().__init__(path, read_only=True)
+        self._catalog_lock = Lock()
+        self._catalog_cache = {}
         self.serving_only = serving_only
 
     @contextmanager
@@ -44,6 +55,31 @@ class FlightReader(SQLiteConnection):
             if self.serving_only:
                 require_serving(connection)
             yield connection
+
+    def _catalog_revision(self):
+        revision = []
+        database_path = self.path.resolve()
+        for path in (
+            database_path,
+            Path(str(database_path) + "-wal"),
+            Path(str(database_path) + "-journal"),
+        ):
+            try:
+                stat = path.stat()
+                revision.append(
+                    None
+                    if path != database_path and stat.st_size == 0
+                    else (
+                        stat.st_dev,
+                        stat.st_ino,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                        stat.st_ctime_ns,
+                    )
+                )
+            except FileNotFoundError:
+                revision.append(None)
+        return tuple(revision)
 
     def stats(self) -> dict:
         with self.connect() as connection:
@@ -87,9 +123,18 @@ class FlightReader(SQLiteConnection):
         time_basis=None,
         needs_review=False,
         searchable_only=False,
+        identities=None,
     ):
         """Query shared facts with typed time bounds and deterministic limits."""
+        if identities is not None and not identities:
+            return []
         clauses, params = [], []
+        if identities is not None:
+            clauses.append(
+                "(provider,provider_id) IN (SELECT json_extract(value,'$[0]'),"
+                "json_extract(value,'$[1]') FROM json_each(?))"
+            )
+            params.append(json.dumps(sorted(identities)))
         if needs_review:
             clauses.append(review_recommended_sql())
         if searchable_only or time_basis is not None:
@@ -266,6 +311,31 @@ class FlightReader(SQLiteConnection):
         )
         return airports, transfers
 
+    def _destination_candidates(self, connection, request, policy, basis):
+        """Use bounded, lightweight edge data before loading full flight records."""
+        limit = max(100_000, request.limits.max_records * 20, request.limits.max_candidates)
+        rows = connection.execute(
+            "SELECT s.code,l.source_record_key,l.origin_iata,l.destination_iata,"
+            "l.departure_lower_us,l.departure_upper_us,l.arrival_lower_us,l.arrival_upper_us "
+            "FROM searchable_legs l JOIN data_sources s ON s.id=l.source_id "
+            "WHERE l.time_basis=? AND l.departure_lower_us>=? AND l.arrival_upper_us<=? LIMIT ?",
+            (basis, utc_us(request.departure_start), utc_us(request.horizon_end), limit + 1),
+        ).fetchall()
+        if len(rows) > limit:
+            # An incomplete reverse graph cannot safely exclude anything. The
+            # existing bounded loader and its partial-result diagnostics apply.
+            return None
+        return reverse_reachable_flights(
+            (TimeEdge(*row) for row in rows),
+            request.destination,
+            policy,
+            ConnectionWindow(
+                minimum_minutes=request.minimum_connection_minutes,
+                maximum_minutes=request.maximum_connection_minutes,
+            ),
+            utc_us(request.departure_start),
+        )
+
     def _routing_rows(self, connection, request, airports, transfers, *, prefix=(), anchors=()):
         """Load only airports reachable within the leg bound, in deterministic order.
 
@@ -294,6 +364,9 @@ class FlightReader(SQLiteConnection):
             allow_airport_change=request.allow_airport_change,
             avoid_airports=request.avoid_airports,
         )
+        identities = (
+            None if is_rebuild else self._destination_candidates(connection, request, policy, basis)
+        )
         frontier = (
             set(policy.origins(prefix[-1].destination_iata)) if is_rebuild else {request.origin}
         )
@@ -301,18 +374,60 @@ class FlightReader(SQLiteConnection):
             frontier = set()
         records = {flight_key(f): f for f in anchors}
         queried, loaded, truncated = set(), 0, False
+        preferred = set()
+        if identities is not None:
+            seed_budget = max(1, request.limits.max_records // 2)
+            for path in identities.preferred_paths(
+                request.origin,
+                utc_us(start),
+                utc_us(request.departure_end),
+                request.max_legs,
+                required_via_airports(request.via_airport),
+            )[: request.limit]:
+                keys = {(edge.provider, edge.provider_id) for edge in path}
+                if len(preferred | keys) <= seed_budget:
+                    preferred.update(keys)
+            seed = set(preferred)
+            for key in sorted(identities.terminal):
+                if len(seed) == seed_budget:
+                    break
+                seed.add(key)
+            # Keep destination arrivals in the snapshot before a busy early hub
+            # consumes the record budget. Otherwise valid prefixes can all look
+            # disconnected simply because their final legs were never loaded.
+            terminal_rows = self._window(
+                connection,
+                start=start,
+                end=request.horizon_end,
+                inclusive_end=True,
+                arrival_by=request.horizon_end,
+                include_cancelled=False,
+                time_basis=basis,
+                identities=seed,
+                limit=seed_budget,
+            )
+            records.update((flight_key(row), row) for row in terminal_rows)
+            loaded = len(records)
+        seeded = dict(records)
         depth = 0
         while remaining is None or depth < remaining:
             pending_origins = frontier - queried - {request.destination}
             if not pending_origins:
                 break
             batch = []
-            for origin in sorted(pending_origins):
+            for origin in sorted(
+                pending_origins,
+                key=lambda origin: (
+                    identities.distance.get(origin, float("inf")) if identities is not None else 0,
+                    origin,
+                ),
+            ):
                 queried.add(origin)
                 first = not is_rebuild and depth == 0
                 end = request.departure_end if first else request.horizon_end
                 # Anchors are exact user selections, separately fetched and retained.
-                count = request.limits.max_records - loaded + len(anchors) + 1
+                duplicates = sum(f.origin_iata == origin for f in seeded.values())
+                count = request.limits.max_records - loaded + duplicates + 1
                 rows = self._window(
                     connection,
                     origin=origin,
@@ -323,6 +438,7 @@ class FlightReader(SQLiteConnection):
                     include_cancelled=False,
                     limit=count,
                     time_basis=basis,
+                    identities=None if identities is None else identities.get(origin, ()),
                 )
                 for row in rows:
                     key = flight_key(row)
@@ -345,6 +461,11 @@ class FlightReader(SQLiteConnection):
                 for origin in policy.origins(f.destination_iata)
             }
             depth += 1
+        if truncated and preferred and preferred <= seeded.keys():
+            # Preserve complete time-compatible journeys when arbitrary prefixes
+            # would exhaust search work before reaching their loaded final legs.
+            # This remains explicitly partial; omitted routes can rank better.
+            records = seeded
         return RoutingSnapshot(
             tuple(records.values()), airports, transfers, truncated, len(queried)
         )
@@ -416,7 +537,54 @@ class FlightReader(SQLiteConnection):
             )
 
     def rebuild(self, request: RebuildRequest) -> RebuiltPlan:
-        return rebuild_from_snapshot(request, self.rebuild_snapshot(request))
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            airports, transfers = self._routing_catalog(connection, request)
+            keys = {(ref.provider, ref.provider_id) for ref in request.prefix}
+            if request.chosen_next is not None:
+                keys.add((request.chosen_next.provider, request.chosen_next.provider_id))
+            anchors = {flight_key(f): f for f in self._window(connection, identities=keys)}
+            try:
+                prefix = tuple(anchors[(ref.provider, ref.provider_id)] for ref in request.prefix)
+            except KeyError as error:
+                raise RoutingError(
+                    "prefix_missing",
+                    "a selected flight is missing from this snapshot",
+                    context={"flight_ref": error.args[0]},
+                ) from error
+            normalized, _, _, _ = validate_prefix(
+                request,
+                RoutingSnapshot(prefix, airports, transfers),
+            )
+            basis = request.time_basis or normalized[0].effective_time_basis
+            snapshot = project_routes(
+                connection,
+                request,
+                airports,
+                transfers,
+                basis,
+                prefix=tuple(normalized),
+                anchors=tuple(anchors.values()),
+            )
+            hydrated = {
+                key: f.model_copy(update={"time_basis": basis}) if basis != "scheduled" else f
+                for key, f in anchors.items()
+                if f.has_time_basis(basis)
+            }
+
+            calculation = calculate_rebuild(request, snapshot)
+            missing = [f for f in calculation.flights if flight_key(f) not in hydrated]
+            hydrated.update(self._hydrate_flights(connection, missing, basis))
+            result = calculation.materialize(hydrated)
+            result.diagnostics.stats.records_hydrated = len(hydrated)
+            shown = [
+                *result.legs,
+                *(f for item in result.options for f in (item.flight, *item.tail)),
+            ]
+            codes = {request.destination}
+            codes.update(code for f in shown for code in (f.origin_iata, f.destination_iata))
+            result.airports = self._hydrate_airports(connection, codes)
+            return result
 
     def routing_snapshot(self, request: RouteSearchRequest) -> RoutingSnapshot:
         with self.connect() as connection:
@@ -425,16 +593,103 @@ class FlightReader(SQLiteConnection):
             return self._routing_rows(connection, request, airports, transfers)
 
     def search_itineraries(self, request: RouteSearchRequest) -> RouteSearchResult:
-        return search_routes(request, self.routing_snapshot(request))
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            airports, transfers = self._routing_catalog(connection, request)
+            return self._projected_search(connection, request, airports, transfers)
+
+    @staticmethod
+    def _routing_catalog(connection, request):
+        endpoints = [request.destination]
+        if hasattr(request, "origin"):
+            endpoints.append(request.origin)
+        airports = tuple(
+            Airport.model_validate(dict(row))
+            for row in connection.execute(
+                "SELECT iata,city_id,timezone FROM airports "
+                "WHERE (:changes AND city_id IS NOT NULL) OR iata IN (SELECT value FROM json_each(:endpoints))",
+                {"changes": request.allow_airport_change, "endpoints": json.dumps(endpoints)},
+            )
+        )
+        transfers = (
+            tuple(
+                AirportTransfer.model_validate(dict(row))
+                for row in connection.execute(
+                    "SELECT * FROM airport_transfers ORDER BY arrival_iata,departure_iata"
+                )
+            )
+            if request.allow_airport_change
+            else ()
+        )
+        return airports, transfers
+
+    def _hydrate_flights(self, connection, flights, basis):
+        keys = {flight_key(flight) for flight in flights}
+        if not keys:
+            return {}
+        rows = self._window(connection, identities=keys)
+        records = {
+            flight_key(row): row.model_copy(update={"time_basis": basis})
+            if basis != "scheduled"
+            else row
+            for row in rows
+        }
+        if records.keys() != keys:
+            raise RoutingError(
+                "routing_details_missing", "A selected flight's details are unavailable"
+            )
+        for flight in flights:
+            detail = records[flight_key(flight)]
+            if any(
+                getattr(detail, field) != getattr(flight, field)
+                for field in (
+                    "origin_iata",
+                    "destination_iata",
+                    "departure_lower",
+                    "departure_upper",
+                    "arrival_lower",
+                    "arrival_upper",
+                )
+            ):
+                raise RoutingError(
+                    "routing_projection_mismatch",
+                    "Selected flight details differ from routing facts",
+                )
+        return records
+
+    @staticmethod
+    def _hydrate_airports(connection, codes):
+        if not codes:
+            return []
+        return [
+            Airport.model_validate(dict(row))
+            for row in connection.execute(
+                "SELECT * FROM airports WHERE iata IN (SELECT value FROM json_each(?)) ORDER BY iata",
+                (json.dumps(sorted(codes)),),
+            )
+        ]
+
+    def _projected_search(self, connection, request, airports, transfers):
+        basis = request.time_basis or self._default_basis(connection)
+        snapshot = project_routes(connection, request, airports, transfers, basis)
+        calculation = calculate_routes(request, snapshot, best_first=True)
+        hydrated = self._hydrate_flights(connection, calculation.flights, basis)
+        result = calculation.materialize(hydrated)
+        result.diagnostics.stats.records_hydrated = len(hydrated)
+        codes = {request.origin, request.destination}
+        codes.update(
+            code for f in hydrated.values() for code in (f.origin_iata, f.destination_iata)
+        )
+        result.airports = self._hydrate_airports(connection, codes)
+        return result
 
     def search_local(self, request: LocalRouteSearchRequest) -> LocalRouteSearchResult:
         with self.connect() as connection:
             connection.execute("BEGIN")
-            airports, transfers = self._catalog(connection)
+            airports, transfers = self._routing_catalog(connection, request)
             query = request.utc_request(airports)
-            snapshot = self._routing_rows(connection, query, airports, transfers)
+            result = self._projected_search(connection, query, airports, transfers)
         by_code = {a.iata: a for a in airports}
-        result = search_routes(query, snapshot)
         return LocalRouteSearchResult(
             **result.model_dump(),
             departure_timezone=by_code[query.origin].timezone,
@@ -507,7 +762,26 @@ class FlightReader(SQLiteConnection):
             time_basis=basis,
         )
 
-    def web_catalog(self) -> WebCatalog:
+    def web_catalog(self, *, include_airports=True) -> WebCatalog:
+        """Reuse unchanged statistics; writers invalidate through DB/WAL file metadata."""
+        with self._catalog_lock:
+            revision = self._catalog_revision()
+            cached = self._catalog_cache.get(include_airports)
+            if not include_airports and (not cached or cached[0] != revision):
+                cached = self._catalog_cache.get(True)
+            if cached and cached[0] == revision:
+                return cached[1].model_copy(
+                    deep=True,
+                    update={}
+                    if include_airports
+                    else {"airports": [], "airports_truncated": False},
+                )
+            result = self._read_web_catalog(include_airports=include_airports)
+            if revision == self._catalog_revision():
+                self._catalog_cache[include_airports] = (revision, result.model_copy(deep=True))
+            return result
+
+    def _read_web_catalog(self, *, include_airports) -> WebCatalog:
         with self.connect() as connection:
             connection.execute("BEGIN")
             # Aggregate typed storage directly. The compatibility view formats
@@ -550,7 +824,10 @@ class FlightReader(SQLiteConnection):
             facts["providers"] = [
                 r[0]
                 for r in connection.execute(
-                    "SELECT DISTINCT provider FROM flights ORDER BY provider"
+                    "SELECT s.code FROM data_sources s WHERE EXISTS "
+                    "(SELECT 1 FROM flight_legs f WHERE f.source_id=s.id AND NOT EXISTS "
+                    "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
+                    "AND t.source_record_key=f.source_record_key)) ORDER BY s.code"
                 )
             ]
             facts["time_bases"] = {basis: facts.pop(f"{basis}_count") for basis in conditions}
@@ -580,11 +857,15 @@ class FlightReader(SQLiteConnection):
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)
                 ORDER BY {columns[basis]},source_id,source_record_key LIMIT 1""",
             ).fetchone()
-            rows = list(
-                connection.execute("""WITH active_codes(iata) AS (
+            rows = (
+                list(
+                    connection.execute("""WITH active_codes(iata) AS (
                 SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
                 SELECT a.*
                 FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""")
+                )
+                if include_airports
+                else []
             )
         return WebCatalog(
             airports=sorted((dict(r) for r in rows[:1000]), key=lambda row: row["iata"]),

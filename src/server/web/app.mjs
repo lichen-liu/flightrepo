@@ -461,9 +461,10 @@ function renderOptions() {
   $("applied-query").textContent =
     `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])} · ${result.query.max_legs === null ? "Any number of stops" : result.query.max_legs === 1 ? "Nonstop" : `Up to ${result.query.max_legs - 1} stops`}`;
   const d = result.diagnostics;
-  const noConnectingPath = d.exhaustive && result.query.max_legs === null &&
-    d.stats.candidates_checked > 0 &&
-    Object.keys(d.stats.rejections).every((reason) => reason === "destination_unreachable");
+  const noConnectingPath = d.exhaustive && result.query.max_legs === null,
+    connectionWindow = result.query.maximum_connection_minutes === null
+      ? `at least ${result.query.minimum_connection_minutes} minutes`
+      : `${result.query.minimum_connection_minutes}–${result.query.maximum_connection_minutes} minutes`;
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
     x === "data_limit"
@@ -490,7 +491,7 @@ function renderOptions() {
     </button>`;
         })
         .join("")
-    : `<p class="empty">${noConnectingPath ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} in the loaded data for this window. Stop count is unrestricted. Try different dates or a different destination.` : d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<p class="empty">${noConnectingPath ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} satisfies this date window and filters. Stop count is unrestricted. Connections must be ${connectionWindow}; ${result.query.allow_airport_change ? "only permitted airport transfers are allowed" : "airport changes are off"}. Endpoint flight counts do not guarantee a connecting journey. Try different dates or connection settings.` : d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -575,6 +576,7 @@ function renderDatasetInfo() {
     ["Coverage", "May be incomplete"],
   ];
   $("dataset-content").innerHTML = `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>`;
+
 }
 function closeEditor() {
   editLane.cancel();
@@ -985,7 +987,7 @@ $("export").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 async function loadCatalog() {
-  await catalogLane.run("/v1/catalog", undefined, (catalog) => {
+  await catalogLane.run("/v1/catalog?include_airports=false", undefined, (catalog) => {
     state.catalog = catalog;
     updateDatasetTag();
     renderDatasetInfo();
@@ -1014,6 +1016,7 @@ async function loadBootstrap() {
     for (const option of field("time-basis").options)
       option.disabled = !bootstrap.available_time_bases.includes(option.value);
     updateZones();
+    updateDatasetTag();
     if (!independentSearch) {
       datesKey = null;
       await loadDates();
@@ -1024,7 +1027,6 @@ async function loadBootstrap() {
     $("status").textContent = "Airport defaults unavailable. Retry or use an exact UTC search link.";
     $("retry-catalog").hidden = false;
   });
-  loadCatalog();
 }
 $("retry-catalog").addEventListener("click", loadBootstrap);
 map
@@ -1047,5 +1049,6 @@ if (independentSearch) {
   updateZones();
 }
 loadBootstrap();
+loadCatalog();
 if (independentSearch)
   loadDates().then(() => { if (availableDates.size) search(); });

@@ -12,6 +12,7 @@ from core.routing.models import (
     required_via_airports,
 )
 from core.routing.policy import ConnectionPolicy
+from core.routing.projection import ProjectedSnapshot
 from core.routing.snapshot import RoutingSnapshot, digest, flight_key
 
 
@@ -45,7 +46,10 @@ class RoutingSession:
         anchors = len(getattr(request, "prefix", ())) + int(
             getattr(request, "chosen_next", None) is not None
         )
-        if len(self.records) > request.limits.max_records + anchors:
+        if (
+            not isinstance(snapshot, ProjectedSnapshot)
+            and len(self.records) > request.limits.max_records + anchors
+        ):
             raise RoutingError(
                 "snapshot_too_large",
                 "supplied snapshot exceeds the record budget; load a bounded snapshot",
@@ -123,6 +127,9 @@ class RoutingSession:
             reasons.append("candidate_limit")
         snapshot_id = self.snapshot.snapshot_id
         return SearchDiagnostics(
+            scope="sql_projection"
+            if isinstance(self.snapshot, ProjectedSnapshot)
+            else "loaded_snapshot",
             snapshot_id=snapshot_id,
             request_id=digest(
                 {

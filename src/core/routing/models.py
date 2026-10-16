@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-ENGINE_VERSION = "routing-6"
+ENGINE_VERSION = "routing-7"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None
@@ -80,7 +80,12 @@ def utc_instant(value: datetime) -> datetime:
 
 class SearchLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_records: int = Field(default=10_000, ge=1, le=20_000)
+    max_records: int = Field(
+        default=10_000,
+        ge=1,
+        le=20_000,
+        description="Full-record snapshot/replay limit. SQL-projected database routing does not use this limit.",
+    )
     max_candidates: int = Field(default=100_000, ge=1, le=200_000)
     max_trace_events: int = Field(default=200, ge=0, le=500)
 
@@ -157,6 +162,7 @@ class TraceEvent(BaseModel):
 
 class SearchStats(BaseModel):
     rows_loaded: int = 0
+    records_hydrated: int = 0
     origins_queried: int = 0
     candidates_checked: int = 0
     candidates_skipped_by_time: int = 0

@@ -65,7 +65,9 @@ def runtime(path, database, *, controls=False):
         for name in ("jobs", "logs", "venv"):
             (path / name).mkdir(mode=0o700)
         for name in ("installation.json", "manage.py", "serve.py"):
-            private_file(path / name, b"prior installed state\n")
+            private_file(
+                path / name, b"{}\n" if name == "installation.json" else b"prior installed state\n"
+            )
         private_file(path / "tunnel-token", b"unit-test-placeholder-token\n")
     return path
 
@@ -1021,3 +1023,49 @@ def test_public_probe_allows_slow_archive_responses_with_bounded_requests(script
     stub_requests(scripts, monkeypatch, open_url)
     assert scripts.manage.probe("https://fly.boboji.fyi")["route_search"] == "passed"
     assert budgets and all(12 <= timeout <= 20 for timeout in budgets)
+
+
+def test_application_overlay_rejects_replaced_routing_code(tmp_path, scripts, monkeypatch):
+    import hashlib
+
+    import server
+
+    installed = tmp_path / "packages"
+    package = installed / "server"
+    package.mkdir(parents=True)
+    monkeypatch.setattr(server, "__file__", str(package / "__init__.py"))
+    reader = package / "reader.py"
+    reader.write_text("SQL routing")
+    receipt = tmp_path / "installation.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "application_overlay": {
+                    "files_sha256": {
+                        "server/reader.py": hashlib.sha256(reader.read_bytes()).hexdigest()
+                    }
+                }
+            }
+        )
+    )
+    scripts.serve.verify_application_overlay(tmp_path)
+    reader.write_text("old capped routing")
+    with pytest.raises(ValueError, match="differs from its deployment receipt: server/reader.py"):
+        scripts.serve.verify_application_overlay(tmp_path)
+    reader.unlink()
+    with pytest.raises(ValueError, match="differs from its deployment receipt"):
+        scripts.serve.verify_application_overlay(tmp_path)
+
+
+def test_installer_can_check_new_wheel_before_replacing_old_overlay_receipt(installed, scripts):
+    (installed / "installation.json").write_text(
+        json.dumps({"application_overlay": {"files_sha256": {"server/reader.py": "obsolete"}}})
+    )
+    (installed / "installing").write_text("Installation in progress")
+    asyncio.run(scripts.serve.check_installation(installed))
+    # Normal serving always verifies, even if an interrupted installer left its marker.
+    with pytest.raises(ValueError, match="differs from its deployment receipt"):
+        scripts.serve.create_server(installed)
+    (installed / "installing").unlink()
+    with pytest.raises(ValueError, match="differs from its deployment receipt"):
+        asyncio.run(scripts.serve.check_installation(installed))
