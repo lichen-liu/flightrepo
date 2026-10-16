@@ -59,6 +59,7 @@ def test_model_sql_calendar_routing_and_admin_agree(tmp_path, reasons, blocked, 
     assert reader.available_dates("AAA", "UTC").dates == ([] if held else [date(2025, 1, 1)])
     assert len(reader.search_itineraries(query()).items) == int(not held)
     assert len(search_routes(query(), RoutingSnapshot((record,))).items) == int(not held)
+    assert reader.readiness()["flight_count"] == int(not held)
     facts = reader.web_catalog().dataset
     assert facts.flight_count == int(not held) and facts.needs_review_count == int(
         record.quality["review_recommended"]

@@ -1017,3 +1017,19 @@ def test_time_resolution_finds_exact_airport_beyond_suggestion_limit(client, dem
     assert response.status_code == 200, response.text
     assert response.json()["timezone"] == "America/Toronto"
     assert response.json()["utc"] == "2026-10-18T16:00:00Z"
+
+
+def test_readiness_does_not_build_catalog_or_quality_statistics(client, demo, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Readiness must not build the full web catalog")
+
+    monkeypatch.setattr(FlightReader, "web_catalog", forbidden)
+    result = client.get("/health/ready")
+    assert result.status_code == 200
+    assert result.json()["flight_count"] == len(demo[2]["flights"])
+
+
+def test_readiness_rejects_wrong_schema_contract(client, demo):
+    with demo[0].connect() as c:
+        c.execute("UPDATE schema_metadata SET version=999")
+    assert client.get("/health/ready").status_code == 503

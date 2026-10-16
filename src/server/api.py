@@ -92,14 +92,7 @@ def health() -> dict[str, str]:
 
 @app.get("/health/ready")
 def readiness(store: FlightReader = Depends(get_store)):
-    catalog = store.web_catalog()
-    return {
-        "status": "ready",
-        "flight_count": catalog.dataset.flight_count,
-        "schema_contract": "flight-legs",
-        "schema_version": 1,
-        "time_basis": catalog.dataset.default_time_basis,
-    }
+    return store.readiness()
 
 
 @app.get("/v1/catalog", response_model=WebCatalog)

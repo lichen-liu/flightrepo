@@ -220,6 +220,7 @@ def test_publication_preserves_partial_and_cancelled_lookup_facts(stores):
     assert reader.flight("test", "partial").departure_scheduled is None
     assert reader.flight("test", "cancelled").status == "cancelled"
     assert reader.available_dates("AAA", "UTC").dates == []
+    assert reader.readiness()["flight_count"] == 0
 
 
 def test_failed_publication_rolls_back_and_rejects_wrong_store_and_alias(stores, tmp_path):

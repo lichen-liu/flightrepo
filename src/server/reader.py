@@ -1,5 +1,6 @@
 """Flight queries over the shared local itinerary database."""
 
+import sqlite3
 from bisect import bisect_left
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
@@ -465,6 +466,38 @@ class FlightReader(SQLiteConnection):
             "timezone": exact.timezone,
             "utc": resolve_local(local_time, exact.timezone, fold=fold),
         }
+
+    def readiness(self):
+        """Check serving storage/counts without building confidence or airport catalogs."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            require_serving(connection)
+            contract = connection.execute(
+                "SELECT contract,version FROM schema_metadata WHERE id=1"
+            ).fetchone()
+            if tuple(contract or ()) != ("flight-legs", 1):
+                raise sqlite3.DatabaseError("Unsupported flight schema contract")
+            complete = " OR ".join(
+                [
+                    "(departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL)",
+                    "departure_observed_lower_us IS NOT NULL",
+                    "(departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL)",
+                ]
+            )
+            count = connection.execute(
+                f"SELECT COUNT(*) FROM flight_legs f WHERE status <> 'cancelled' "
+                f"AND ({complete}) AND {ADMITTED_SQL} AND NOT EXISTS "
+                "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
+                "AND t.source_record_key=f.source_record_key)"
+            ).fetchone()[0]
+            basis = self._default_basis(connection)
+        return dict(
+            status="ready",
+            flight_count=count,
+            schema_contract="flight-legs",
+            schema_version=1,
+            time_basis=basis,
+        )
 
     def web_catalog(self) -> WebCatalog:
         with self.connect() as connection:
