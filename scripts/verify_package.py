@@ -136,6 +136,8 @@ def probe_ingestion(executable, directory, environment):
         invoke(
             [
                 "publish",
+                "--vrs",
+                "cached",
                 "--serving-db",
                 str(serving),
                 "--start",
@@ -178,6 +180,34 @@ def probe_ingestion(executable, directory, environment):
     checked = json.loads(invoke(["vrs", "report"]).stdout)
     assert checked["counts"]["exact_two_airport_association"]["records"] == 2
     assert not checked["admission_changed"]
+    audited_routes = json.loads(
+        invoke(
+            [
+                "publish",
+                "--vrs",
+                "cached",
+                "--serving-db",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert audited_routes["route_audit"]["status"] == "checked"
+    assert audited_routes["route_audit"]["counts"]["reference_exact"] == 2
+    quality_queue = json.loads(invoke(["review", "queue"]).stdout)
+    assert quality_queue["version"] == "itinerary-cohort-review-v1"
+    inspected_review = subprocess.run(
+        admin_prefix + ["review", "queue"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(inspected_review.stdout)["pending_records"] == 0
 
     # Exercise the installed handoff on a disposable legacy-shaped snapshot.
     legacy, adopted = root / "legacy.db", root / "adopted.db"
@@ -232,6 +262,8 @@ with closing(sqlite3.connect(sys.argv[1])) as source, closing(sqlite3.connect(sy
                 "--db",
                 str(adopted),
                 "publish",
+                "--vrs",
+                "cached",
                 "--serving-db",
                 str(replacement),
                 "--preserve-serving",

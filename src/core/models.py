@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from core.admission import requires_review
+from core.quality import describe_quality
 from core.routing.models import airport_code, airport_codes, utc_instant
 
 
@@ -17,14 +18,21 @@ class FlightStatus(StrEnum):
 
 
 class RouteVerification(BaseModel):
-    """An undated route-reference match, never a human or timing approval."""
+    """An undated route-reference audit result, never a human or timing approval."""
 
     source: Literal["vrs"] = "vrs"
-    match_kind: Literal["exact", "adjacent"]
+    match_kind: Literal["exact", "adjacent", "different", "incomplete", "missing"]
     reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    callsign: str = Field(min_length=1, pattern=r"^[A-Z0-9]+$")
+    callsign: str | None = Field(default=None, min_length=1)
+    reference_airports: list[str | None] | None = Field(default=None, max_length=64)
     origin_iata: str = Field(pattern=r"^[A-Z]{3}$")
     destination_iata: str = Field(pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def matched_identity(self):
+        if self.match_kind in {"exact", "adjacent"} and not (self.callsign or "").strip():
+            raise ValueError("A positive route match requires a callsign")
+        return self
 
 
 class FlightRecord(BaseModel):
@@ -58,14 +66,46 @@ class FlightRecord(BaseModel):
     route_verification: RouteVerification | None = None
 
     @property
-    def route_verified(self):
+    def current_route_reference(self):
         proof = self.route_verification
-        return bool(
-            proof is not None
-            and proof.callsign == (self.callsign or "").strip().upper()
-            and proof.origin_iata == self.origin_iata
-            and proof.destination_iata == self.destination_iata
+        return (
+            proof
+            if (
+                proof is not None
+                and proof.callsign == ((self.callsign or "").strip().upper() or None)
+                and proof.origin_iata == self.origin_iata
+                and proof.destination_iata == self.destination_iata
+            )
+            else None
         )
+
+    @property
+    def route_verified(self):
+        proof = self.current_route_reference
+        return bool(proof and proof.callsign and proof.match_kind in {"exact", "adjacent"})
+
+    @property
+    def quality(self):
+        proof = self.current_route_reference
+        data = describe_quality(
+            reasons=self.review_reasons,
+            evidence_kind=self.evidence_kind,
+            reference_result=proof.match_kind if proof else None,
+            reviewed=self.itinerary_reviewed,
+            observed=self.effective_time_basis == "observed",
+            aircraft_type=self.aircraft_type_code,
+            provider=self.provider,
+        )
+        recommended = not self.itinerary_reviewed and data["level"] in {"uncertain", "conflict"}
+        data.update(
+            review_recommended=recommended,
+            review_status="manual"
+            if self.itinerary_reviewed
+            else "recommended"
+            if recommended
+            else "not_requested",
+        )
+        return data
 
     @property
     def needs_review(self):
@@ -126,6 +166,9 @@ class FlightRecord(BaseModel):
     @model_serializer(mode="wrap")
     def preserve_legacy_shape(self, handler):
         data = handler(self)
+        quality = self.quality
+        if quality["labels"]:
+            data["quality"] = quality
         if self.route_verification is None:
             data.pop("route_verification", None)
         else:

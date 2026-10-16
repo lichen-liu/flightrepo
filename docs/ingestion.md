@@ -143,7 +143,8 @@ algorithm versions, so changing quality rules does not invent new flight IDs.
 Malformed/unordered archive records, checksum failures and quota violations fail
 an entire day without applying partial flight facts. Endpoint estimates still
 need empirical validation; higher retained counts do not prove flight coverage.
-Admin `flights --needs-review` inspects private held candidates. Producer APIs
+Admin `flights --needs-review` inspects records recommended for review, including
+searchable uncertainty. Use [cohort review](itinerary-quality.md) for grouped evidence. Producer APIs
 may record explicit validation decisions; admin cannot approve or edit private
 candidates. Serving admin can still approve/edit published records. Automatic
 estimate admission never sets `itinerary_reviewed`. External route-reference
@@ -389,4 +390,6 @@ See [the current source decision](flight-data-sources.md#current-selection-histo
 The explicit [VRS admission command](vrs-verification.md#explicit-best-effort-route-admission)
 can now confirm directed airport pairs, replace the estimated-airport badge and
 waive observation-gap holds. Source reasons and inferred timing are retained;
-import/report alone never applies this policy.
+import/report alone never applies this policy. Daily producer publication now
+audits the cached reference automatically, fetching it once when absent by default
+(`--vrs auto`); serving reads never download or audit.

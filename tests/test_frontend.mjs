@@ -158,3 +158,23 @@ test("airport-local dates and inputs follow the specified zone across DST", () =
     "2026-11-01T01:30",
   );
 });
+
+
+import { qualityLabels, qualityBadges } from "../src/server/web/quality.mjs";
+
+test("quality badges prioritize conflicts, deduplicate labels and escape metadata", () => {
+  const flight = { quality: { labels: [
+    { code: "gap", severity: "caution", label: "Observation gap", detail: "A gap" },
+    { code: "timing", severity: "warning", label: "Timing conflict", detail: '<script>"' },
+    { code: "bad", severity: '\" onclick=\"bad', label: "Unsafe" },
+  ] } };
+  assert.deepEqual(qualityLabels([flight, flight]).map((x) => x.code), ["timing", "gap"]);
+  assert.ok(qualityBadges([flight]).includes("&lt;script&gt;&quot;"));
+  assert.ok(!qualityBadges([flight]).includes("onclick"));
+});
+
+test("a partly confirmed journey does not claim all routes match VRS", () => {
+  const confirmed = { route_verified: true, quality: { labels: [ {code: "vrs_route_match", severity: "info", label: "VRS route match", detail: "Undated"} ] } };
+  assert.equal(qualityLabels([confirmed, {}]).length, 0);
+  assert.equal(qualityLabels([confirmed]).length, 1);
+});

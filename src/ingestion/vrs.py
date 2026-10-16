@@ -233,7 +233,7 @@ def report(path, *, start=None, end=None, cohort_limit=50):
     )
 
 
-ADMISSION_VERSION = "vrs-directed-route-admission-v1"
+ADMISSION_VERSION = "vrs-route-audit-v2"
 
 
 def admit(path, *, start, end, apply=False, progress=None):
@@ -271,14 +271,14 @@ def admit(path, *, start, end, apply=False, progress=None):
             with store.connect() as c:
                 has_receipt = c.execute(
                     "SELECT 1 FROM ingestion_documents d JOIN data_sources s ON s.id=d.source_id WHERE s.code='vrs' AND d.kind='validation' AND d.source_record_key=?",
-                    (reference,),
+                    (reference + ":" + ADMISSION_VERSION,),
                 ).fetchone()
             if not has_receipt:
                 store.document(
                     source="vrs",
                     kind="validation",
-                    key=reference,
-                    payload={"snapshot": receipt, "admission_policy": ADMISSION_VERSION},
+                    key=reference + ":" + ADMISSION_VERSION,
+                    payload={"snapshot": receipt, "audit_policy": ADMISSION_VERSION},
                     source_url=BASE_URL,
                     source_group="vrs-route-snapshot",
                     license_expression="CC0-1.0",
@@ -324,18 +324,33 @@ def admit(path, *, start, end, apply=False, progress=None):
                         continue
                     pair = "|" + row["origin_iata"] + "|" + row["destination_iata"] + "|"
                     match = row["iata_chain"] is not None and pair in row["iata_chain"]
-                    proof = None
                     if match:
+                        result = "exact" if row["airport_codes"].count("-") == 1 else "adjacent"
                         counts["matched"] += 1
-                        proof = RouteVerification(
-                            match_kind="exact"
-                            if row["airport_codes"].count("-") == 1
-                            else "adjacent",
-                            reference_sha256=reference,
-                            callsign=row["callsign"].strip().upper(),
-                            origin_iata=row["origin_iata"],
-                            destination_iata=row["destination_iata"],
-                        ).model_dump_json()
+                    elif row["iata_chain"] is None:
+                        result = "missing"
+                    elif "?" in row["iata_chain"]:
+                        result = "incomplete"
+                    else:
+                        result = "different"
+                    counts["audited"] += 1
+                    counts["reference_" + result] += 1
+                    chain = (
+                        [
+                            None if code == "?" else code
+                            for code in row["iata_chain"].strip("|").split("|")
+                        ]
+                        if row["iata_chain"]
+                        else None
+                    )
+                    proof = RouteVerification(
+                        match_kind=result,
+                        reference_sha256=reference,
+                        callsign=(row["callsign"] or "").strip().upper() or None,
+                        origin_iata=row["origin_iata"],
+                        destination_iata=row["destination_iata"],
+                        reference_airports=chain,
+                    ).model_dump_json()
                     new_held = requires_review(reasons, False, match)
                     counts["held_after"] += new_held
                     counts["released"] += old_held and not new_held
@@ -371,3 +386,31 @@ def admit(path, *, start, end, apply=False, progress=None):
             source_facts_changed=False,
             serving_changed=False,
         )
+
+
+def ensure_snapshot(path, *, refresh=False, fetch_missing=False):
+    """Producer orchestration only: pin a cached snapshot or fetch its two bulk CSVs."""
+    path = Path(path).resolve()
+    ingestion_target(path)
+    with SQLiteConnection(path, read_only=True).connect() as c:
+        require_ingestion(c)
+        snapshot = c.execute(
+            "SELECT receipt_json FROM ingestion_vrs_snapshot WHERE id=1"
+        ).fetchone()
+    if refresh or (snapshot is None and fetch_missing):
+        return import_files(IngestionStore(path))
+    return json.loads(snapshot[0]) if snapshot else None
+
+
+def audit_cached_day(path, day):
+    """Every publication audits cached VRS locally; serving queries never fetch or write."""
+    snapshot = ensure_snapshot(path)
+    if snapshot is None:
+        return dict(status="not_checked", reason="no_pinned_snapshot")
+    result = admit(path, start=day, end=day, apply=True)
+    return dict(
+        status="checked",
+        version=result["version"],
+        reference_sha256=result["reference_sha256"],
+        counts=result["counts"],
+    )

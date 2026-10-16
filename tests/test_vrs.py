@@ -188,7 +188,8 @@ def test_reporting_is_readonly_date_bounded_and_tombstones_excluded(store, tmp_p
         assert not c.execute(
             "SELECT name FROM sqlite_schema WHERE name LIKE 'ingestion_vrs_%'"
         ).fetchall()
-        assert c.execute("SELECT count(*) FROM flights").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM flights").fetchone()[0] == 1
+        assert c.execute("SELECT provider_id FROM flights").fetchone()[0] == "outside"
 
 
 def test_cli_and_read_only_admin(store, tmp_path, capsys):

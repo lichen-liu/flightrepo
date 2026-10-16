@@ -82,9 +82,10 @@ fabricated fact. `review_reasons` retains per-record uncertainty (airborne airpo
 estimate, observation gap, implausible airport timing, legacy callsign variation).
 Airport-estimate-only records are admitted with visible estimate labels. Other
 reasons block `searchable_legs`, API routing, calendar availability and pure
-snapshot routing unless explicitly approved. `needs_review` means held by those
-blocking reasons, not every record containing an estimate. The model and SQL
-admission predicates follow the same rule. Explicit serving admin approval sets
+snapshot routing unless explicitly approved. The model `needs_review` means held by those blocking reasons; API/admin
+review filters and counts instead use confidence-based `quality.review_recommended`,
+which includes uncertain searchable estimates. The model and SQL admission
+predicates follow the same rule. See [unified confidence labels](itinerary-quality.md). Explicit serving admin approval sets
 `itinerary_reviewed`, preserves the reasons/evidence, and protects the record
 against passive reingestion. Catalog counts describe the selected store; public serving excludes private
 held candidates. Private admin can inspect all candidates without changing them.
@@ -245,8 +246,12 @@ protection and quota rollback. `tests/test_shared_flight_database.py` exercises
 extraction through publication to API/calendar/routing/rebuild/replay/export.
 
 VRS admission adds nullable `flight_legs.route_verification`: a typed JSON assertion
-binding a pinned reference hash to a callsign and directed airport pair. It is
+binding a pinned reference hash to a callsign and directed airport pair, with
+positive, different, incomplete or missing outcomes and the mapped airport chain. It is
 separate from `itinerary_reviewed` and never removes original review reasons.
 Explicit writers upgrade old stores additively; read-only consumers do not migrate.
 A valid matching assertion waives observation-gap holds only. Timing/other reasons
 remain blocking. See [VRS policy](vrs-verification.md#explicit-best-effort-route-admission).
+Review decisions/acknowledgements are private `ingestion_documents` of kind
+`validation`, source `review`; revision-bound fingerprints and before/after facts
+are journaled atomically. They never enter the serving database.

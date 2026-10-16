@@ -52,12 +52,16 @@ def test_model_sql_calendar_routing_and_admin_agree(tmp_path, reasons, blocked, 
         assert c.execute("SELECT COUNT(DISTINCT leg_id) FROM searchable_legs").fetchone()[0] == int(
             not held
         )
-    assert reader.list_flights(needs_review=True) == ([record] if held else [])
+    assert reader.list_flights(needs_review=True) == (
+        [record] if record.quality["review_recommended"] else []
+    )
     assert reader.available_dates("AAA", "UTC").dates == ([] if held else [date(2025, 1, 1)])
     assert len(reader.search_itineraries(query()).items) == int(not held)
     assert len(search_routes(query(), RoutingSnapshot((record,))).items) == int(not held)
     facts = reader.web_catalog().dataset
-    assert facts.flight_count == int(not held) and facts.needs_review_count == int(held)
+    assert facts.flight_count == int(not held) and facts.needs_review_count == int(
+        record.quality["review_recommended"]
+    )
     bootstrap = reader.web_bootstrap()
     assert bootstrap.available_time_bases == ([] if held else ["observed"])
     assert bootstrap.first_departure == (None if held else record.departure_lower)
@@ -65,7 +69,7 @@ def test_model_sql_calendar_routing_and_admin_agree(tmp_path, reasons, blocked, 
         "AAA", "BBB", clock="UTC", time_basis="observed", departure_date=date(2025, 1, 1)
     )
     assert availability.dates == ([] if held else [date(2025, 1, 1)])
-    assert reader.overview()["needs_review_count"] == int(held)
+    assert reader.overview()["needs_review_count"] == int(record.quality["review_recommended"])
     assert reader.flight("adsblol", "sample").itinerary_reviewed == reviewed
 
 

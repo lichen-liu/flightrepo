@@ -244,6 +244,7 @@ async def check_installation(root: Path) -> None:
             "/",
             "/assets/app.css",
             "/assets/app.mjs",
+            "/assets/quality.mjs",
             "/assets/map.mjs",
             "/assets/vendor/d3-7.9.0.min.js",
             "/assets/vendor/world-110m.geojson",

@@ -152,15 +152,19 @@ check("admitted airport estimates stay visibly labeled without claiming manual r
     flight.evidence_kind = "inferred_airport_proximity";
     flight.review_reasons = ["airborne_airport_estimate"];
     flight.itinerary_reviewed = reviewed;
+    flight.quality = { level: "uncertain", labels: [
+      { code: "estimated_airports", severity: "caution", label: "Estimated airports", detail: "Airports were inferred from observations." },
+      ...(reviewed ? [{code:"manually_reviewed",severity:"info",label:"Manually reviewed",detail:"Explicit human review."}] : []),
+    ] };
     await route.fulfill({ response, json: data });
   });
   await open(page);
   await expect(page.locator("[data-option]").first()).toContainText("Estimated airports");
-  await expect(page.locator("#legs")).toContainText("Estimated airports; not manually verified");
+  await expect(page.locator("#legs")).toContainText("Estimated airports");
   await expect(page.locator("#legs")).not.toContainText("awaiting admin review");
   reviewed = true;
   await search(page);
-  await expect(page.locator("#legs")).toContainText("Estimated airports; manually reviewed");
+  await expect(page.locator("#legs")).toContainText("Manually reviewed");
 });
 
 check("VRS-confirmed endpoints replace the estimated-airport badge without claiming timing verification", async (page) => {
@@ -172,14 +176,33 @@ check("VRS-confirmed endpoints replace the estimated-airport badge without claim
       flight.itinerary_reviewed = false;
       flight.route_verified = true;
       flight.time_basis = "observed";
+      flight.quality = { level: "noted", labels: [
+        {code:"vrs_route_match",severity:"info",label:"VRS route match",detail:"Undated route reference."},
+        {code:"observed_time_window",severity:"info",label:"Observed time window",detail:"Time windows remain inferred from observations."},
+      ] };
     }
     await route.fulfill({ response, json: data });
   });
   await open(page);
   await expect(page.locator("[data-option]").first()).not.toContainText("Estimated airports");
-  await expect(page.locator("#legs")).toContainText("Route confirmed against VRS");
+  await expect(page.locator("#legs")).toContainText("VRS route match");
   await expect(page.locator("#legs")).toContainText("Time windows remain inferred");
   await expect(page.locator("#legs")).not.toContainText("not manually verified");
+});
+
+check("uncertain and conflicting flight evidence has consistent visible labels", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.items[0].legs[0].quality = {level:"conflict",labels:[
+      {code:"observation_gap",severity:"caution",label:"Observation gap",detail:"An intermediate stop may be unobserved."},
+      {code:"timing_conflict",severity:"warning",label:"Timing conflict",detail:"Airports and time window imply an implausible speed."},
+    ]};
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  await expect(page.locator("[data-option]").first()).toContainText("Timing conflict");
+  await expect(page.locator("[data-option]").first()).toContainText("Observation gap");
+  await expect(page.locator("#legs .quality-warning")).toContainText("implausible speed");
 });
 
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {

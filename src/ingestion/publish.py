@@ -62,11 +62,16 @@ def admitted(record):
     return not record.needs_review
 
 
-def publish_day(ingestion_db, serving_db, day):
+def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
     ingestion_db, serving_db = Path(ingestion_db).resolve(), Path(serving_db).resolve()
     if ingestion_db == serving_db or (serving_db.exists() and ingestion_db.samefile(serving_db)):
         raise ValueError("Ingestion and serving databases must be different files")
     day = date.fromisoformat(day) if isinstance(day, str) else day
+    reference_audit = None
+    if audit_routes:
+        from ingestion.vrs import audit_cached_day
+
+        reference_audit = audit_cached_day(ingestion_db, day)
     lower = utc_us(datetime.combine(day, time.min, UTC))
     upper = lower + 86400_000000
     reader = SQLiteConnection(ingestion_db, read_only=True)
@@ -126,7 +131,9 @@ def publish_day(ingestion_db, serving_db, day):
                 "SELECT * FROM data_sources WHERE code IN (SELECT code FROM data_sources WHERE id IN (SELECT metadata_source_id FROM airports))"
             ):
                 providers.add(row["code"])
-            if any(record is not None and record.route_verified for record in records.values()):
+            if any(
+                record is not None and record.current_route_reference for record in records.values()
+            ):
                 providers.add("vrs")
             source_map = {}
             for row in source.execute("SELECT * FROM data_sources"):
@@ -226,13 +233,16 @@ def publish_day(ingestion_db, serving_db, day):
             check_quota(serving_db, output)
     return dict(
         day=str(day),
+        route_audit=reference_audit,
         ingestion_database=str(ingestion_db),
         serving_database=str(serving_db),
         **counts,
     )
 
 
-def publish_range(ingestion_db, serving_db, start, end, *, preserve_serving=None):
+def publish_range(
+    ingestion_db, serving_db, start, end, *, preserve_serving=None, audit_routes=True
+):
     if end < start:
         raise ValueError("Publish end must follow start")
     # One committed publication per day; readers remain live, retries are idempotent.
@@ -242,4 +252,6 @@ def publish_range(ingestion_db, serving_db, start, end, *, preserve_serving=None
 
             prepare_serving(preserve_serving, serving_db)
         for offset in range((end - start).days + 1):
-            yield publish_day(ingestion_db, serving_db, start + timedelta(days=offset))
+            yield publish_day(
+                ingestion_db, serving_db, start + timedelta(days=offset), audit_routes=audit_routes
+            )

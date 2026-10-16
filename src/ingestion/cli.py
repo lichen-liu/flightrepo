@@ -15,6 +15,7 @@ import httpx
 from core.config import get_settings
 from core.database_roles import sqlite_file
 from core.disk_quota import set_quota
+from ingestion import review as review_tools
 from ingestion.adoption import adopt_archive
 from ingestion.adsblol.diagnostics import configure_logging
 from ingestion.audit import audit_database
@@ -22,6 +23,7 @@ from ingestion.jobs import configure_parser, run_ingestion
 from ingestion.publish import publish_range
 from ingestion.store import IngestionStore
 from ingestion.vrs import admit as admit_vrs
+from ingestion.vrs import ensure_snapshot
 from ingestion.vrs import import_files as import_vrs
 from ingestion.vrs import report as report_vrs
 
@@ -46,6 +48,12 @@ def parser():
         "publish", help="publish admitted candidates, one transaction per UTC day"
     )
     publish.add_argument("--serving-db", type=Path, required=True)
+    publish.add_argument(
+        "--vrs",
+        choices=("auto", "cached", "refresh", "skip"),
+        default="auto",
+        help="default: use cached VRS or fetch once if absent, then audit each publication day",
+    )
     publish.add_argument(
         "--preserve-serving",
         type=Path,
@@ -116,7 +124,9 @@ def parser():
     vrs_import.add_argument("--routes-csv", type=Path)
     vrs_import.add_argument("--airports-csv", type=Path)
     vrs_admit = vrs_actions.add_parser(
-        "admit", help="confirm matching routes and waive gap holds; dry-run unless --apply"
+        "audit",
+        aliases=["admit"],
+        help="record VRS matches, disagreements and absence; dry-run unless --apply",
     )
     vrs_admit.add_argument("--start", type=date.fromisoformat, required=True)
     vrs_admit.add_argument("--end", type=date.fromisoformat, required=True)
@@ -127,6 +137,7 @@ def parser():
     vrs_report.add_argument("--end", type=date.fromisoformat)
     vrs_report.add_argument("--cohort-limit", type=int, default=50)
     vrs_report.add_argument("--report", type=Path)
+    review_tools.configure_commands(commands, writes=True)
     return root
 
 
@@ -230,6 +241,21 @@ def run(arguments, *, database_path=None, interactive=False):
                 progress=progress,
             )
         save_report(destination, result)
+    elif args.source == "review":
+        destination = report_destination(args.report, [path])
+        if args.review_action == "decide":
+            if (args.action == "correct") != (args.replacement is not None):
+                raise ValueError("--replacement is required only for a correction")
+            result = review_tools.decide(
+                path,
+                json.loads(args.case.read_text()),
+                action=args.action,
+                note=args.note,
+                replacement=json.loads(args.replacement.read_text()) if args.replacement else None,
+            )
+        else:
+            result = review_tools.read_command(path, args)
+        save_report(destination, result)
     elif args.source == "vrs":
         if args.vrs_action == "import":
             output(
@@ -243,7 +269,7 @@ def run(arguments, *, database_path=None, interactive=False):
             destination = report_destination(args.report, [path])
             result = (
                 admit_vrs(path, start=args.start, end=args.end, apply=args.apply, progress=progress)
-                if args.vrs_action == "admit"
+                if args.vrs_action in {"audit", "admit"}
                 else report_vrs(
                     path, start=args.start, end=args.end, cohort_limit=args.cohort_limit
                 )
@@ -256,8 +282,15 @@ def run(arguments, *, database_path=None, interactive=False):
             set_quota(path, args.quota_bytes)
         output(dict(initialized=str(path), role="ingestion"))
     elif args.source == "publish":
+        if args.vrs != "skip":
+            ensure_snapshot(path, refresh=args.vrs == "refresh", fetch_missing=args.vrs == "auto")
         for result in publish_range(
-            path, args.serving_db, args.start, args.end, preserve_serving=args.preserve_serving
+            path,
+            args.serving_db,
+            args.start,
+            args.end,
+            preserve_serving=args.preserve_serving,
+            audit_routes=args.vrs != "skip",
         ):
             output(result)
     elif args.source == "document":

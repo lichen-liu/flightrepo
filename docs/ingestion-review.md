@@ -4,7 +4,7 @@ These producer tools use only retained ADSB.lol itinerary facts and the existing
 OurAirports reference. Source licences remain [ODbL/public domain](ingestion.md#sources-and-licences).
 The core audit does not query external flight sites or certify commercial service/flight completeness.
 After adoption, the separate [VRS reference tool](vrs-verification.md) adds private
-undated route checks. Its explicit, user-approved `admit --apply` policy can waive
+undated route checks. Publication now audits a pinned VRS snapshot automatically; its user-approved policy can waive
 observation-gap holds for directed matches; timing/other holds and human approvals
 remain unchanged. Future schedule
 ingestion is deferred; Flight.info/FR24 historical timing access is not yet established.
@@ -127,10 +127,18 @@ readiness, actual route search, calendar availability and aircraft types locally
 publicly. Only a **serving** replacement may replace canonical serving; never rename
 the private ingestion file into that path. PR merge still requires user approval.
 
+## Confidence labels and smart review
+
+Use the [unified quality and cohort review workflow](itinerary-quality.md) to
+separate informational notes, uncertainty and conflicts, inspect representative
+samples and record revision-bound producer decisions. Admin remains read-only.
+
 ## VRS route admission (approved best-effort policy)
 
-After a pinned bulk reference import, run `vrs admit` for a read-only preview, then
-`vrs admit --apply` for the chosen departure range. Exact directed pairs and adjacent
+Publication uses `--vrs auto` by default, reusing a pinned bulk reference or
+fetching it once if absent, then auditing each day. For a separate preview, run
+`vrs audit`, then `vrs audit --apply` for the chosen departure range. The old
+`admit` command remains an alias. Exact directed pairs and adjacent
 legs qualify; observation gaps alone may be waived, timing/other holds may not.
 This is automatic reference evidence, not human approval. Preserve source reasons,
 times and types. Republish and deploy compatible code to expose admission and label

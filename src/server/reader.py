@@ -7,11 +7,12 @@ from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from core.admission import ADMITTED_SQL, REVIEW_REQUIRED_SQL
+from core.admission import ADMITTED_SQL
 from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
 from core.database_roles import require_serving
 from core.models import FlightRecord, RouteSummary
 from core.planning import rebuild_from_snapshot, validate_prefix
+from core.quality import review_recommended_sql
 from core.routing.models import RouteSearchRequest, RoutingError, airport_code
 from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
@@ -89,7 +90,7 @@ class FlightReader(SQLiteConnection):
         """Query shared facts with typed time bounds and deterministic limits."""
         clauses, params = [], []
         if needs_review:
-            clauses.append(REVIEW_REQUIRED_SQL)
+            clauses.append(review_recommended_sql())
         if searchable_only or time_basis is not None:
             clauses.append(ADMITTED_SQL)
         departure_column, arrival_column = "departure", "arrival"
@@ -344,7 +345,7 @@ class FlightReader(SQLiteConnection):
         return dict(
             connection.execute(f"""SELECT
             (SELECT COUNT(DISTINCT leg_id) FROM searchable_legs) searchable_flights,
-            COUNT(*) FILTER (WHERE {REVIEW_REQUIRED_SQL}) needs_review_count FROM flights""").fetchone()
+            COUNT(*) FILTER (WHERE {review_recommended_sql()}) needs_review_count FROM flights""").fetchone()
         )
 
     @staticmethod
@@ -488,7 +489,7 @@ class FlightReader(SQLiteConnection):
             facts = dict(
                 connection.execute(f"""SELECT COUNT(*) total_record_count,
                 COUNT(*) FILTER (WHERE status <> 'cancelled' AND ({complete}) AND {ADMITTED_SQL}) flight_count,
-                COALESCE(SUM({REVIEW_REQUIRED_SQL}),0) needs_review_count,
+                COALESCE(SUM({review_recommended_sql()}),0) needs_review_count,
                 COALESCE(SUM(status = 'cancelled'),0) cancelled_count,
                 MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh
                 FROM flight_legs f WHERE NOT EXISTS (

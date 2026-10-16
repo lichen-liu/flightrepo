@@ -247,6 +247,9 @@ def test_audit_apply_journals_only_supported_flags_and_preserves_manuals_and_fac
         current["review_reasons"] = original[r.provider_id].get("review_reasons", [])
         old = original[r.provider_id].copy()
         old.setdefault("review_reasons", [])
+        # Quality labels are derived from the corrected reasons, not source facts.
+        current.pop("quality", None)
+        old.pop("quality", None)
         assert current == old
     with store.connect() as c:
         assert c.execute("SELECT COUNT(*) FROM ingestion_audit_changes").fetchone()[0] == 4

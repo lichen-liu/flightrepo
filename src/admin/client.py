@@ -35,6 +35,7 @@ from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
+from ingestion import review as review_tools
 from ingestion.adsblol.diagnostics import configure_logging
 from ingestion.store import IngestionStore
 from ingestion.updater import FlightUpdater
@@ -172,7 +173,7 @@ def print_overview(summary):
         f"Transfer rules: {summary['transfers']:,}"
     )
     print(
-        f"Searchable flights: {summary['searchable_flights']:,}   Awaiting itinerary review: {summary['needs_review_count']:,}"
+        f"Searchable flights: {summary['searchable_flights']:,}   Review recommended: {summary['needs_review_count']:,}"
     )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
@@ -226,6 +227,7 @@ def parser():
         "overview", help="database coverage, counts and fetch timestamps"
     )
     overview.add_argument("--json", action="store_true", help="print structured JSON")
+    review_tools.configure_commands(commands, writes=False, reports=False)
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
     commands.add_parser("create-airport", help="enter airport metadata, preview and save")
     storage = commands.add_parser("storage", help="database disk usage and live quota")
@@ -240,7 +242,7 @@ def parser():
     flights.add_argument(
         "--needs-review",
         action="store_true",
-        help="only records held by blocking quality reasons",
+        help="records with confidence labels recommending review; eligibility is separate",
     )
     flights.add_argument("--origin", type=airport_code)
     flights.add_argument("--destination", type=airport_code)
@@ -426,6 +428,7 @@ def run(arguments, *, database_path=None, interactive=False):
         reading = args.command in {
             None,
             "overview",
+            "review",
             "inspect",
             "flights",
             "search",
@@ -463,6 +466,8 @@ def run(arguments, *, database_path=None, interactive=False):
             query_database(target, "SELECT name FROM sqlite_schema LIMIT 1", 1)
         print(f"Database: {target}")
         return target
+    elif args.command == "review":
+        output(review_tools.read_command(path, args))
     elif args.command == "maintenance":
         if args.maintenance_action == "reset":
             raise ValueError("reset is for ingestion stores; serving uses clear-data")
