@@ -1001,3 +1001,22 @@ def test_startup_readiness_deadline_is_bounded_after_timeouts(scripts, monkeypat
         scripts.manage.wait_for_server(8014)
     assert len(timeouts) == 3 and max(timeouts) <= 20
     assert clock[0] <= 60.2
+
+
+def test_public_probe_allows_slow_archive_responses_with_bounded_requests(scripts, monkeypatch):
+    bodies = public_responses()
+    budgets = []
+
+    def open_url(request, timeout):
+        budgets.append(timeout)
+        # A 12-second response is valid for a large archive; no wall-clock wait.
+        if timeout < 12:
+            raise TimeoutError("archive aggregation exceeded request budget")
+        value = bodies[urlsplit(request.full_url).path]
+        return Response(
+            value if isinstance(value, bytes) else json.dumps(value).encode(), request.full_url
+        )
+
+    stub_requests(scripts, monkeypatch, open_url)
+    assert scripts.manage.probe("https://fly.boboji.fyi")["route_search"] == "passed"
+    assert budgets and all(12 <= timeout <= 20 for timeout in budgets)
