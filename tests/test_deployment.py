@@ -961,3 +961,43 @@ def test_real_mode_requires_an_initialized_database_and_rejects_demo(tmp_path, s
     updater.upsert([FlightRecord.model_validate(fixture["flights"][0])])
     with pytest.raises(ValueError, match="demo flight records"):
         scripts.serve.create_server(root)
+
+
+def test_startup_readiness_allows_archive_aggregation_without_request_flood(scripts, monkeypatch):
+    clock = [0.0]
+    timeouts = []
+    monkeypatch.setattr(scripts.manage.time, "monotonic", lambda: clock[0])
+
+    class Response(io.BytesIO):
+        status = 200
+
+    def ready(url, timeout):
+        timeouts.append(timeout)
+        # A normal archive query can take several seconds, not one second.
+        assert timeout >= 4
+        clock[0] += 4
+        return Response(b'{"status":"ready"}')
+
+    monkeypatch.setattr(scripts.manage, "urlopen", ready)
+    scripts.manage.wait_for_server(8014)
+    assert timeouts == [20]
+
+
+def test_startup_readiness_deadline_is_bounded_after_timeouts(scripts, monkeypatch):
+    clock = [0.0]
+    timeouts = []
+    monkeypatch.setattr(scripts.manage.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        scripts.manage.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+    def unavailable(url, timeout):
+        timeouts.append(timeout)
+        clock[0] += timeout
+        raise TimeoutError("slow readiness")
+
+    monkeypatch.setattr(scripts.manage, "urlopen", unavailable)
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        scripts.manage.wait_for_server(8014)
+    assert len(timeouts) == 3 and max(timeouts) <= 20
+    assert clock[0] <= 60.2

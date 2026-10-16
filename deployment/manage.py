@@ -103,10 +103,14 @@ def job_definitions(root: Path, cloudflared: str) -> dict:
 
 
 def wait_for_server(port: int):
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
+    deadline = time.monotonic() + 60
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            with urlopen(f"http://127.0.0.1:{port}/health/ready", timeout=1) as response:
+            # Real archives need longer than a demo to aggregate readiness. A short
+            # read timeout leaves expensive requests running and floods startup.
+            with urlopen(
+                f"http://127.0.0.1:{port}/health/ready", timeout=min(20, remaining)
+            ) as response:
                 data = json.load(response)
                 if response.status == 200 and data.get("status") == "ready":
                     return
