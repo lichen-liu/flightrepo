@@ -398,3 +398,34 @@ def test_admission_respects_date_bounds_cli_readonly_default_locks_and_quota(
         vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
     with store.connect() as c:
         assert c.execute("SELECT route_verification FROM flight_legs").fetchone()[0] is None
+
+
+def test_catalog_counts_each_confirmed_flight_once_across_multiple_time_bases(store):
+    from server.reader import FlightReader
+
+    snapshot(store)
+    record = fact(
+        "all-times",
+        departure_scheduled="2023-07-10T10:00:00Z",
+        arrival_scheduled="2023-07-10T11:00:00Z",
+        departure_observed_lower="2023-07-10T09:59:00Z",
+        departure_observed_upper="2023-07-10T10:01:00Z",
+        arrival_observed_lower="2023-07-10T10:59:00Z",
+        arrival_observed_upper="2023-07-10T11:01:00Z",
+    )
+    store.upsert(
+        [
+            record,
+            fact("timing", review_reasons=["implausible_airport_timing"]),
+            fact("cancelled", status="cancelled"),
+            fact("deleted"),
+        ]
+    )
+    store.delete("adsblol", "deleted")
+    vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    catalog = FlightReader(store.path).web_catalog().dataset
+    assert catalog.flight_count == 1
+    assert catalog.total_record_count == 3
+    assert catalog.needs_review_count == 1
+    assert catalog.cancelled_count == 1
+    assert catalog.time_bases == {"scheduled": 1, "observed": 1, "actual": 1}

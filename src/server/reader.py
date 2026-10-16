@@ -481,26 +481,27 @@ class FlightReader(SQLiteConnection):
                 else f"departure_{basis}_us"
                 for basis in conditions
             }
-            aggregates = ",".join(
-                f"COALESCE(SUM(eligible AND ({condition})),0) {basis}_count,"
-                f"MIN(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_first,"
-                f"MAX(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_last"
-                for basis, condition in conditions.items()
-            )
+            # Check admission a bounded number of times per fact. Repeating a
+            # flattened eligibility expression in each aggregate multiplies JSON
+            # evidence checks across every time basis on multi-million-row files.
             complete = " OR ".join(f"({condition})" for condition in conditions.values())
             facts = dict(
-                connection.execute(f"""WITH live AS (
-                SELECT f.*, status <> 'cancelled' AND {ADMITTED_SQL} eligible
+                connection.execute(f"""SELECT COUNT(*) total_record_count,
+                COUNT(*) FILTER (WHERE status <> 'cancelled' AND ({complete}) AND {ADMITTED_SQL}) flight_count,
+                COALESCE(SUM({REVIEW_REQUIRED_SQL}),0) needs_review_count,
+                COALESCE(SUM(status = 'cancelled'),0) cancelled_count,
+                MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh
                 FROM flight_legs f WHERE NOT EXISTS (
                     SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key
-                )) SELECT COUNT(*) total_record_count,
-                COALESCE(SUM(eligible AND ({complete})),0) flight_count,
-                COALESCE(SUM({REVIEW_REQUIRED_SQL}),0) needs_review_count,
-                COALESCE(SUM(status = 'cancelled'), 0) cancelled_count,
-                MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh,
-                {aggregates} FROM live""").fetchone()
+                )""").fetchone()
             )
+            for basis in conditions:
+                row = connection.execute(
+                    "SELECT COUNT(*),MIN(departure_lower_us),MAX(departure_lower_us) FROM searchable_legs WHERE time_basis=?",
+                    (basis,),
+                ).fetchone()
+                facts[f"{basis}_count"], facts[f"{basis}_first"], facts[f"{basis}_last"] = row
             for key in ("oldest_fact_refresh", "newest_fact_refresh"):
                 if facts[key] is not None:
                     facts[key] = EPOCH + timedelta(microseconds=facts[key])
