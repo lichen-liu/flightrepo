@@ -35,7 +35,7 @@ ARCHIVE_TABLES = {
 }
 
 
-def table_digests(connection):
+def table_digests(connection, original_columns=None):
     """Hash every original row, including local overrides and extraction state."""
     result = {}
     tables = connection.execute(
@@ -47,7 +47,14 @@ def table_digests(connection):
         keys = [item[1] for item in sorted(columns, key=lambda item: item[5]) if item[5]]
         order = ",".join('"' + key.replace('"', '""') + '"' for key in keys) or "rowid"
         digest, count = hashlib.sha256(), 0
-        for row in connection.execute(f"SELECT * FROM {quoted} ORDER BY {order}"):
+        selected = (
+            "*"
+            if original_columns is None or name not in original_columns
+            else ",".join(
+                '"' + column.replace('"', '""') + '"' for column in original_columns[name]
+            )
+        )
+        for row in connection.execute(f"SELECT {selected} FROM {quoted} ORDER BY {order}"):
             digest.update(
                 json.dumps(tuple(row), separators=(",", ":"), ensure_ascii=False).encode()
             )
@@ -165,6 +172,13 @@ def adopt_archive(
             if progress:
                 progress({"phase": "fingerprinting_source", "input_days": len(expected)})
             before = table_digests(source)
+            original_columns = {
+                name: [
+                    r[1]
+                    for r in source.execute('PRAGMA table_info("' + name.replace('"', '""') + '")')
+                ]
+                for name in before
+            }
             with TemporaryDirectory(prefix=".adopt-", dir=destination.parent) as directory:
                 temporary = Path(directory) / "ingestion.db"
                 with closing(sqlite3.connect(temporary)) as copy:
@@ -177,7 +191,7 @@ def adopt_archive(
                 IngestionStore(temporary).initialize()
                 with SQLiteConnection(temporary).connect() as copy:
                     require_ingestion(copy)
-                    if table_digests_original(copy, before) != before:
+                    if table_digests_original(copy, before, original_columns) != before:
                         raise ValueError(
                             "Initialization changed original facts or extraction state"
                         )
@@ -256,5 +270,9 @@ def adopt_archive(
                 }
 
 
-def table_digests_original(connection, original):
-    return {name: value for name, value in table_digests(connection).items() if name in original}
+def table_digests_original(connection, original, original_columns=None):
+    return {
+        name: value
+        for name, value in table_digests(connection, original_columns).items()
+        if name in original
+    }

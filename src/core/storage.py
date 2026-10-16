@@ -51,6 +51,7 @@ def _compatibility_schema():
         "f.evidence_kind",
         "f.itinerary_reviewed",
         "f.review_reasons",
+        "f.route_verification",
         "NULLIF(f.departure_actual_kind,'unknown') AS departure_actual_kind",
         "NULLIF(f.arrival_actual_kind,'unknown') AS arrival_actual_kind",
     ]
@@ -86,6 +87,7 @@ def _compatibility_schema():
         "evidence_kind": "COALESCE(NEW.evidence_kind,'source_reported')",
         "itinerary_reviewed": "COALESCE(NEW.itinerary_reviewed,0)",
         "review_reasons": "COALESCE(NEW.review_reasons,'[]')",
+        "route_verification": "NEW.route_verification",
         "first_seen_us": parse_time("NEW.fetched_at"),
         "last_seen_us": parse_time("NEW.fetched_at"),
         "departure_actual_kind": "CASE WHEN NEW.departure_actual IS NOT NULL THEN COALESCE(NEW.departure_actual_kind,'unknown') END",
@@ -136,6 +138,24 @@ def refresh_admission_view(connection):
     connection.execute(statement)
 
 
+def upgrade_route_verification(connection):
+    """Explicit writer-only additive upgrade; read-only consumers never migrate."""
+    columns = {r[1] for r in connection.execute("PRAGMA table_info(flight_legs)")}
+    if "route_verification" in columns:
+        return
+    marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
+    view = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"
+    connection.executescript(
+        "BEGIN IMMEDIATE;"
+        "ALTER TABLE flight_legs ADD COLUMN route_verification TEXT "
+        "CHECK(route_verification IS NULL OR "
+        "(json_valid(route_verification) AND json_type(route_verification)='object'));"
+        "DROP TRIGGER IF EXISTS flights_insert; DROP TRIGGER IF EXISTS flights_update;"
+        "DROP TRIGGER IF EXISTS flights_delete; DROP VIEW IF EXISTS flights;"
+        "DROP VIEW IF EXISTS searchable_legs;" + _compatibility_schema() + view + "COMMIT;"
+    )
+
+
 def source_id(connection, code):
     connection.execute("INSERT OR IGNORE INTO data_sources(code,name) VALUES (?,?)", (code, code))
     return connection.execute("SELECT id FROM data_sources WHERE code=?", (code,)).fetchone()[0]
@@ -176,6 +196,9 @@ def store_flight(connection, record, *, restore=True, local_edit=False, batch_id
         "evidence_kind": record.evidence_kind,
         "itinerary_reviewed": int(record.itinerary_reviewed),
         "review_reasons": json.dumps(record.review_reasons),
+        "route_verification": record.route_verification.model_dump_json()
+        if record.route_verification is not None
+        else None,
         "departure_actual_kind": (record.departure_actual_kind or "unknown")
         if record.departure_actual is not None
         else None,
@@ -211,6 +234,8 @@ def store_flight(connection, record, *, restore=True, local_edit=False, batch_id
             )
             current["codeshares"] = json.loads(current["codeshares"])
             current["review_reasons"] = json.loads(current["review_reasons"])
+            if current.get("route_verification") is not None:
+                current["route_verification"] = json.loads(current["route_verification"])
             if (
                 FlightRecord.model_validate(current).model_copy(
                     update={"fetched_at": record.fetched_at}
@@ -283,4 +308,6 @@ def flight_record(row):
     data = dict(row)
     data["codeshares"] = json.loads(data["codeshares"])
     data["review_reasons"] = json.loads(data.get("review_reasons", "[]"))
+    if data.get("route_verification") is not None:
+        data["route_verification"] = json.loads(data["route_verification"])
     return FlightRecord.model_validate(data)

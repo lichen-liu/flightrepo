@@ -35,6 +35,17 @@ def semantic_health(connection):
     invalid_facts = connection.execute(
         f"SELECT COUNT(*) FROM flight_legs WHERE COALESCE(({FACT_VALID_SQL}),0)=0"
     ).fetchone()[0]
+    columns = {r[1] for r in connection.execute("PRAGMA table_info(flight_legs)")}
+    if "route_verification" in columns:
+        from core.models import RouteVerification
+
+        for row in connection.execute(
+            "SELECT route_verification FROM flight_legs WHERE route_verification IS NOT NULL GROUP BY route_verification"
+        ):
+            try:
+                RouteVerification.model_validate_json(row[0])
+            except ValueError:
+                invalid_facts += 1
     invalid_airports = connection.execute("""SELECT COUNT(*) FROM airports WHERE COALESCE((iata GLOB '[A-Z][A-Z][A-Z]'
         AND ((latitude IS NULL AND longitude IS NULL) OR (latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180))),0)=0""").fetchone()[
         0

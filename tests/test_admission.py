@@ -11,6 +11,7 @@ from test_shared_flight_database import observed, query
 
 from admin import client as admin
 from admin.admission import apply_admission
+from core.admission import review_required_sql
 from core.disk_quota import set_quota
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot
@@ -72,7 +73,7 @@ def legacy_view(c):
     marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
     statement = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"
     statement = statement.replace(
-        "(f.itinerary_reviewed = 1 OR NOT EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate'))",
+        "NOT " + review_required_sql("f"),
         "((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)",
     )
     c.execute("DROP VIEW searchable_legs")

@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryFile
 from uuid import uuid4
 
-from core.admission import requires_review
+from core.admission import requires_review, route_verified_sql
 from core.database_roles import is_ingestion, require_ingestion
 from core.disk_quota import database_bytes
 from core.file_lock import file_mutex
@@ -175,7 +175,9 @@ def audit_database(
                 cohorts = Counter()
                 samples = defaultdict(list)
                 missing_proposals = []
-                query = f"""SELECT f.*,s.code AS provider,a.latitude AS origin_lat,a.longitude AS origin_lon,
+                columns = {r[1] for r in source.execute("PRAGMA table_info(flight_legs)")}
+                verified = route_verified_sql("f") if "route_verification" in columns else "0"
+                query = f"""SELECT f.*,({verified}) AS route_verified,s.code AS provider,a.latitude AS origin_lat,a.longitude AS origin_lon,
                     b.latitude AS destination_lat,b.longitude AS destination_lon,
                     ({PARTITION_TIME_SQL}) AS event_us
                     FROM flight_legs f JOIN data_sources s ON s.id=f.source_id
@@ -188,7 +190,9 @@ def audit_database(
                     except (ValueError, TypeError):
                         findings["invalid_review_reasons"] += 1
                         continue
-                    held = requires_review(old, bool(row["itinerary_reviewed"]))
+                    held = requires_review(
+                        old, bool(row["itinerary_reviewed"]), bool(row["route_verified"])
+                    )
                     counts["held"] += held
                     complete = bool(
                         row["departure_observed_lower_us"] is not None
@@ -220,7 +224,11 @@ def audit_database(
                     if timing is True and protected:
                         findings["protected_timing_override"] += 1
                     if "observation_gap" in old:
-                        findings["gap_requires_observations_to_resolve"] += 1
+                        findings[
+                            "gap_corroborated_by_vrs"
+                            if row["route_verified"]
+                            else "gap_requires_observations_to_resolve"
+                        ] += 1
                     if set(old) - KNOWN_REASONS:
                         findings["unknown_review_reason"] += 1
                     label = "+".join(sorted(set(old))) or "no_review_reason"

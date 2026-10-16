@@ -10,7 +10,7 @@ from core.database_roles import ingestion_target, require_ingestion
 from core.disk_quota import database_bytes, file_bytes, policy
 from core.file_lock import file_mutex
 from core.routing.models import utc_instant
-from core.storage import SCHEMA, SQLiteConnection, source_id, utc_us
+from core.storage import SCHEMA, SQLiteConnection, source_id, upgrade_route_verification, utc_us
 from ingestion.updater import FlightUpdater
 
 
@@ -49,6 +49,7 @@ class IngestionStore(FlightUpdater):
             with SQLiteConnection(self.path).connect() as connection:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.executescript(IDENTITY_SCHEMA + SCHEMA + STORE_SCHEMA)
+                upgrade_route_verification(connection)
                 require_ingestion(connection)
 
     @contextmanager

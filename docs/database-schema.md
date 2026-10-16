@@ -243,3 +243,10 @@ serving admin creation/edit/delete/approval and airport management remain intact
 clear/reset safety, evidence deduplication, publication/retraction, edit/delete
 protection and quota rollback. `tests/test_shared_flight_database.py` exercises
 extraction through publication to API/calendar/routing/rebuild/replay/export.
+
+VRS admission adds nullable `flight_legs.route_verification`: a typed JSON assertion
+binding a pinned reference hash to a callsign and directed airport pair. It is
+separate from `itinerary_reviewed` and never removes original review reasons.
+Explicit writers upgrade old stores additively; read-only consumers do not migrate.
+A valid matching assertion waives observation-gap holds only. Timing/other reasons
+remain blocking. See [VRS policy](vrs-verification.md#explicit-best-effort-route-admission).

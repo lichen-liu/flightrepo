@@ -238,7 +238,7 @@ remain documented alternatives, not additional active dependencies.
    source URL, source instance and retrieval time. Use IANA timezone rules for the
    flight date, not today's offset. Do not invent exact times from observed bounds.
 4. **Corrections:** keep conflicting, ambiguous or unavailable timing evidence private.
-   A VRS match or scheduled duration cannot remove an observation-gap/timing hold,
+   The explicit best-effort VRS policy may waive a gap hold for matching directed routes; it never waives a timing conflict. A scheduled duration cannot remove these holds,
    prove no intermediate stop, or mark a human approval. Preserve the two explicit
    single-record overrides. A source-specific actual-time correction needs its own
    validated matching and provenance policy before enabling writes.
@@ -275,3 +275,8 @@ remain separate from tests repeated here. Temporary raw downloads were on the RA
 disk and are not committed. Discovery URLs are preferred over expiring asset IDs.
 Recheck prices, licences, file effective dates and platform migrations before
 implementation; a no-key endpoint is not a promise of unlimited availability.
+
+Current admission policy: the user approved explicit VRS directed-route confirmation
+and gap admission. See [the policy and producer command](vrs-verification.md#explicit-best-effort-route-admission).
+This supersedes the earlier research-only VRS recommendation; historical timing and
+future schedule restrictions remain unchanged.

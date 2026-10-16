@@ -102,6 +102,8 @@ CREATE TABLE IF NOT EXISTS flight_legs (
         CHECK(evidence_kind IN ('source_reported', 'inferred_ground_brackets', 'inferred_airport_proximity', 'manual')),
     review_reasons TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(review_reasons) AND json_type(review_reasons) = 'array'),
     itinerary_reviewed INTEGER NOT NULL DEFAULT 0 CHECK(itinerary_reviewed IN (0,1)),
+    route_verification TEXT CHECK(route_verification IS NULL OR
+        (json_valid(route_verification) AND json_type(route_verification)='object')),
     departure_scheduled_us INTEGER,
     arrival_scheduled_us INTEGER,
     departure_actual_us INTEGER,
@@ -203,7 +205,7 @@ SELECT f.id AS leg_id, f.source_id, f.source_record_key,
        'scheduled_departure' AS departure_event,
        'scheduled_arrival' AS arrival_event
 FROM flight_legs f
-WHERE (f.itinerary_reviewed = 1 OR NOT EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate'))
+WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
     AND f.status <> 'cancelled' AND f.departure_scheduled_us IS NOT NULL
     AND f.arrival_scheduled_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -215,7 +217,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_actual_us, f.arrival_actual_us,
        f.departure_actual_kind, f.arrival_actual_kind
 FROM flight_legs f
-WHERE (f.itinerary_reviewed = 1 OR NOT EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate'))
+WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
     AND f.status <> 'cancelled' AND f.departure_actual_us IS NOT NULL
     AND f.arrival_actual_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -227,7 +229,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_observed_lower_us, f.arrival_observed_upper_us,
        'ground_to_air_transition', 'air_to_ground_transition'
 FROM flight_legs f
-WHERE (f.itinerary_reviewed = 1 OR NOT EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate'))
+WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
     AND f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key);

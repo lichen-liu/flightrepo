@@ -8,7 +8,14 @@ from datetime import UTC, datetime
 from core.connections import Airport, AirportTransfer
 from core.database_roles import require_serving
 from core.models import FlightRecord
-from core.storage import SCHEMA, SQLiteConnection, source_id, store_flight, utc_us
+from core.storage import (
+    SCHEMA,
+    SQLiteConnection,
+    source_id,
+    store_flight,
+    upgrade_route_verification,
+    utc_us,
+)
 
 
 class FlightUpdater(SQLiteConnection):
@@ -32,6 +39,7 @@ class FlightUpdater(SQLiteConnection):
                     "Legacy database schema; initialize a new file for the shared flight-leg contract"
                 )
             connection.executescript(SCHEMA)
+            upgrade_route_verification(connection)
 
     def upsert(self, records: Iterable[FlightRecord], *, restore=True) -> int:
         records = [FlightRecord.model_validate(record.model_dump()) for record in records]
@@ -158,6 +166,8 @@ class FlightUpdater(SQLiteConnection):
         if current is not None:
             current["codeshares"] = json.loads(current["codeshares"])
             current["review_reasons"] = json.loads(current.get("review_reasons", "[]"))
+            if current.get("route_verification") is not None:
+                current["route_verification"] = json.loads(current["route_verification"])
         if current is None or FlightRecord.model_validate(current) != original:
             raise ValueError("Flight changed or was deleted; reload it before updating or deleting")
 

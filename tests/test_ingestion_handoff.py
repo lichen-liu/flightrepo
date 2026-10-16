@@ -502,3 +502,22 @@ def test_adoption_preserves_old_selected_producer_configuration_privately(archiv
         assert json.loads(
             c.execute("SELECT data FROM ingestion_profiles WHERE source='adsblol'").fetchone()[0]
         )["output_db"] == str(source)
+
+
+def test_adoption_upgrades_optional_evidence_without_changing_original_columns(archive, tmp_path):
+    path, root = archive
+    with sqlite3.connect(path) as c:
+        for trigger in ("flights_insert", "flights_update", "flights_delete"):
+            c.execute("DROP TRIGGER " + trigger)
+        views = [row[0] for row in c.execute("SELECT name FROM sqlite_schema WHERE type='view'")]
+        for view in views:
+            c.execute('DROP VIEW "' + view.replace('"', '""') + '"')
+        c.execute("ALTER TABLE flight_legs DROP COLUMN route_verification")
+        original = adoption.table_digests(c)
+    target = tmp_path / "upgraded.db"
+    adopt_archive(path, target, DAY, DAY, source_root=root)
+    with sqlite3.connect(path) as c:
+        assert adoption.table_digests(c) == original
+    with sqlite3.connect(target) as c:
+        assert "route_verification" in {r[1] for r in c.execute("PRAGMA table_info(flight_legs)")}
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] > 0

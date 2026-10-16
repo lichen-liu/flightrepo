@@ -124,3 +124,12 @@ and use the documented SQLite stop/checkpoint/replacement procedure. Verify real
 readiness, actual route search, calendar availability and aircraft types locally and
 publicly. Only a **serving** replacement may replace canonical serving; never rename
 the private ingestion file into that path. PR merge still requires user approval.
+
+## VRS route admission (approved best-effort policy)
+
+After a pinned bulk reference import, run `vrs admit` for a read-only preview, then
+`vrs admit --apply` for the chosen departure range. Exact directed pairs and adjacent
+legs qualify; observation gaps alone may be waived, timing/other holds may not.
+This is automatic reference evidence, not human approval. Preserve source reasons,
+times and types. Republish and deploy compatible code to expose admission and label
+changes. See [commands and revocation semantics](vrs-verification.md#explicit-best-effort-route-admission).

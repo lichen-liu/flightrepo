@@ -1,4 +1,4 @@
-"""CC0 VRS snapshots and read-only route plausibility reports, never admission."""
+"""CC0 VRS snapshots, route evidence and explicit best-effort admission."""
 
 import csv
 import hashlib
@@ -7,14 +7,15 @@ import json
 import re
 from collections import Counter
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
 
-from core.admission import review_required_sql
+from core.admission import requires_review, review_required_sql, route_verified_sql
 from core.database_roles import ingestion_target, require_ingestion
 from core.file_lock import file_mutex
+from core.models import RouteVerification
 from core.storage import SQLiteConnection, utc_us
 from ingestion.audit import scope_sql
 from ingestion.store import IngestionStore, check_quota
@@ -230,3 +231,143 @@ def report(path, *, start=None, end=None, cohort_limit=50):
         serving_changed=False,
         admission_changed=False,
     )
+
+
+ADMISSION_VERSION = "vrs-directed-route-admission-v1"
+
+
+def admit(path, *, start, end, apply=False, progress=None):
+    """Confirm directed airport pairs and waive gap holds; never alter source facts.
+
+    Dry-run is read-only. Explicit application reconciles each requested UTC day
+    against the pinned snapshot, revoking old automatic evidence on mismatch.
+    Human approvals/edits and tombstones are protected. Timing/other holds remain.
+    """
+    start, end = (date.fromisoformat(x) if isinstance(x, str) else x for x in (start, end))
+    if end < start:
+        raise ValueError("VRS admission end must follow start")
+    path = Path(path).resolve()
+    ingestion_target(path)
+    with file_mutex(Path(str(path) + ".job.lock"), blocking=False) as acquired:
+        if not acquired:
+            raise ValueError("Stop the active ingestion job before VRS admission")
+        store = IngestionStore(path)
+        if apply:
+            store.initialize()
+        with SQLiteConnection(path, read_only=True).connect() as c:
+            require_ingestion(c)
+            row = c.execute("SELECT receipt_json FROM ingestion_vrs_snapshot WHERE id=1").fetchone()
+            if row is None:
+                raise ValueError("Import a VRS snapshot before admission")
+            receipt = json.loads(row[0])
+        reference = hashlib.sha256(
+            json.dumps(
+                {k: v["sha256"] for k, v in receipt["files"].items()},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        if apply:
+            with store.connect() as c:
+                has_receipt = c.execute(
+                    "SELECT 1 FROM ingestion_documents d JOIN data_sources s ON s.id=d.source_id WHERE s.code='vrs' AND d.kind='validation' AND d.source_record_key=?",
+                    (reference,),
+                ).fetchone()
+            if not has_receipt:
+                store.document(
+                    source="vrs",
+                    kind="validation",
+                    key=reference,
+                    payload={"snapshot": receipt, "admission_policy": ADMISSION_VERSION},
+                    source_url=BASE_URL,
+                    source_group="vrs-route-snapshot",
+                    license_expression="CC0-1.0",
+                )
+            with store.connect() as c:
+                c.execute(
+                    "UPDATE data_sources SET source_url=?,license_url=?,attribution=? WHERE code='vrs'",
+                    (
+                        BASE_URL,
+                        "https://creativecommons.org/publicdomain/zero/1.0/",
+                        "VRS standing data, CC0; undated route association",
+                    ),
+                )
+        totals = Counter()
+        current = start
+        while current <= end:
+            where, parameters = scope_sql(current, current)
+            counts = Counter()
+            context = store.connect() if apply else SQLiteConnection(path, read_only=True).connect()
+            with context as c:
+                c.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
+                columns = {r[1] for r in c.execute("PRAGMA table_info(flight_legs)")}
+                verified = route_verified_sql("f") if "route_verification" in columns else "0"
+                rows = c.execute(
+                    f"""SELECT f.*,({verified}) AS verified,
+                    r.iata_chain,r.airport_codes FROM flight_legs f INDEXED BY ingestion_publication_time
+                    JOIN data_sources s ON s.id=f.source_id
+                    LEFT JOIN ingestion_vrs_routes r ON r.callsign=upper(trim(f.callsign))
+                    WHERE s.code='adsblol' AND {where} ORDER BY f.id""",
+                    parameters,
+                ).fetchall()
+                updates = []
+                for row in rows:
+                    counts["records"] += 1
+                    reasons = json.loads(row["review_reasons"])
+                    old_held = requires_review(
+                        reasons, bool(row["itinerary_reviewed"]), bool(row["verified"])
+                    )
+                    counts["held_before"] += old_held
+                    if row["locally_modified_us"] is not None or row["itinerary_reviewed"]:
+                        counts["protected"] += 1
+                        counts["held_after"] += old_held
+                        continue
+                    pair = "|" + row["origin_iata"] + "|" + row["destination_iata"] + "|"
+                    match = row["iata_chain"] is not None and pair in row["iata_chain"]
+                    proof = None
+                    if match:
+                        counts["matched"] += 1
+                        proof = RouteVerification(
+                            match_kind="exact"
+                            if row["airport_codes"].count("-") == 1
+                            else "adjacent",
+                            reference_sha256=reference,
+                            callsign=row["callsign"].strip().upper(),
+                            origin_iata=row["origin_iata"],
+                            destination_iata=row["destination_iata"],
+                        ).model_dump_json()
+                    new_held = requires_review(reasons, False, match)
+                    counts["held_after"] += new_held
+                    counts["released"] += old_held and not new_held
+                    counts["reheld"] += not old_held and new_held
+                    old_proof = (
+                        row["route_verification"] if "route_verification" in columns else None
+                    )
+                    if proof != old_proof:
+                        counts["changed"] += 1
+                        counts["newly_confirmed_estimates"] += (
+                            match and not row["verified"] and "airborne_airport_estimate" in reasons
+                        )
+                        updates.append((proof, row["id"], row["revision"]))
+                if apply:
+                    c.executemany(
+                        "UPDATE flight_legs SET route_verification=?,revision=revision+1 WHERE id=? AND revision=? AND locally_modified_us IS NULL AND itinerary_reviewed=0",
+                        updates,
+                    )
+            totals.update(counts)
+            if progress:
+                progress(
+                    dict(phase="vrs_admission", day=str(current), apply=apply, counts=dict(counts))
+                )
+            current += timedelta(days=1)
+        return dict(
+            version=ADMISSION_VERSION,
+            apply=apply,
+            scope=dict(start=str(start), end=str(end)),
+            reference_sha256=reference,
+            snapshot=receipt,
+            counts=dict(totals),
+            human_approvals_added=0,
+            source_facts_changed=False,
+            serving_changed=False,
+        )

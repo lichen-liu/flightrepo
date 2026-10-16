@@ -486,7 +486,7 @@ function renderOptions() {
       <span class="option-title"><span>${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)).split(",").at(-1).trim())}</span><span>${e(duration(item.duration_minutes))}</span></span>
       <span class="route-codes">${codes.map(e).join(" → ")}</span>
       <span class="option-times">Depart ${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)))}<br>Arrive ${e(stamp(item.arrival, zone(item.legs.at(-1).destination_iata, result)))}</span>
-      <span class="option-facts"><span>${count === 1 ? "Nonstop" : `${count - 1} stop${count === 2 ? "" : "s"}`}</span>${count > 1 ? `<span>${item.connections.some((c) => c.airport_change) ? "Airport change" : "Same-airport connections"}</span>` : ""}${item.legs.some((f) => f.evidence_kind === "inferred_airport_proximity" || f.review_reasons?.includes("airborne_airport_estimate")) ? "<span>Estimated airports</span>" : ""}</span>
+      <span class="option-facts"><span>${count === 1 ? "Nonstop" : `${count - 1} stop${count === 2 ? "" : "s"}`}</span>${count > 1 ? `<span>${item.connections.some((c) => c.airport_change) ? "Airport change" : "Same-airport connections"}</span>` : ""}${item.legs.some((f) => !f.route_verified && (f.evidence_kind === "inferred_airport_proximity" || f.review_reasons?.includes("airborne_airport_estimate"))) ? "<span>Estimated airports</span>" : ""}</span>
     </button>`;
         })
         .join("")
@@ -509,7 +509,8 @@ function renderJourney({ preserveView = false } = {}) {
       return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
       <div class="leg-time"><div><strong>${e(flightTimeLabel(f, "departure", zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(flightTimeLabel(f, "arrival", zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
       ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
-      ${f.evidence_kind === "inferred_airport_proximity" || f.review_reasons?.includes("airborne_airport_estimate") ? `<div class="leg-source">Estimated airports${f.itinerary_reviewed ? "; manually reviewed" : "; not manually verified"}. Airport assignments and time windows are estimates.</div>` : ""}
+      ${f.route_verified ? `<div class="leg-source">Route confirmed against VRS. ${f.time_basis === "observed" ? "Time windows remain inferred from observations." : "VRS does not verify flight timing."}</div>` : ""}
+      ${!f.route_verified && (f.evidence_kind === "inferred_airport_proximity" || f.review_reasons?.includes("airborne_airport_estimate")) ? `<div class="leg-source">Estimated airports${f.itinerary_reviewed ? "; manually reviewed" : "; not manually verified"}. Airport assignments and time windows are estimates.</div>` : ""}
       <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
     .join("");

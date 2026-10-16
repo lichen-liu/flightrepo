@@ -16,6 +16,17 @@ class FlightStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class RouteVerification(BaseModel):
+    """An undated route-reference match, never a human or timing approval."""
+
+    source: Literal["vrs"] = "vrs"
+    match_kind: Literal["exact", "adjacent"]
+    reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    callsign: str = Field(min_length=1, pattern=r"^[A-Z0-9]+$")
+    origin_iata: str = Field(pattern=r"^[A-Z]{3}$")
+    destination_iata: str = Field(pattern=r"^[A-Z]{3}$")
+
+
 class FlightRecord(BaseModel):
     provider: str = Field(min_length=1)
     provider_id: str = Field(min_length=1)
@@ -44,10 +55,21 @@ class FlightRecord(BaseModel):
         ]
     ] = Field(default_factory=list)
     itinerary_reviewed: bool = False
+    route_verification: RouteVerification | None = None
+
+    @property
+    def route_verified(self):
+        proof = self.route_verification
+        return bool(
+            proof is not None
+            and proof.callsign == (self.callsign or "").strip().upper()
+            and proof.origin_iata == self.origin_iata
+            and proof.destination_iata == self.destination_iata
+        )
 
     @property
     def needs_review(self):
-        return requires_review(self.review_reasons, self.itinerary_reviewed)
+        return requires_review(self.review_reasons, self.itinerary_reviewed, self.route_verified)
 
     departure_observed_lower: datetime | None = None
     departure_observed_upper: datetime | None = None
@@ -104,6 +126,10 @@ class FlightRecord(BaseModel):
     @model_serializer(mode="wrap")
     def preserve_legacy_shape(self, handler):
         data = handler(self)
+        if self.route_verification is None:
+            data.pop("route_verification", None)
+        else:
+            data["route_verified"] = self.route_verified
         if not self.review_reasons:
             data.pop("review_reasons", None)
         if not self.itinerary_reviewed:

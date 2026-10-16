@@ -126,6 +126,8 @@ def publish_day(ingestion_db, serving_db, day):
                 "SELECT * FROM data_sources WHERE code IN (SELECT code FROM data_sources WHERE id IN (SELECT metadata_source_id FROM airports))"
             ):
                 providers.add(row["code"])
+            if any(record is not None and record.route_verified for record in records.values()):
+                providers.add("vrs")
             source_map = {}
             for row in source.execute("SELECT * FROM data_sources"):
                 if row["code"] not in providers:

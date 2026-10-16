@@ -59,8 +59,8 @@ A bounded cohort list avoids materializing millions of per-flight evidence docum
 Normalization trims/uppercases only. Airline-code conversion and zero trimming are
 not guessed. Airport mappings use the reference's explicit Code/IATA fields. Route
 A–B–C supports A–B and B–C; it never establishes a nonstop A–C. Matching is directed.
-These results stay private. A match cannot clear a continuity/timing hold or certify
-a flight; disagreement/absence cannot delete or hide an otherwise admitted record.
+The report remains read-only. Explicit `admit --apply` now applies the user-selected
+best-effort policy below; importing or reporting alone never changes admission.
 
 Admin inspection remains read-only:
 
@@ -75,3 +75,35 @@ Review large held/conflict cohorts first and collect date-specific evidence when
 available. Keep unsupported endpoints/times private. Preserve explicit human
 approvals. Publication continues to copy only eligible itinerary facts and airport
 metadata; reference tables and reports never enter serving SQLite.
+
+## Explicit best-effort route admission
+
+```sh
+python -m ingestion --db var/ingestion/ingestion.db vrs admit \
+  --start 2023-07-01 --end 2023-12-31 --report var/ingestion/vrs-admission-preview.json
+python -m ingestion --db var/ingestion/ingestion.db vrs admit --apply \
+  --start 2023-07-01 --end 2023-12-31 --report var/ingestion/vrs-admission-applied.json
+```
+
+This opt-in policy confirms exact directed two-airport matches and consecutive
+pairs in longer chains. It waives only the observation-gap admission block and
+replaces the unverified-airport badge with “Route confirmed against VRS.” It does
+not assert historical validity, exact timing or continuous observation. Observed
+time windows, original reasons, source identity and aircraft type remain unchanged.
+Timing conflicts and any other blocking reason still hold the record. Reversed,
+nonconsecutive, missing or conflicting pairs do not qualify. No fuzzy airport match.
+
+An optional typed `route_verification` field stores the reference hash, callsign,
+airport pair and match kind. SQL, routing, calendar, admin, audit and publication use
+the same policy. Changed callsigns/endpoints invalidate old evidence. The private
+store retains an immutable snapshot receipt in `ingestion_documents`; only compact
+per-flight evidence and VRS attribution enter serving, never the reference catalog.
+An explicit writer performs an additive field/view upgrade for existing stores.
+
+Application is resumable/idempotent, one transaction per UTC departure day, with a
+job lock, live DB-only quota checks and progress counts. It protects tombstones,
+manual edits and human approvals. Refreshing a reference alone leaves published
+evidence intact; rerunning admission explicitly reconciles it, revoking automatic
+confirmation on mismatch. Subsequent publication retracts newly held owned facts.
+Human review is never bulk marked. Admin remains inspection/reset/clear only for
+private ingestion. Publication/deployment remain explicit operations.

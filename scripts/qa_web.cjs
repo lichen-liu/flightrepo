@@ -163,6 +163,25 @@ check("admitted airport estimates stay visibly labeled without claiming manual r
   await expect(page.locator("#legs")).toContainText("Estimated airports; manually reviewed");
 });
 
+check("VRS-confirmed endpoints replace the estimated-airport badge without claiming timing verification", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    for (const flight of data.items[0].legs) {
+      flight.evidence_kind = "inferred_airport_proximity";
+      flight.review_reasons = ["airborne_airport_estimate", "observation_gap"];
+      flight.itinerary_reviewed = false;
+      flight.route_verified = true;
+      flight.time_basis = "observed";
+    }
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("[data-option]").first()).not.toContainText("Estimated airports");
+  await expect(page.locator("#legs")).toContainText("Route confirmed against VRS");
+  await expect(page.locator("#legs")).toContainText("Time windows remain inferred");
+  await expect(page.locator("#legs")).not.toContainText("not manually verified");
+});
+
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
   await page.route("**/v1/search-availability?*", async (route) => {
     const origin = new URL(route.request().url()).searchParams.get("origin");

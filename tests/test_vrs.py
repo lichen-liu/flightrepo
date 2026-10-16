@@ -256,3 +256,145 @@ def test_nonstandard_optional_iata_codes_are_observable_unknowns(store):
     assert vrs.report(store.path)["counts"] == {
         "incomplete_airport_mapping": {"records": 1, "held": 1}
     }
+
+
+@pytest.mark.parametrize("kind", ["exact", "adjacent"])
+def test_explicit_admission_preserves_gap_evidence_and_flows_through_consumers(
+    store, tmp_path, kind
+):
+    from core.routing.models import RouteSearchRequest
+    from ingestion.audit import audit_database
+    from server.reader import FlightReader
+
+    snapshot(store)
+    callsign = "ONE1" if kind == "exact" else "MULT2"
+    record = fact("gap", callsign, review_reasons=["airborne_airport_estimate", "observation_gap"])
+    store.upsert([record])
+    dry = vrs.admit(store.path, start="2023-07-10", end="2023-07-10")
+    assert dry["counts"]["released"] == 1
+    assert FlightReader(store.path).flight("adsblol", "gap").needs_review
+    result = vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    assert result["counts"]["released"] == 1 and result["human_approvals_added"] == 0
+    saved = FlightReader(store.path).flight("adsblol", "gap")
+    assert not saved.needs_review and saved.route_verified and not saved.itinerary_reviewed
+    assert saved.review_reasons == record.review_reasons
+    assert saved.route_verification.match_kind == kind
+    assert saved.model_dump(mode="json")["route_verified"] is True
+    assert audit_database(store.path)["counts"]["held"] == 0
+    serving = tmp_path / "serving.db"
+    assert publish_day(store.path, serving, date(2023, 7, 10))["inserted"] == 1
+    reader = FlightReader(serving)
+    query = RouteSearchRequest(
+        origin="AAA",
+        destination="BBB",
+        departure_start="2023-07-10T00:00:00Z",
+        departure_end="2023-07-11T00:00:00Z",
+        horizon_end="2023-07-12T00:00:00Z",
+        time_basis="actual",
+    )
+    assert reader.search_itineraries(query).items[0].legs[0].route_verified
+    assert reader.available_dates("AAA", "UTC").dates == [date(2023, 7, 10)]
+    assert reader.overview()["needs_review_count"] == 0
+    assert (
+        vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)["counts"].get(
+            "changed", 0
+        )
+        == 0
+    )
+    with store.connect() as c:
+        proof = c.execute("SELECT route_verification FROM flight_legs").fetchone()[0]
+        assert (
+            c.execute(
+                "SELECT count(*) FROM ingestion_documents WHERE kind='validation'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert c.execute("SELECT locally_modified_us FROM flight_legs").fetchone()[0] is None
+    with reader.connect() as c:
+        assert c.execute("SELECT route_verification FROM flight_legs").fetchone()[0] == proof
+        assert not c.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name='ingestion_vrs_routes'"
+        ).fetchone()
+
+
+def test_admission_does_not_waive_timing_other_reasons_or_nonadjacent_pairs(store):
+    snapshot(store)
+    store.upsert(
+        [
+            fact("timing", review_reasons=["observation_gap", "implausible_airport_timing"]),
+            fact("variation", review_reasons=["callsign_variation"]),
+            fact("nonadjacent", "MULT2", "AAA", "CCC"),
+            fact("reverse", "ONE1", "BBB", "AAA"),
+            fact("unknown", "NODATA"),
+            fact("approved", itinerary_reviewed=True),
+            fact("edited"),
+        ]
+    )
+    with store.connect() as c:
+        c.execute("UPDATE flight_legs SET locally_modified_us=1 WHERE source_record_key='edited'")
+    result = vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    assert result["counts"]["protected"] == 2
+    assert result["counts"]["released"] == 0
+    from server.reader import FlightReader
+
+    reader = FlightReader(store.path)
+    for key in ["timing", "variation", "nonadjacent", "reverse", "unknown", "edited"]:
+        assert reader.flight("adsblol", key).needs_review
+    assert reader.flight("adsblol", "approved").route_verification is None
+
+
+def test_reference_withdrawal_reholds_and_retracts_published_gap(store, tmp_path):
+    snapshot(store)
+    store.upsert([fact("gap")])
+    vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    serving = tmp_path / "serving.db"
+    assert publish_day(store.path, serving, date(2023, 7, 10))["inserted"] == 1
+    vrs.import_snapshot(store, ROUTES.replace(b"KAAA-KBBB\n", b"KAAA-KCCC\n"), AIRPORTS)
+    result = vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    assert result["counts"]["reheld"] == 1
+    assert publish_day(store.path, serving, date(2023, 7, 10))["retired"] == 1
+
+
+def test_route_edit_invalidates_evidence_in_sql_and_model(store):
+    from server.reader import FlightReader
+
+    snapshot(store)
+    store.upsert([fact("gap")])
+    vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    with store.connect() as c:
+        c.execute("INSERT INTO airports(iata) VALUES('CCC')")
+        c.execute("UPDATE flights SET destination_iata='CCC' WHERE provider_id='gap'")
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+    saved = FlightReader(store.path).flight("adsblol", "gap")
+    assert not saved.route_verified and saved.needs_review
+    assert not saved.model_dump(mode="json")["route_verified"]
+
+
+def test_admission_respects_date_bounds_cli_readonly_default_locks_and_quota(
+    store, capsys, monkeypatch
+):
+    snapshot(store)
+    store.upsert([fact("gap")])
+    cli.run(
+        ["--db", str(store.path), "vrs", "admit", "--start", "2023-07-11", "--end", "2023-07-11"]
+    )
+    assert json.loads(capsys.readouterr().out)["counts"] == {}
+    with file_mutex(Path(str(store.path) + ".job.lock")):
+        with pytest.raises(ValueError, match="active ingestion job"):
+            vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    original = __import__("ingestion.store", fromlist=["check_quota"]).check_quota
+    checks = 0
+
+    def fail_changes(path, connection=None):
+        nonlocal checks
+        if connection is not None:
+            checks += 1
+            if checks == 2:
+                raise OSError("Database quota exceeded")
+        return original(path, connection)
+
+    monkeypatch.setattr("ingestion.store.check_quota", fail_changes)
+    with pytest.raises(OSError, match="quota exceeded"):
+        vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
+    with store.connect() as c:
+        assert c.execute("SELECT route_verification FROM flight_legs").fetchone()[0] is None
