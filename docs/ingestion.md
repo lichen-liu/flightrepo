@@ -377,8 +377,10 @@ before extrapolating whole-database storage or ingesting more years.
 ## Selected verification and timing scope
 
 ADSB.lol remains the main source. Use the producer-only [VRS bulk reference and
-cohort report](vrs-verification.md) after private-store adoption; its undated matches
-never clear holds or change flight facts. Flight.info/Flightradar24 are requested
+cohort report](vrs-verification.md) after private-store adoption. Import/report alone
+never clear holds or change flight facts. Explicit `vrs admit --apply` confirms
+directed pairs and waives observation-gap holds under the approved best-effort
+policy; timing and other holds remain. Flight.info/Flightradar24 are requested
 historical timing references, but automatic extraction is not enabled because
 historical coverage and persistent-use access are unresolved. Keep scheduled,
 gate and airborne timing separate. Future scheduled-flight ingestion is deferred.
@@ -387,4 +389,4 @@ See [the current source decision](flight-data-sources.md#current-selection-histo
 The explicit [VRS admission command](vrs-verification.md#explicit-best-effort-route-admission)
 can now confirm directed airport pairs, replace the estimated-airport badge and
 waive observation-gap holds. Source reasons and inferred timing are retained;
-import/report alone never applies this policy. This supersedes research-only VRS notes.
+import/report alone never applies this policy.

@@ -1,6 +1,6 @@
 # Flight data sources and verification methods
 
-Research checked **2026-10-15, America/Toronto**. This consolidates the supplied
+Research checked **2026-10-15, America/Toronto**; admission policy updated October 16. This consolidates the supplied
 research handoff and our access tests. It is a source-selection reference, not a
 list of installed adapters. The [earlier source inventory](research/previous-flight-source-inventory.md) also
 preserves regional, aggregate, research-only and gated options. The running
@@ -25,9 +25,10 @@ source research below is retained for reference, not the current implementation 
 Existing scheduled/actual/observed fields remain distinct: a historical scheduled
 time must not be presented as takeoff/landing or replace the observed uncertainty.
 
-[VRS import and reporting](vrs-verification.md) is implemented in the private
-producer tools. It never changes endpoints, times, aircraft types, admission or
-human approvals. Flight.info/FR24 timing extraction is not enabled: historical
+[VRS producer tools](vrs-verification.md) support import, read-only reporting and
+explicit best-effort admission. A matching directed pair can confirm estimated
+airports and waive an observation-gap hold. Endpoints, times, aircraft types,
+timing/other blocking reasons and human approvals remain unchanged. Flight.info/FR24 timing extraction is not enabled: historical
 coverage, matching and access constraints still need resolution. The ADSB job and
 previously approved adoption/audit/publication workflow can proceed independently.
 
@@ -278,5 +279,4 @@ implementation; a no-key endpoint is not a promise of unlimited availability.
 
 Current admission policy: the user approved explicit VRS directed-route confirmation
 and gap admission. See [the policy and producer command](vrs-verification.md#explicit-best-effort-route-admission).
-This supersedes the earlier research-only VRS recommendation; historical timing and
-future schedule restrictions remain unchanged.
+Historical timing and future schedule restrictions remain unchanged.

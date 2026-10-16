@@ -4,7 +4,9 @@ These producer tools use only retained ADSB.lol itinerary facts and the existing
 OurAirports reference. Source licences remain [ODbL/public domain](ingestion.md#sources-and-licences).
 The core audit does not query external flight sites or certify commercial service/flight completeness.
 After adoption, the separate [VRS reference tool](vrs-verification.md) adds private
-undated route checks. It never changes admission or human approvals. Future schedule
+undated route checks. Its explicit, user-approved `admit --apply` policy can waive
+observation-gap holds for directed matches; timing/other holds and human approvals
+remain unchanged. Future schedule
 ingestion is deferred; Flight.info/FR24 historical timing access is not yet established.
 Admin can inspect the private SQLite tables but cannot launch these writes.
 
