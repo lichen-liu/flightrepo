@@ -63,3 +63,18 @@ CREATE TABLE IF NOT EXISTS ingestion_audit_changes (
     evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
     PRIMARY KEY(run_id,source_id,source_record_key)
 ) STRICT, WITHOUT ROWID;
+
+-- One atomic CC0 VRS reference snapshot; undated, never a serving fact/approval.
+CREATE TABLE IF NOT EXISTS ingestion_vrs_snapshot (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json))
+) STRICT;
+CREATE TABLE IF NOT EXISTS ingestion_vrs_airports (
+    code TEXT PRIMARY KEY,
+    iata TEXT CHECK(iata IS NULL OR iata GLOB '[A-Z][A-Z][A-Z]')
+) STRICT, WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS ingestion_vrs_routes (
+    callsign TEXT PRIMARY KEY,
+    airport_codes TEXT NOT NULL,
+    iata_chain TEXT NOT NULL
+) STRICT, WITHOUT ROWID;

@@ -373,3 +373,13 @@ estimate. In a pre-reset live sample, 3,783 accepted legs over 69 days occupied
 Boundary state, diagnostics, airport metadata and WAL materially affect capacity.
 Validate coverage first; compact boundary state without breaking disjoint backfills
 before extrapolating whole-database storage or ingesting more years.
+
+## Selected verification and timing scope
+
+ADSB.lol remains the main source. Use the producer-only [VRS bulk reference and
+cohort report](vrs-verification.md) after private-store adoption; its undated matches
+never clear holds or change flight facts. Flight.info/Flightradar24 are requested
+historical timing references, but automatic extraction is not enabled because
+historical coverage and persistent-use access are unresolved. Keep scheduled,
+gate and airborne timing separate. Future scheduled-flight ingestion is deferred.
+See [the current source decision](flight-data-sources.md#current-selection-historical-operated-flights-only).

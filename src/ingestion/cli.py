@@ -21,6 +21,8 @@ from ingestion.audit import audit_database
 from ingestion.jobs import configure_parser, run_ingestion
 from ingestion.publish import publish_range
 from ingestion.store import IngestionStore
+from ingestion.vrs import import_files as import_vrs
+from ingestion.vrs import report as report_vrs
 
 
 def output(value):
@@ -103,6 +105,18 @@ def parser():
     audit.add_argument("--sample-limit", type=int, default=3)
     audit.add_argument("--cohort-limit", type=int, default=50)
     audit.add_argument("--report", type=Path)
+    vrs = commands.add_parser("vrs", help="private CC0 route reference; no flight/admission writes")
+    vrs_actions = vrs.add_subparsers(dest="vrs_action", required=True)
+    vrs_import = vrs_actions.add_parser(
+        "import", help="atomically refresh routes and airport mappings"
+    )
+    vrs_import.add_argument("--routes-csv", type=Path)
+    vrs_import.add_argument("--airports-csv", type=Path)
+    vrs_report = vrs_actions.add_parser("report", help="read-only ADSB route-plausibility cohorts")
+    vrs_report.add_argument("--start", type=date.fromisoformat)
+    vrs_report.add_argument("--end", type=date.fromisoformat)
+    vrs_report.add_argument("--cohort-limit", type=int, default=50)
+    vrs_report.add_argument("--report", type=Path)
     return root
 
 
@@ -206,6 +220,21 @@ def run(arguments, *, database_path=None, interactive=False):
                 progress=progress,
             )
         save_report(destination, result)
+    elif args.source == "vrs":
+        if args.vrs_action == "import":
+            output(
+                import_vrs(
+                    IngestionStore(path),
+                    routes_path=args.routes_csv,
+                    airports_path=args.airports_csv,
+                )
+            )
+        else:
+            destination = report_destination(args.report, [path])
+            save_report(
+                destination,
+                report_vrs(path, start=args.start, end=args.end, cohort_limit=args.cohort_limit),
+            )
     elif args.source == "init":
         store = IngestionStore(path)
         store.initialize()

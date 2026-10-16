@@ -35,6 +35,7 @@ never synthesize a flight number, schedule, airport timezone or city membership.
 | `database_policy` | Persisted live database disk quota |
 | `ingestion_profiles` (private) | Configured source/input paths for repeatable producer jobs |
 | `ingestion_store_metadata` (private) | Role/version, immutable store identity and reset generation |
+| `ingestion_vrs_snapshot`, `ingestion_vrs_airports`, `ingestion_vrs_routes` (private) | Atomic CC0 reference receipt, explicit airport mappings and indexed callsign chains; no admission writes |
 | `ingestion_documents` (private) | Source/kind/key, validity, normalized JSON, content hash and revision |
 | `ingestion_adoptions` (private) | Verified legacy-copy fingerprints and inherited quota provenance |
 | `ingestion_audit_runs`, `ingestion_audit_changes` (private) | Scoped machine audit/correction receipts and per-record before/after evidence |

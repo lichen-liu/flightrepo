@@ -8,38 +8,44 @@ ingestion remains ADSB.lol-only plus the
 existing airport reference. New probes neither publish flights nor change review
 flags, human approvals or serving data.
 
-## Decision
+## Current selection: historical operated flights only
 
-- **Free bulk historical ingestion:** keep ADSB.lol daily archives. Use BTS monthly
-  files for independent, dated validation within US reporting-carrier coverage.
-- **Free bulk route plausibility:** download VRS standing data once and match
-  locally. The tested ADSB.lol mirror contains 620,700 callsign-route associations
-  in 18,957,159 bytes. Its CC0 data is different from ADSBDB's restricted route data.
-- **Free, reusable future schedules:** Taiwan CAA has an openly licensed whole-file
-  timetable with dates, weekdays, times and planned aircraft codes. A live download
-  worked. Coverage is regional and the tested edition ends October 25, 2026.
-- **Free European seasonal timetables:** TUI and Air Corsica publish open-licensed
-  SSIM files; both current downloads worked. Their tested summer editions end
-  October 24, 2026. Finist’Air publishes a small GTFS file through December 31.
-- **Free near-future operational evidence:** Avinor's documented, anonymous XML
-  collections work, with attribution and caching conditions. Each flight entry
-  describes an arrival or departure event, not necessarily a complete itinerary.
-- **Broad future schedule pages:** Flight.info, FlightMapper, FlightsFrom and
-  FlightRoutes are technically readable. No unlimited bulk export or open mirror
-  licence was established. Keep these as conditional adapters, not the foundation
-  of an unrestricted public schedule database.
+The user selected this scope on October 15, 2026:
 
-**No tested combination supplies a complete worldwide future schedule database,
-with exact aircraft type per flight, under unrestricted free bulk reuse.** An
-open-data combination works with explicit regional/date coverage. Browser access
-alone does not resolve coverage, stability or database-reuse rights.
+| Role | Selected source | What it can establish |
+| --- | --- | --- |
+| Main historical itinerary and aircraft type | ADSB.lol daily archives | Best-effort observed/inferred legs, with retained bounds, uncertainty and observed type |
+| Automatic route verification signal | VRS CC0 standing data | Undated callsign/adjacent-airport association; route plausibility, not proof of historical operation |
+| Requested timing reference | Flight.info | A date-valid historical timetable could support **scheduled** timing; tested current/upcoming pages do not supply 2023 actual timing |
+| Requested actual timing reference | Flightradar24 | Needs permitted access, retention rights and the exact historical instance; no free persistent automated path has been established |
+
+**Future scheduled-flight ingestion is deferred.** Do not expand upcoming timetable
+periods into our serving database or add future dates to its calendar. The future
+source research below is retained for reference, not the current implementation plan.
+Existing scheduled/actual/observed fields remain distinct: a historical scheduled
+time must not be presented as takeoff/landing or replace the observed uncertainty.
+
+[VRS import and reporting](vrs-verification.md) is implemented in the private
+producer tools. It never changes endpoints, times, aircraft types, admission or
+human approvals. Flight.info/FR24 timing extraction is not enabled: historical
+coverage, matching and access constraints still need resolution. The ADSB job and
+previously approved adoption/audit/publication workflow can proceed independently.
+
+Flight.info's [own description](https://www.flight.info/about) describes upcoming
+services and monthly updates; it does not establish a 2023 historical archive.
+Flightradar24's [current terms](https://www.flightradar24.com/terms-of-service)
+§2.3 restrict automated website retrieval, §2.4/§6.3 restrict stored API copies,
+and §6.3.1 addresses supplementing other providers. Its undocumented website JSON
+is not a supported unlimited historical-timing feed. A paid API key alone would
+not resolve persistent reuse for this database. No automated website scraper or
+FR24 backfill has been installed.
 
 Here, *free without a metered API quota* means downloading reusable published
 files and doing subsequent work locally. It does not mean unlimited traffic to
 someone else's server. Respect caching, backoff and provider refresh intervals.
 Batch lookup, paginated collection and whole-database download are different.
 
-## Primary sources and open bulk references
+## Researched sources (selection above takes precedence)
 
 | Source and primary documentation | Bulk access / licence | Historical validation | Future schedule / aircraft information | Status |
 | --- | --- | --- | --- | --- |
@@ -96,7 +102,7 @@ reuse, route changes and inference errors can all produce disagreement. The 3,97
 held matches remain held: an undated route match cannot rule out an intermediate
 stop during missing observations. No flight records were changed.
 
-### Proven regional future timetable
+### Deferred research: regional future timetable
 
 Stable discovery: [CAA dataset 9973](https://data.gov.tw/en/datasets/9973).
 The advertised CSV currently resolves to:
@@ -124,7 +130,7 @@ use insecure TLS flags as a fallback; test the selected deployment client's trus
 handling. The catalogue's update timestamp is not a substitute for the CSV's
 actual effective dates. Retain attribution required by the published licence.
 
-### Proven European seasonal bulk schedules
+### Deferred research: European seasonal bulk schedules
 
 France's National Access Point links openly licensed airline-produced files:
 
@@ -151,7 +157,7 @@ The older tested TUI 2023 archive has 1,802 dated rows / 118,615 bytes, includin
 Air France/KLM has much larger SSIM archives, but the portal currently lists its
 licence as unspecified; it is not promoted to the unrestricted shortlist.
 
-### Proven short-horizon operational feed
+### Deferred research: short-horizon operational feed
 
 ```text
 https://asrv.avinor.no/XmlFeed/v1.0?TimeFrom=1&TimeTo=7&airport=OSL&direction=D
@@ -201,89 +207,64 @@ restrict copying, redistribution and software/database uses except where granted
 public download access does not establish our required reuse rights. Keep it out
 of the unrestricted-feed shortlist until those rights are resolved.
 
-## Combination that fits the current schema
+## Selected pipeline and timing rules
 
 ```text
 ADSB.lol daily observations ────────────────┐
-BTS dated historical facts (US scope) ──────┤
-VRS undated route associations ─────────────┤
-OurAirports / permitted type references ────┼─> private ingestion SQLite
-CAA / open airline schedule periods ───────┤       ├─ retained source assertions
-Avinor short-horizon events ────────────────┘       ├─ grouped consistency results
-                                                   └─ eligible complete facts
-                                                           ↓ explicit publish
-                                                     serving SQLite
+OurAirports airport reference ──────────────┼─> private ingestion SQLite
+VRS route snapshot ────────────────────────┘       ├─ retained itinerary facts
+                                                  ├─ undated route-check reports
+Permitted date-specific historical timing ─ ─ ─ ─>├─ separate timing assertions
+    (Flight.info/FR24 access not yet established)  └─ audited eligible facts
+                                                         ↓ explicit publish
+                                                   serving SQLite
 ```
 
-This is a proposed adapter combination, not a change to the running ADSB job.
+Only ADSB/airport extraction is running in the legacy job. VRS is a separate private
+reference importer, to run after adoption; it is not inserted into the active legacy
+writer. No future schedule importer is selected. BTS and all other sources above
+remain documented alternatives, not additional active dependencies.
 
-1. **Historical validation:** retain ADSB observed bounds/type; compare a BTS
-   record only with compatible date, identity, operating carrier and route/time
-   evidence. Match local departure dates with real timezones, and preserve
-   cancellations/diversions. Do not treat absent US coverage as a negative vote.
-   VRS supplies an inexpensive extra route-association signal, not dated proof.
-2. **Future schedules:** expand only explicit effective periods and weekdays from
-   openly reusable timetable files. Preserve marketing/operating identifiers,
-   stop sequence, local time, timezone, arrival-day offset and original equipment
-   code. A later update can alter/cancel service. No extrapolation beyond expiry.
-3. **Time correctness:** use maintained IANA timezone rules for each airport/date;
-   do not copy a webpage's current UTC offset or assume an arrival date from clock
-   order alone. If required timing/type specificity is unsupported, retain unknowns
-   in private storage rather than fabricate a searchable complete leg.
-4. **Aircraft types:** observed ADSB type, registry model and planned schedule
-   equipment are different assertions. A registry join requires the same aircraft
-   identity and temporal validity. An aircraft family label must not become a
-   specific ICAO subtype by guesswork. Never overwrite actual type with planned.
-5. **Identity and evidence:** keep the existing unique source/native key and
-   revision controls. A schedule-period identity includes source, operating flight,
-   leg, validity, weekday pattern and local times. Cross-source matching is not
-   permission to merge distinct code shares or physically different operations.
-6. **Validation states:** distinguish dated-actual support, dated-planned support,
-   undated route match, conflict, unknown, stale and access failure. Keep geometric
-   timing checks and observation-gap holds; neither a route match nor a schedule
-   proves the aircraft made no unseen stop. Preserve both explicit human overrides.
-7. **Storage:** download bounded source files into RAM, normalize once, remove raw
-   responses, and keep compact source/version/effective-date assertions in ingestion
-   SQLite. Use atomic snapshot replacement, hashes/conditional GET and resumable
-   jobs. Serving gets admitted facts and attribution, never private evidence/raw
-   responses. Each DB owns its DB/WAL/SHM quota; raw RAM and staging are excluded.
-
-Existing `ingestion_documents` supports bounded reference assertions, not a proven
-620,700-row production ingestion adapter. Implement a versioned bulk importer and
-bounded transaction/recovery strategy before loading a whole reference snapshot.
-Do not route producer writes through the read/query/reset-only admin interface.
+1. **Route checks:** use exact trimmed/uppercased callsigns and explicit airport-code
+   mappings. Check adjacent directed pairs in multi-stop associations. Report a
+   match, disagreement, missing callsign or incomplete mapping separately. Current
+   disagreement cannot invalidate an old flight; missing coverage is unknown.
+2. **Historical timing matching:** require the same operation date, directed leg,
+   operating identity and a unique candidate. Use aircraft identity where available;
+   code shares, reused numbers, same-day repeats and midnight crossings must not be
+   collapsed. A current recurring timetable cannot fill an old flight's timestamps.
+3. **Timing semantics:** record scheduled, estimated and actual separately. Distinguish
+   gate-out/in from takeoff/landing; preserve timezone, local service date, day offset,
+   source URL, source instance and retrieval time. Use IANA timezone rules for the
+   flight date, not today's offset. Do not invent exact times from observed bounds.
+4. **Corrections:** keep conflicting, ambiguous or unavailable timing evidence private.
+   A VRS match or scheduled duration cannot remove an observation-gap/timing hold,
+   prove no intermediate stop, or mark a human approval. Preserve the two explicit
+   single-record overrides. A source-specific actual-time correction needs its own
+   validated matching and provenance policy before enabling writes.
+5. **Aircraft types:** retain ADSB's observed type. Planned equipment, a fleet family
+   and an actual per-flight ICAO type are different assertions; never overwrite the
+   latter with a schedule guess.
+6. **Storage and isolation:** bulk VRS CSVs are bounded in process memory, normalized
+   into one atomic private reference snapshot, then discarded. Durable reference
+   rows/receipts count toward the ingestion DB's own quota. They never enter serving.
+   Raw ADSB archives continue one day at a time on the RAM volume; raw/staging space
+   remains outside the DB quota. Admin only reads/queries or explicitly clears the
+   private DB; source writes use the producer CLI/API.
 
 ## Next implementation order
 
-1. Add a VRS **private reference** importer and cohort report; evaluate against
-   retained July 10 examples and, separately, dated BTS evidence. Publish no new
-   human-verification state and do not change admission on an undated match.
-2. Add schedule-period importers for **CAA plus open TUI/Air Corsica SSIM**, and
-   optionally the small Finist’Air GTFS. These are proven no-key, whole-file future
-   sources. Validate timezone/day-offset and equipment mappings, codeshares,
-   overlapping periods, deduplication, withdrawal and publication in a disposable
-   private/serving pair before enabling it. Expose the actual regional/date coverage.
-3. Add Avinor for near-departure status/reference where useful; it is incomplete
-   itinerary evidence unless the opposite event is supplied by another source.
-4. Keep Flight.info/FlightMapper/browser adapters optional until reuse/refresh and
-   historical-date coverage are established. No account creation, paid subscription,
-   outreach or mass scrape was performed during this research.
-
-## Coverage-first choice
-
-For the strict zero-payment/no-metered-API requirement, choose **ADSB + BTS + VRS**
-for historical evidence and scoped validation, and **CAA + open airline SSIM/GTFS**
-for future scheduled legs. Add Avinor's 14-day collections where event completeness
-can be established. This is implementable regional coverage, not worldwide
-completeness. The longest tested future file here is a tiny December 31 GTFS;
-this does not imply broad airline/type coverage to that date.
-
-If the requirement changes to allow a free key with rate limits, Lufthansa's
-[open plan](https://developer.lufthansa.com/product) and
-[schedule endpoint](https://developer.lufthansa.com/docs/read/api_details/operations/Flight_Schedules)
-are a separate candidate: up to 360 days documented, 1,000 calls/hour and six/second.
-An unrestricted whole-schedule listing is not included in that finding. No account
-or authenticated payload was tested. This is not the no-limit bulk solution.
+1. Finish the active ADSB run, adopt its completed facts into the private ingestion
+   SQLite and run the retained-fact audit. Preserve source/rollback and serving data.
+2. Run the tested [VRS bulk import and cohort report](vrs-verification.md) against
+   that private store; use its report to prioritize review. No blanket hold release.
+3. Resolve Flight.info historical-date availability and reusable timing access;
+   resolve FR24 API/retention and historical coverage before any connector is enabled.
+   Keep unsupported timestamps unknown. Neither is currently a proven free unlimited
+   source for permanently enriching July–December 2023 or January 2024.
+4. Publish eligible historical ADSB facts with existing estimate labels through the
+   separate validated serving workflow. Do not block it on optional timing sources
+   or add future scheduled facts as a substitute.
 
 ## Evidence and repeatability
 

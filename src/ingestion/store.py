@@ -134,6 +134,9 @@ class IngestionStore(FlightUpdater):
                     for r in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")
                 }
                 for table in (
+                    "ingestion_vrs_routes",
+                    "ingestion_vrs_airports",
+                    "ingestion_vrs_snapshot",
                     "ingestion_audit_changes",
                     "ingestion_audit_runs",
                     "ingestion_adoptions",

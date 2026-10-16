@@ -30,6 +30,9 @@ def archive(tmp_path):
     path = root / "itineraries.db"
     with sqlite3.connect(path) as c:
         for name in [
+            "ingestion_vrs_snapshot",
+            "ingestion_vrs_airports",
+            "ingestion_vrs_routes",
             "ingestion_audit_changes",
             "ingestion_audit_runs",
             "ingestion_adoptions",
