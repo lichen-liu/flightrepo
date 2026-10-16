@@ -8,10 +8,11 @@ from pathlib import Path
 from tempfile import TemporaryFile
 from uuid import uuid4
 
-from core.admission import requires_review, route_verified_sql
+from core.admission import blocked_for_search, route_verified_sql
 from core.database_roles import is_ingestion, require_ingestion
 from core.disk_quota import database_bytes
 from core.file_lock import file_mutex
+from core.quality import review_recommended_sql
 from core.storage import EPOCH, SQLiteConnection, refresh_admission_view, utc_us
 from ingestion.adsblol.legs import distance_km
 from ingestion.publish import PARTITION_TIME_SQL
@@ -179,7 +180,7 @@ def audit_database(
                 verified = route_verified_sql("f") if "route_verification" in columns else "0"
                 query = f"""SELECT f.*,({verified}) AS route_verified,s.code AS provider,a.latitude AS origin_lat,a.longitude AS origin_lon,
                     b.latitude AS destination_lat,b.longitude AS destination_lon,
-                    ({PARTITION_TIME_SQL}) AS event_us
+                    ({PARTITION_TIME_SQL}) AS event_us,({review_recommended_sql("f")}) AS review_recommended
                     FROM flight_legs f JOIN data_sources s ON s.id=f.source_id
                     JOIN airports a ON a.iata=f.origin_iata JOIN airports b ON b.iata=f.destination_iata
                     WHERE {where} ORDER BY f.id"""
@@ -190,10 +191,9 @@ def audit_database(
                     except (ValueError, TypeError):
                         findings["invalid_review_reasons"] += 1
                         continue
-                    held = requires_review(
-                        old, bool(row["itinerary_reviewed"]), bool(row["route_verified"])
-                    )
+                    held = blocked_for_search(old, bool(row["itinerary_reviewed"]))
                     counts["held"] += held
+                    counts["review_recommended"] += row["review_recommended"]
                     complete = bool(
                         row["departure_observed_lower_us"] is not None
                         or row["departure_scheduled_us"] is not None
@@ -232,7 +232,7 @@ def audit_database(
                     if set(old) - KNOWN_REASONS:
                         findings["unknown_review_reason"] += 1
                     label = "+".join(sorted(set(old))) or "no_review_reason"
-                    if held:
+                    if row["review_recommended"]:
                         severity = (
                             "timing"
                             if "implausible_airport_timing" in old or timing is True

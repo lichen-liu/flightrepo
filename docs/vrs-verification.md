@@ -74,7 +74,7 @@ python -m admin --db var/ingestion/ingestion.db inspect query \
 ```
 
 Review large held/conflict cohorts first and collect date-specific evidence when
-available. Keep unsupported endpoints/times private. Preserve explicit human
+available. Keep uncertainty/conflict labels visible; do not invent endpoint/time fixes. Preserve explicit human
 approvals. Publication continues to copy only eligible itinerary facts and airport
 metadata; reference tables and reports never enter serving SQLite.
 
@@ -87,13 +87,14 @@ python -m ingestion --db var/ingestion/ingestion.db vrs admit --apply \
   --start 2023-07-01 --end 2023-12-31 --report var/ingestion/vrs-admission-applied.json
 ```
 
-This opt-in policy confirms exact directed two-airport matches and consecutive
-pairs in longer chains. It waives only the observation-gap admission block and
-replaces the unverified-airport badge with “VRS route match.” It does
-not assert historical validity, exact timing or continuous observation. Observed
-time windows, original reasons, source identity and aircraft type remain unchanged.
-Timing conflicts and any other blocking reason still hold the record. Reversed,
-nonconsecutive, missing or conflicting pairs do not qualify. No fuzzy airport match.
+This audit confirms exact directed two-airport matches and consecutive pairs in
+longer chains. Matches replace the unconfirmed-airport caution with “VRS route
+match.” They do not assert historical validity, exact timing or continuous
+observation. Observed windows, original reasons, source identity and aircraft type
+remain unchanged. Reversed, nonconsecutive, missing or conflicting pairs do not
+qualify as matches; they remain searchable under the separately approved labeled
+admission policy, with the appropriate uncertainty/conflict labels. No fuzzy match
+or automatic human approval is used.
 
 An optional typed `route_verification` field stores the reference hash, callsign,
 airport pair, mapped reference chain and audit result: exact, adjacent, different,
@@ -110,6 +111,8 @@ Application is resumable/idempotent, one transaction per UTC departure day, with
 job lock, live DB-only quota checks and progress counts. It protects tombstones,
 manual edits and human approvals. Refreshing a reference alone leaves published
 evidence intact; the next publication or explicit audit reconciles it, revoking automatic
-confirmation on mismatch. Subsequent publication retracts newly held owned facts.
+confirmation on mismatch. Subsequent publication updates labels; a withdrawn match does not exclude a
+record whose only concerns are the four approved categories. Deleted or newly
+excluded owned facts still retract.
 Human review is never bulk marked. Admin remains inspection/reset/clear only for
 private ingestion. Publication/deployment remain explicit operations; serving requests never run audits.

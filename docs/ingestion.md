@@ -73,9 +73,9 @@ manifest → download/verify one day → stream aircraft members → filter/reco
   (outside 3 km, where airport-center/runway offsets matter).
   A later climb/exit from the airport area cancels an arrival hint. Such records
   have separate evidence labels and can appear in search without manual approval
-  when airport estimation is their only review reason. Route options and leg
+  under the approved labeled admission policy. Route options and leg
   details explicitly identify estimated airports and whether they were manually verified.
-  Ground candidates with sample gaps over 30 minutes still require review:
+  Ground candidates with sample gaps over 30 minutes carry a review recommendation:
   hidden intermediate stops can otherwise resemble one flight. Shorter reception
   gaps and changing callsigns no longer require review on their own. Keep the
   dominant callsign and log variations; source leg markers still split movements.
@@ -122,7 +122,7 @@ fields alone.
 | Airborne endpoint fallback | Within 3,500 ft of airport elevation; origin needs a 100-ft observed climb or 300 ft/min upward rate; destination descending/nonascending; available heading within 45 degrees beyond 3 km; estimated window 30 minutes |
 | Ground endpoints | Preferred, but no longer required at both ends |
 | Continuity | Maximum six-hour gap between usable samples, including overnight joins |
-| Search review | Sample gaps over 30 minutes stay held unless explicitly confirmed by VRS under the best-effort policy; timing/other reasons still block. Airport-estimate-only records are labeled unless VRS-confirmed |
+| Search review | All four known uncertainty categories are searchable with unified labels; unknown reasons fail closed. VRS matches change confidence, not original facts or human approval |
 | Terminal bounds/duration | Maximum 30-minute endpoint bracket; minimum 60-second airborne span |
 | Bad samples | Skip without advancing evidence; report the reason |
 | Reception-gap flag | Keep the newly received position; log flag `1` rather than discarding it |
@@ -232,7 +232,7 @@ Publish an explicit inclusive UTC range, one atomic transaction per day. It
 copies non-held flight facts (including partial/cancelled records for lookup),
 the airport/transfer catalog and relevant source attribution. Search keeps its
 usual complete-time/cancellation filters. Airport estimates retain visible
-labels and unverified status. Gaps/timing holds and unrelated reference documents
+labels and unverified status. Unknown-reason exclusions and unrelated reference documents
 stay private. Receipts, raw inputs, boundary state and profiles never copy.
 
 Publication is repeatable: source keys deduplicate, upstream corrections update,
@@ -380,8 +380,8 @@ before extrapolating whole-database storage or ingesting more years.
 ADSB.lol remains the main source. Use the producer-only [VRS bulk reference and
 cohort report](vrs-verification.md) after private-store adoption. Import/report alone
 never clear holds or change flight facts. Explicit `vrs admit --apply` confirms
-directed pairs and waives observation-gap holds under the approved best-effort
-policy; timing and other holds remain. Flight.info/Flightradar24 are requested
+directed pairs under the approved best-effort reference policy. All four known
+uncertainty categories now qualify for labeled search. Flight.info/Flightradar24 are requested
 historical timing references, but automatic extraction is not enabled because
 historical coverage and persistent-use access are unresolved. Keep scheduled,
 gate and airborne timing separate. Future scheduled-flight ingestion is deferred.
@@ -389,7 +389,11 @@ See [the current source decision](flight-data-sources.md#current-selection-histo
 
 The explicit [VRS admission command](vrs-verification.md#explicit-best-effort-route-admission)
 can now confirm directed airport pairs, replace the estimated-airport badge and
-waive observation-gap holds. Source reasons and inferred timing are retained;
+update reference confidence labels. Source reasons and inferred timing are retained;
 import/report alone never applies this policy. Daily producer publication now
 audits the cached reference automatically, fetching it once when absent by default
 (`--vrs auto`); serving reads never download or audit.
+
+Current admission and smart review are specified in [itinerary quality](itinerary-quality.md).
+Earlier pilot/held counts above are historical measurements under their recorded policies;
+they must not be read as the current search admission rule.

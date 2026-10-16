@@ -112,8 +112,8 @@ def describe_quality(
 
 
 def review_recommended_sql(alias=""):
-    """Same uncertainty classes as describe_quality; independent of serving admission."""
-    from core.admission import review_required_sql, route_verified_sql
+    """Confidence-based review is independent of the serving admission policy."""
+    from core.admission import route_verified_sql
 
     p = alias + "." if alias else ""
     v = p + "route_verification"
@@ -123,8 +123,12 @@ def review_recommended_sql(alias=""):
         f"AND json_extract({v},'$.origin_iata')={p}origin_iata "
         f"AND json_extract({v},'$.destination_iata')={p}destination_iata"
     )
+    verified = route_verified_sql(alias)
     return (
-        f"({review_required_sql(alias)} OR ({p}itinerary_reviewed=0 AND ("
-        f"((({p}evidence_kind='inferred_airport_proximity' OR EXISTS(SELECT 1 FROM json_each({p}review_reasons) reason WHERE reason.value='airborne_airport_estimate')) "
-        f"AND NOT ({route_verified_sql(alias)}))) OR ({current_difference}))))"
+        f"({p}itinerary_reviewed=0 AND ("
+        f"EXISTS(SELECT 1 FROM json_each({p}review_reasons) reason "
+        "WHERE reason.value IN ('implausible_airport_timing','callsign_variation') "
+        f"OR (reason.value IN ('observation_gap','airborne_airport_estimate') AND NOT ({verified}))) "
+        f"OR ({p}evidence_kind='inferred_airport_proximity' AND NOT ({verified})) "
+        f"OR ({current_difference})))"
     )

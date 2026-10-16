@@ -2,7 +2,7 @@
 
 import json
 
-from core.admission import REVIEW_REQUIRED_SQL
+from core.quality import review_recommended_sql
 from core.storage import SQLiteConnection, refresh_admission_view
 from ingestion.adsblol.legs import airport_timing_is_implausible
 
@@ -59,11 +59,11 @@ def apply_admission(path):
             0
         ]
         held = connection.execute(
-            f"SELECT COUNT(*) FROM flights WHERE {REVIEW_REQUIRED_SQL}"
+            f"SELECT COUNT(*) FROM flights WHERE {review_recommended_sql()}"
         ).fetchone()[0]
     return {
         "database": str(path),
-        "admission_policy": "labeled-airport-estimates-v1",
+        "admission_policy": "labeled-itinerary-uncertainty-v2",
         "searchable_before": before,
         "searchable_after": after,
         "needs_review": held,

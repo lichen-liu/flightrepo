@@ -69,11 +69,11 @@ def test_match_is_directed_adjacent_undated_and_does_not_release_holds(store):
         before = c.execute("SELECT * FROM flight_legs ORDER BY id").fetchall()
     report = vrs.report(store.path)
     assert report["counts"] == {
-        "exact_two_airport_association": {"records": 2, "held": 2},
-        "adjacent_leg_in_multistop_association": {"records": 1, "held": 1},
-        "different_undated_route_association": {"records": 2, "held": 2},
-        "incomplete_airport_mapping": {"records": 1, "held": 1},
-        "no_callsign_reference": {"records": 2, "held": 2},
+        "exact_two_airport_association": {"records": 2, "held": 0},
+        "adjacent_leg_in_multistop_association": {"records": 1, "held": 0},
+        "different_undated_route_association": {"records": 2, "held": 0},
+        "incomplete_airport_mapping": {"records": 1, "held": 0},
+        "no_callsign_reference": {"records": 2, "held": 0},
     }
     assert not report["date_valid_reference"] and not report["admission_changed"]
     with closing(sqlite3.connect(store.path)) as c:
@@ -255,7 +255,7 @@ def test_nonstandard_optional_iata_codes_are_observable_unknowns(store):
     assert receipt["counts"]["invalid_iata_mappings"] == 1
     store.upsert([fact("one")])
     assert vrs.report(store.path)["counts"] == {
-        "incomplete_airport_mapping": {"records": 1, "held": 1}
+        "incomplete_airport_mapping": {"records": 1, "held": 0}
     }
 
 
@@ -272,10 +272,10 @@ def test_explicit_admission_preserves_gap_evidence_and_flows_through_consumers(
     record = fact("gap", callsign, review_reasons=["airborne_airport_estimate", "observation_gap"])
     store.upsert([record])
     dry = vrs.admit(store.path, start="2023-07-10", end="2023-07-10")
-    assert dry["counts"]["released"] == 1
+    assert dry["counts"]["released"] == 0
     assert FlightReader(store.path).flight("adsblol", "gap").needs_review
     result = vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
-    assert result["counts"]["released"] == 1 and result["human_approvals_added"] == 0
+    assert result["counts"]["released"] == 0 and result["human_approvals_added"] == 0
     saved = FlightReader(store.path).flight("adsblol", "gap")
     assert not saved.needs_review and saved.route_verified and not saved.itinerary_reviewed
     assert saved.review_reasons == record.review_reasons
@@ -318,7 +318,7 @@ def test_explicit_admission_preserves_gap_evidence_and_flows_through_consumers(
         ).fetchone()
 
 
-def test_admission_does_not_waive_timing_other_reasons_or_nonadjacent_pairs(store):
+def test_audit_keeps_timing_callsign_and_reference_concerns_visible_without_blocking(store):
     snapshot(store)
     store.upsert(
         [
@@ -344,7 +344,7 @@ def test_admission_does_not_waive_timing_other_reasons_or_nonadjacent_pairs(stor
     assert reader.flight("adsblol", "approved").route_verification is None
 
 
-def test_reference_withdrawal_reholds_and_retracts_published_gap(store, tmp_path):
+def test_reference_withdrawal_restores_uncertainty_without_retracting_valid_facts(store, tmp_path):
     snapshot(store)
     store.upsert([fact("gap")])
     vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
@@ -352,8 +352,15 @@ def test_reference_withdrawal_reholds_and_retracts_published_gap(store, tmp_path
     assert publish_day(store.path, serving, date(2023, 7, 10))["inserted"] == 1
     vrs.import_snapshot(store, ROUTES.replace(b"KAAA-KBBB\n", b"KAAA-KCCC\n"), AIRPORTS)
     result = vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
-    assert result["counts"]["reheld"] == 1
-    assert publish_day(store.path, serving, date(2023, 7, 10))["retired"] == 1
+    assert result["counts"]["reheld"] == 0
+    assert publish_day(store.path, serving, date(2023, 7, 10))["retired"] == 0
+    served = (
+        __import__("server.reader", fromlist=["FlightReader"])
+        .FlightReader(serving)
+        .flight("adsblol", "gap")
+    )
+    assert served.needs_review and not served.route_verified
+    assert served.quality["level"] == "uncertain"
 
 
 def test_route_edit_invalidates_evidence_in_sql_and_model(store):
@@ -365,7 +372,7 @@ def test_route_edit_invalidates_evidence_in_sql_and_model(store):
     with store.connect() as c:
         c.execute("INSERT INTO airports(iata) VALUES('CCC')")
         c.execute("UPDATE flights SET destination_iata='CCC' WHERE provider_id='gap'")
-        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 1
     saved = FlightReader(store.path).flight("adsblol", "gap")
     assert not saved.route_verified and saved.needs_review
     assert not saved.model_dump(mode="json")["route_verified"]
@@ -425,8 +432,8 @@ def test_catalog_counts_each_confirmed_flight_once_across_multiple_time_bases(st
     store.delete("adsblol", "deleted")
     vrs.admit(store.path, start="2023-07-10", end="2023-07-10", apply=True)
     catalog = FlightReader(store.path).web_catalog().dataset
-    assert catalog.flight_count == 1
+    assert catalog.flight_count == 2
     assert catalog.total_record_count == 3
     assert catalog.needs_review_count == 1
     assert catalog.cancelled_count == 1
-    assert catalog.time_bases == {"scheduled": 1, "observed": 1, "actual": 1}
+    assert catalog.time_bases == {"scheduled": 1, "observed": 1, "actual": 2}

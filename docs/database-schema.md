@@ -80,15 +80,15 @@ airport endpoints; neither evidence class certifies commercial service or an
 official landed status. Inference policy belongs in batch provenance, not a
 fabricated fact. `review_reasons` retains per-record uncertainty (airborne airport
 estimate, observation gap, implausible airport timing, legacy callsign variation).
-Airport-estimate-only records are admitted with visible estimate labels. Other
-reasons block `searchable_legs`, API routing, calendar availability and pure
-snapshot routing unless explicitly approved. The model `needs_review` means held by those blocking reasons; API/admin
-review filters and counts instead use confidence-based `quality.review_recommended`,
-which includes uncertain searchable estimates. The model and SQL admission
-predicates follow the same rule. See [unified confidence labels](itinerary-quality.md). Explicit serving admin approval sets
-`itinerary_reviewed`, preserves the reasons/evidence, and protects the record
-against passive reingestion. Catalog counts describe the selected store; public serving excludes private
-held candidates. Private admin can inspect all candidates without changing them.
+The approved labeled admission policy makes all four known uncertainty categories
+searchable. `blocked_for_search`/SQL admission remain separate from confidence-based
+`needs_review` and `quality.review_recommended`. Unknown future reasons fail closed;
+cancelled/deleted records and incomplete/invalid time evidence still cannot power
+routing/calendar. API, SQL and pure snapshot routing share the policy. See
+[unified confidence labels](itinerary-quality.md). Explicit human approval sets
+`itinerary_reviewed`, preserves reasons/conflict warnings and protects the record
+against passive reingestion. Private admin can inspect all candidates without
+changing them; confidence labels do not expose private reference tables or journals.
 
 ## Time model and routing
 
@@ -209,16 +209,16 @@ independently using an ingestion read snapshot and a short serving transaction.
 Both files remain available to readers. Quota failure rolls back the day's facts.
 SQLite/SHM/WAL usage is checked, excluding source scratch space.
 
-Publish non-held facts, retaining their evidence labels, source keys, available
+Publish admitted facts, retaining their confidence labels, source keys, available
 aircraft types and all reported times. Partial/cancelled facts remain useful to
 lookup/admin; normal routing/calendar eligibility still applies. Partition by the
 selected departure basis, falling back to available arrival evidence for partial
 records. Copy airport/transfer metadata and relevant source attribution, preserving
 existing serving metadata and valid transfers. Reference-only source documents,
-private holds, profiles, receipts and boundary state never publish.
+unknown-reason exclusions, profiles, receipts and boundary state never publish.
 
 Membership records allow a rerun to retract previously published facts that
-became held or disappeared, even if a correction moved their time outside the
+became excluded or disappeared, even if a correction moved their time outside the
 original day. Reconcile only requested dates. Stable provider keys deduplicate
 retries. Serving edits and deletion tombstones take precedence; publication does
 not resurrect deletions. Prior explicit human approvals remain protected.
@@ -250,7 +250,8 @@ binding a pinned reference hash to a callsign and directed airport pair, with
 positive, different, incomplete or missing outcomes and the mapped airport chain. It is
 separate from `itinerary_reviewed` and never removes original review reasons.
 Explicit writers upgrade old stores additively; read-only consumers do not migrate.
-A valid matching assertion waives observation-gap holds only. Timing/other reasons
+A matching assertion changes confidence labels, not time evidence or human approval.
+All four known uncertainty categories now qualify for labeled search; unknown reasons
 remain blocking. See [VRS policy](vrs-verification.md#explicit-best-effort-route-admission).
 Review decisions/acknowledgements are private `ingestion_documents` of kind
 `validation`, source `review`; revision-bound fingerprints and before/after facts

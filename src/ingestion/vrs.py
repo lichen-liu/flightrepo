@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from core.admission import requires_review, review_required_sql, route_verified_sql
+from core.admission import blocked_for_search, route_verified_sql, search_blocked_sql
 from core.database_roles import ingestion_target, require_ingestion
 from core.file_lock import file_mutex
 from core.models import RouteVerification
@@ -165,7 +165,7 @@ def report(path, *, start=None, end=None, cohort_limit=50):
     if not 0 <= cohort_limit <= 1000:
         raise ValueError("Cohort limit must be between zero and 1000")
     where, parameters = scope_sql(start, end)
-    held = review_required_sql("f")
+    held = search_blocked_sql("f")
     classification = """CASE
         WHEN r.callsign IS NULL THEN 'no_callsign_reference'
         WHEN instr(r.iata_chain,'|'||f.origin_iata||'|'||f.destination_iata||'|')>0
@@ -314,9 +314,7 @@ def admit(path, *, start, end, apply=False, progress=None):
                 for row in rows:
                     counts["records"] += 1
                     reasons = json.loads(row["review_reasons"])
-                    old_held = requires_review(
-                        reasons, bool(row["itinerary_reviewed"]), bool(row["verified"])
-                    )
+                    old_held = blocked_for_search(reasons, bool(row["itinerary_reviewed"]))
                     counts["held_before"] += old_held
                     if row["locally_modified_us"] is not None or row["itinerary_reviewed"]:
                         counts["protected"] += 1
@@ -351,7 +349,7 @@ def admit(path, *, start, end, apply=False, progress=None):
                         destination_iata=row["destination_iata"],
                         reference_airports=chain,
                     ).model_dump_json()
-                    new_held = requires_review(reasons, False, match)
+                    new_held = blocked_for_search(reasons)
                     counts["held_after"] += new_held
                     counts["released"] += old_held and not new_held
                     counts["reheld"] += not old_held and new_held

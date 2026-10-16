@@ -95,7 +95,7 @@ class ConnectionPolicy:
         seen: AbstractSet[str],
         horizon: datetime,
     ) -> Assessment:
-        if flight.needs_review:
+        if flight.blocked_for_search:
             return Assessment("airports_need_review")
         if flight.status == FlightStatus.CANCELLED:
             return Assessment("cancelled")

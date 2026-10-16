@@ -186,11 +186,11 @@ def test_publication_admission_retry_retraction_and_admin_protection(stores):
     held = flight("held", review_reasons=["observation_gap"])
     stage.upsert([flight(), estimate, held])
     first = publish_day(stage.path, serving.path, DAY)
-    assert first["inserted"] == 2 and first["held"] == 1
+    assert first["inserted"] == 3 and first["held"] == 0
     reader = FlightReader(serving.path, serving_only=True)
     assert reader.flight("test", "estimate").review_reasons == estimate.review_reasons
     assert not reader.flight("test", "estimate").itinerary_reviewed
-    assert publish_day(stage.path, serving.path, DAY)["duplicate"] == 2
+    assert publish_day(stage.path, serving.path, DAY)["duplicate"] == 3
     original = reader.flight("test", "one")
     serving.update(original, original.model_copy(update={"aircraft_type_code": "B738"}))
     serving.delete("test", "estimate")
@@ -198,10 +198,10 @@ def test_publication_admission_retry_retraction_and_admin_protection(stores):
     assert reader.flight("test", "one").aircraft_type_code == "B738"
     with pytest.raises(ValueError, match="not found"):
         reader.flight("test", "estimate")
-    # A candidate becoming held retracts only publisher-owned untouched facts.
+    # Rejection retracts only publisher-owned untouched facts; uncertainty stays searchable.
     stage.upsert([flight("new")])
     publish_day(stage.path, serving.path, DAY)
-    stage.upsert([flight("new", review_reasons=["observation_gap"])])
+    stage.delete("test", "new")
     assert publish_day(stage.path, serving.path, DAY)["retired"] == 1
     with pytest.raises(ValueError, match="not found"):
         reader.flight("test", "new")

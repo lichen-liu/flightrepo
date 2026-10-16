@@ -23,12 +23,17 @@ note. Different current VRS airports remain a caution because the reference is
 undated and callsigns/routes can change.
 
 `quality.review_status` is `recommended`, `manual` or `not_requested`.
-Admin `flights --needs-review` and API `needs_review_count` use confidence-based
-review recommendations, including searchable airport estimates. The legacy
-model `needs_review` and search admission still use the previously approved gate:
-estimates alone qualify, a current directed VRS match also waives observation-gap
-holds, and timing/callsign/other blockers remain held unless individually approved.
-**The proposed broader labeled admission is not enabled by this change.**
+Admin `flights --needs-review`, model `needs_review` and API `needs_review_count`
+use confidence-based review recommendations. They do not mean excluded from search.
+The user-approved admission policy admits all four known categories: estimated
+airports, observation gaps, callsign changes and implausible airport timing.
+Warnings/uncertainty remain visible and never imply manual approval. The separate
+`blocked_for_search` predicate fails closed on unknown future reason codes; the
+SQL view and pure routing use the same policy. Cancelled/deleted records and
+incomplete or invalid time evidence remain excluded from routing/calendar.
+
+Explicit writers atomically update old admission views. Read-only consumers never
+migrate a database. Deploy compatible labels before exposing the expanded dataset.
 
 ## VRS is part of publication
 

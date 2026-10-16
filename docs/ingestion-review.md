@@ -4,9 +4,9 @@ These producer tools use only retained ADSB.lol itinerary facts and the existing
 OurAirports reference. Source licences remain [ODbL/public domain](ingestion.md#sources-and-licences).
 The core audit does not query external flight sites or certify commercial service/flight completeness.
 After adoption, the separate [VRS reference tool](vrs-verification.md) adds private
-undated route checks. Publication now audits a pinned VRS snapshot automatically; its user-approved policy can waive
-observation-gap holds for directed matches; timing/other holds and human approvals
-remain unchanged. Future schedule
+undated route checks. Publication audits a pinned VRS snapshot automatically. All four known uncertainty
+categories qualify for labeled search; VRS matches update confidence, not human
+approval or historical timing. Unknown reasons remain excluded. Future schedule
 ingestion is deferred; Flight.info/FR24 historical timing access is not yet established.
 Admin can inspect the private SQLite tables but cannot launch these writes.
 
@@ -71,7 +71,7 @@ Supported automatic changes are deliberately narrow:
 
 | Retained evidence | Supported change |
 | --- | --- |
-| Airport distance requires over 1,500 km/h across the widest observed window | Add a missing timing hold |
+| Airport distance requires over 1,500 km/h across the widest observed window | Add a missing timing-conflict warning |
 | Complete known airport/time fields no longer meet that same timing rule | Remove a stale machine timing flag |
 | Stored evidence class is proximity/ground brackets | Align the airport-estimate label with that class |
 | Missing coordinates or incomplete timing | Retain the timing uncertainty; report missing evidence |
@@ -114,7 +114,8 @@ python -m ingestion --db var/ingestion/ingestion.db publish \
 The new target is seeded with canonical quota, airport metadata/transfers, manual
 routes, explicit edits/approvals and tombstones. Old automatic flight records and
 pipeline state are excluded. Publication then copies eligible audited facts one
-day at a time, retaining unverified estimate labels. Other holds stay private.
+day at a time, retaining unified notes, uncertainty and conflict warnings. Unknown
+reason codes remain excluded; private references and journals never publish.
 
 The seed records a fingerprint of canonical administrative state. Retries verify
 it; if canonical edits/configuration changed, rebuild a new replacement from the
@@ -133,13 +134,13 @@ Use the [unified quality and cohort review workflow](itinerary-quality.md) to
 separate informational notes, uncertainty and conflicts, inspect representative
 samples and record revision-bound producer decisions. Admin remains read-only.
 
-## VRS route admission (approved best-effort policy)
+## VRS audit and approved labeled admission
 
 Publication uses `--vrs auto` by default, reusing a pinned bulk reference or
-fetching it once if absent, then auditing each day. For a separate preview, run
-`vrs audit`, then `vrs audit --apply` for the chosen departure range. The old
-`admit` command remains an alias. Exact directed pairs and adjacent
-legs qualify; observation gaps alone may be waived, timing/other holds may not.
-This is automatic reference evidence, not human approval. Preserve source reasons,
-times and types. Republish and deploy compatible code to expose admission and label
-changes. See [commands and revocation semantics](vrs-verification.md#explicit-best-effort-route-admission).
+fetching it once if absent, then auditing each day. For a separate preview run
+`vrs audit`, then `vrs audit --apply` for the chosen range (`admit` remains an alias).
+Exact directed pairs and adjacent legs remove the unconfirmed airport caution,
+while missing/different references remain visible. All four known uncertainty
+categories are searchable with labels; an audit does not erase original concerns
+or bulk mark human approval. Republish/deploy compatible code to expose evidence
+changes. See [VRS audit semantics](vrs-verification.md#explicit-best-effort-route-admission).

@@ -205,7 +205,7 @@ SELECT f.id AS leg_id, f.source_id, f.source_record_key,
        'scheduled_departure' AS departure_event,
        'scheduled_arrival' AS arrival_event
 FROM flight_legs f
-WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_scheduled_us IS NOT NULL
     AND f.arrival_scheduled_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -217,7 +217,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_actual_us, f.arrival_actual_us,
        f.departure_actual_kind, f.arrival_actual_kind
 FROM flight_legs f
-WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_actual_us IS NOT NULL
     AND f.arrival_actual_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -229,7 +229,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_observed_lower_us, f.arrival_observed_upper_us,
        'ground_to_air_transition', 'air_to_ground_transition'
 FROM flight_legs f
-WHERE NOT (f.itinerary_reviewed = 0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NOT 'airborne_airport_estimate' AND (reason.value IS NOT 'observation_gap' OR NOT (COALESCE((json_extract(f.route_verification,'$.source')='vrs' AND json_extract(f.route_verification,'$.match_kind') IN ('exact','adjacent') AND length(json_extract(f.route_verification,'$.reference_sha256'))=64 AND json_extract(f.route_verification,'$.reference_sha256') NOT GLOB '*[^0-9a-f]*' AND json_extract(f.route_verification,'$.callsign')=upper(trim(f.callsign)) AND json_extract(f.route_verification,'$.origin_iata')=f.origin_iata AND json_extract(f.route_verification,'$.destination_iata')=f.destination_iata),0)))))
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key);

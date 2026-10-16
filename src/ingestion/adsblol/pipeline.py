@@ -6,9 +6,9 @@ from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
-from core.admission import REVIEW_REQUIRED_SQL
 from core.database_roles import ingestion_target
 from core.file_lock import file_mutex
+from core.quality import review_recommended_sql
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
@@ -124,7 +124,7 @@ def extraction_status(root, output_db=None):
             "SELECT COUNT(DISTINCT leg_id) FROM searchable_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol')"
         ).fetchone()[0]
         needs_review = connection.execute(
-            f"SELECT COUNT(*) FROM flights WHERE provider='adsblol' AND {REVIEW_REQUIRED_SQL}"
+            f"SELECT COUNT(*) FROM flights WHERE provider='adsblol' AND {review_recommended_sql()}"
         ).fetchone()[0]
         legacy = [
             row[0]

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
-from core.admission import requires_review
+from core.admission import blocked_for_search
 from core.quality import describe_quality
 from core.routing.models import airport_code, airport_codes, utc_instant
 
@@ -109,7 +109,11 @@ class FlightRecord(BaseModel):
 
     @property
     def needs_review(self):
-        return requires_review(self.review_reasons, self.itinerary_reviewed, self.route_verified)
+        return self.quality["review_recommended"]
+
+    @property
+    def blocked_for_search(self):
+        return blocked_for_search(self.review_reasons, self.itinerary_reviewed)
 
     departure_observed_lower: datetime | None = None
     departure_observed_upper: datetime | None = None

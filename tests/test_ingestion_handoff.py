@@ -285,7 +285,11 @@ def test_audit_scoped_cohort_and_sample_limits(candidates):
         sample_limit=1,
         cohort_limit=1,
     )
-    assert result["counts"]["records"] == 2 and result["counts"]["held"] == 2
+    assert (
+        result["counts"]["records"] == 2
+        and result["counts"]["held"] == 0
+        and result["counts"]["review_recommended"] == 2
+    )
     assert len(result["cohorts"]) == 1 and len(result["cohorts"][0]["samples"]) == 1
     with pytest.raises(ValueError):
         audit_database(candidates.path, start=DAY)

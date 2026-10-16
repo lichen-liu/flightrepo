@@ -1,11 +1,18 @@
 """Serving admission is separate from source evidence and manual verification."""
 
+# Explicitly approved confidence categories; future unknown reasons fail closed.
+SEARCHABLE_UNCERTAINTY_REASONS = frozenset(
+    {
+        "airborne_airport_estimate",
+        "observation_gap",
+        "callsign_variation",
+        "implausible_airport_timing",
+    }
+)
 
-def requires_review(reasons, reviewed=False, route_verified=False):
-    allowed = {"airborne_airport_estimate"}
-    if route_verified:
-        allowed.add("observation_gap")
-    return not reviewed and any(reason not in allowed for reason in reasons)
+
+def blocked_for_search(reasons, reviewed=False):
+    return not reviewed and any(reason not in SEARCHABLE_UNCERTAINTY_REASONS for reason in reasons)
 
 
 def route_verified_sql(alias=""):
@@ -22,15 +29,14 @@ def route_verified_sql(alias=""):
     )
 
 
-def review_required_sql(alias=""):
-    prefix = alias + "." if alias else ""
+def search_blocked_sql(alias=""):
+    p = alias + "." if alias else ""
+    allowed = ",".join("'" + reason + "'" for reason in sorted(SEARCHABLE_UNCERTAINTY_REASONS))
     return (
-        f"({prefix}itinerary_reviewed = 0 AND EXISTS "
-        f"(SELECT 1 FROM json_each({prefix}review_reasons) AS reason "
-        "WHERE reason.value IS NOT 'airborne_airport_estimate' "
-        f"AND (reason.value IS NOT 'observation_gap' OR NOT ({route_verified_sql(alias)}))))"
+        f"({p}itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each({p}review_reasons) AS reason "
+        f"WHERE reason.value IS NULL OR reason.value NOT IN ({allowed})))"
     )
 
 
-REVIEW_REQUIRED_SQL = review_required_sql()
-ADMITTED_SQL = "NOT " + REVIEW_REQUIRED_SQL
+SEARCH_BLOCKED_SQL = search_blocked_sql()
+ADMITTED_SQL = "NOT " + SEARCH_BLOCKED_SQL

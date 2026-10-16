@@ -134,14 +134,31 @@ def refresh_admission_view(connection):
     """Apply the current read view inside an explicit writer transaction."""
     marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
     statement = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"
-    connection.execute("DROP VIEW IF EXISTS searchable_legs")
-    connection.execute(statement)
+    existing = connection.execute(
+        "SELECT sql FROM sqlite_schema WHERE name='searchable_legs'"
+    ).fetchone()
+
+    def normalize(sql):
+        return sql.replace("IF NOT EXISTS ", "").strip().rstrip(";")
+
+    if existing and normalize(existing[0]) == normalize(statement):
+        return
+    connection.execute("SAVEPOINT refresh_flight_admission")
+    try:
+        connection.execute("DROP VIEW IF EXISTS searchable_legs")
+        connection.execute(statement)
+        connection.execute("RELEASE refresh_flight_admission")
+    except BaseException:
+        connection.execute("ROLLBACK TO refresh_flight_admission")
+        connection.execute("RELEASE refresh_flight_admission")
+        raise
 
 
 def upgrade_route_verification(connection):
     """Explicit writer-only additive upgrade; read-only consumers never migrate."""
     columns = {r[1] for r in connection.execute("PRAGMA table_info(flight_legs)")}
     if "route_verification" in columns:
+        refresh_admission_view(connection)
         return
     marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
     view = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"

@@ -11,7 +11,7 @@ from test_shared_flight_database import observed, query
 
 from admin import client as admin
 from admin.admission import apply_admission
-from core.admission import review_required_sql
+from core.admission import search_blocked_sql
 from core.disk_quota import set_quota
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot
@@ -26,11 +26,11 @@ from server.reader import FlightReader
         ([], False),
         (["airborne_airport_estimate"], False),
         (["airborne_airport_estimate", "airborne_airport_estimate"], False),
-        (["observation_gap"], True),
-        (["implausible_airport_timing"], True),
-        (["callsign_variation"], True),
-        (["airborne_airport_estimate", "observation_gap"], True),
-        (["airborne_airport_estimate", "implausible_airport_timing"], True),
+        (["observation_gap"], False),
+        (["implausible_airport_timing"], False),
+        (["callsign_variation"], False),
+        (["airborne_airport_estimate", "observation_gap"], False),
+        (["airborne_airport_estimate", "implausible_airport_timing"], False),
     ],
 )
 @pytest.mark.parametrize("reviewed", [False, True])
@@ -47,7 +47,8 @@ def test_model_sql_calendar_routing_and_admin_agree(tmp_path, reasons, blocked, 
     updater.upsert([record])
     reader = FlightReader(updater.path)
     held = blocked and not reviewed
-    assert record.needs_review == held
+    assert record.blocked_for_search == held
+    assert record.needs_review == record.quality["review_recommended"]
     with reader.connect() as c:
         assert c.execute("SELECT COUNT(DISTINCT leg_id) FROM searchable_legs").fetchone()[0] == int(
             not held
@@ -77,7 +78,7 @@ def legacy_view(c):
     marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
     statement = marker + SCHEMA.split(marker, 1)[1].split(";", 1)[0] + ";"
     statement = statement.replace(
-        "NOT " + review_required_sql("f"),
+        "NOT " + search_blocked_sql("f"),
         "((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)",
     )
     c.execute("DROP VIEW searchable_legs")
@@ -126,9 +127,9 @@ def test_apply_existing_admission_is_idempotent_and_preserves_source_and_admin_s
     reader = FlightReader(database)
     assert reader.flight("adsblol", "estimate").review_reasons == ["airborne_airport_estimate"]
     assert not reader.flight("adsblol", "estimate").itinerary_reviewed
-    assert not reader.flight("adsblol", "estimate").needs_review
+    assert not reader.flight("adsblol", "estimate").blocked_for_search
     assert reader.flight("adsblol", "fast").review_reasons == ["implausible_airport_timing"]
-    assert reader.flight("adsblol", "gap").needs_review
+    assert not reader.flight("adsblol", "gap").blocked_for_search
     assert reader.flight("adsblol", "manual") == manual
     with reader.connect() as c:
         assert (
@@ -223,3 +224,52 @@ def test_admission_does_not_overwrite_concurrent_admin_edit(tmp_path, monkeypatc
     assert result["timing_flags_added"] == 0
     assert saved[0].itinerary_reviewed and not saved[0].review_reasons
     assert FlightReader(updater.path).flight("adsblol", "fast") == saved[0]
+
+
+def test_all_approved_categories_are_admitted_but_unknown_reasons_fail_closed(tmp_path):
+    from core.admission import blocked_for_search
+
+    all_reasons = [
+        "airborne_airport_estimate",
+        "observation_gap",
+        "callsign_variation",
+        "implausible_airport_timing",
+    ]
+    updater = FlightUpdater(tmp_path / "all.db")
+    updater.initialize()
+    record = observed("all", "AAA", "BBB", 10, 70).model_copy(
+        update={"review_reasons": all_reasons}
+    )
+    updater.upsert([record])
+    assert record.needs_review and not record.blocked_for_search
+    assert record.quality["level"] == "conflict" and not record.itinerary_reviewed
+    assert len(FlightReader(updater.path).search_itineraries(query()).items) == 1
+    assert blocked_for_search(["future_unknown_reason"])
+    with updater.connect() as c:
+        c.execute(
+            "UPDATE flight_legs SET review_reasons=?", (json.dumps(["future_unknown_reason"]),)
+        )
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+
+
+def test_explicit_writer_upgrades_old_view_without_read_side_mutation(tmp_path):
+    updater = FlightUpdater(tmp_path / "existing.db")
+    updater.initialize()
+    updater.upsert(
+        [
+            observed("gap", "AAA", "BBB", 10, 70).model_copy(
+                update={"review_reasons": ["observation_gap"]}
+            )
+        ]
+    )
+    with updater.connect() as c:
+        legacy_view(c)
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+    reader = FlightReader(updater.path)
+    reader.stats()
+    with reader.connect() as c:
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+    updater.initialize()
+    assert len(reader.search_itineraries(query()).items) == 1
+    with reader.connect() as c:
+        assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 1

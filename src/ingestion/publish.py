@@ -59,7 +59,7 @@ def event_us(record):
 
 
 def admitted(record):
-    return not record.needs_review
+    return not record.blocked_for_search
 
 
 def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):

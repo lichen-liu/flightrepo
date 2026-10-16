@@ -49,8 +49,8 @@ def test_relaxed_adsb_gap_and_callsign_policy_reaches_search_and_calendar(tmp_pa
     blocked = gap > 1800
     assert record.callsign == "ZZZ456" and record.aircraft_type_code == "A320"
     assert record.needs_review == blocked
-    assert reader.available_dates("AAA", "UTC").dates == ([] if blocked else [date(2025, 1, 1)])
-    assert len(reader.search_itineraries(query()).items) == (0 if blocked else 1)
+    assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
+    assert len(reader.search_itineraries(query()).items) == 1
     metadata = receipt["diagnostics"]["counts"]["metadata"]
     assert metadata["accepted_with_callsign_variations"] == 1
     assert metadata.get("accepted_under_relaxed_review", 0) == (0 if blocked else 1)
@@ -80,44 +80,23 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
     assert record.flight_number is None and record.departure_scheduled is None
     assert reader.flight(record.provider, record.provider_id) == record
     if case == "estimate":
-        assert not record.needs_review and not record.itinerary_reviewed
+        assert not record.blocked_for_search and not record.itinerary_reviewed
         assert record.review_reasons == ["airborne_airport_estimate"]
     if case == "estimate_gap":
+        assert record.needs_review and not record.blocked_for_search
         assert reader.list_flights(needs_review=True) == [record]
-        assert reader.available_dates("AAA", "UTC").dates == []
-        assert reader.search_itineraries(query()).items == []
-        assert reader.search(query().departure_start, query().departure_end) == []
-        assert reader.routes(query().departure_start, query().departure_end) == []
-        assert search_routes(query(), RoutingSnapshot((record,))).items == []
-        assert reader.web_catalog().dataset.flight_count == 0
-        assert reader.web_catalog().dataset.total_record_count == 1
-        assert reader.web_catalog().dataset.needs_review_count == 1
-        assert reader.overview()["needs_review_count"] == 1
-        request = RebuildRequest(
-            prefix=[{"provider": record.provider, "provider_id": record.provider_id}],
-            destination="BBB",
-            horizon_end=query().horizon_end,
-            time_basis="observed",
-        )
-        with pytest.raises(ValueError, match="airports_need_review"):
-            reader.rebuild(request)
         app.dependency_overrides[get_store] = lambda: reader
         try:
             with TestClient(app) as client:
                 facts = client.get("/v1/catalog").json()["dataset"]
-                assert facts["flight_count"] == 0 and facts["needs_review_count"] == 1
-                assert (
-                    client.get("/v1/dates", params={"origin": "AAA", "clock": "UTC"}).json()[
-                        "dates"
-                    ]
-                    == []
-                )
-                assert (
-                    client.post(
-                        "/v1/itineraries/search", json=query().model_dump(mode="json")
-                    ).json()["items"]
-                    == []
-                )
+                assert facts["flight_count"] == facts["needs_review_count"] == 1
+                assert client.get("/v1/dates", params={"origin": "AAA", "clock": "UTC"}).json()[
+                    "dates"
+                ] == ["2025-01-01"]
+                found = client.post(
+                    "/v1/itineraries/search", json=query().model_dump(mode="json")
+                ).json()["items"]
+                assert len(found) == 1 and found[0]["legs"][0]["quality"]["level"] == "uncertain"
         finally:
             app.dependency_overrides.clear()
         capsys.readouterr()
@@ -135,11 +114,6 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
                     "--yes",
                 ]
             )
-        serving = tmp_path / "serving.db"
-        assert publish_day(database, serving, date(2025, 1, 1))["held"] == 1
-        assert FlightReader(serving).stats()["flights"] == 0
-        assert reader.flight(record.provider, record.provider_id).needs_review
-        return
     staging = database
     database = tmp_path / "serving.db"
     assert publish_day(staging, database, date(2025, 1, 1))["inserted"] == 1
@@ -330,7 +304,7 @@ def test_producer_policy_updates_during_staged_parsing(tmp_path, monkeypatch, qu
 @pytest.mark.parametrize(
     "reason", ["observation_gap", "callsign_variation", "implausible_airport_timing"]
 )
-def test_ground_candidates_with_uncertain_continuity_require_review(tmp_path, capsys, reason):
+def test_uncertain_candidates_remain_searchable_and_reviewable(tmp_path, capsys, reason):
     updater = FlightUpdater(tmp_path / "review.db")
     updater.initialize()
     record = observed("review", "AAA", "BBB", 10, 70).model_copy(
@@ -339,9 +313,9 @@ def test_ground_candidates_with_uncertain_continuity_require_review(tmp_path, ca
     updater.upsert([record])
     reader = FlightReader(updater.path)
     assert reader.flight("adsblol", "review") == record
-    assert reader.available_dates("AAA", "UTC").dates == []
-    assert reader.search_itineraries(query()).items == []
-    assert search_routes(query(), RoutingSnapshot((record,))).items == []
+    assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
+    assert len(reader.search_itineraries(query()).items) == 1
+    assert len(search_routes(query(), RoutingSnapshot((record,))).items) == 1
     assert reader.overview()["needs_review_count"] == 1
     admin.run(["--db", str(updater.path), "flight", "approve", "adsblol", "review", "--yes"])
     assert json.loads(capsys.readouterr().out)["approved"] == 1
@@ -351,7 +325,7 @@ def test_ground_candidates_with_uncertain_continuity_require_review(tmp_path, ca
     assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
 
 
-def test_review_gate_applies_even_when_estimate_also_has_schedules(tmp_path):
+def test_uncertainty_labels_apply_across_time_bases_without_blocking(tmp_path):
     updater = FlightUpdater(tmp_path / "review.db")
     updater.initialize()
     record = observed("review", "AAA", "BBB", 10, 70).model_copy(
@@ -364,12 +338,12 @@ def test_review_gate_applies_even_when_estimate_also_has_schedules(tmp_path):
     )
     updater.upsert([record])
     reader = FlightReader(updater.path)
-    assert reader.web_catalog().dataset.time_bases == {"scheduled": 0, "observed": 0, "actual": 0}
-    assert reader.available_dates("AAA", "UTC", "scheduled").dates == []
-    assert reader.search_itineraries(query(time_basis="scheduled")).items == []
+    assert reader.web_catalog().dataset.time_bases == {"scheduled": 1, "observed": 1, "actual": 0}
+    assert reader.available_dates("AAA", "UTC", "scheduled").dates == [date(2025, 1, 1)]
+    assert len(reader.search_itineraries(query(time_basis="scheduled")).items) == 1
 
 
-def test_implausibly_fast_airport_hop_is_retained_for_review_not_served(tmp_path):
+def test_implausibly_fast_airport_hop_is_served_with_conflict_warning(tmp_path):
     database = tmp_path / "hosted.db"
     data = leg_trace()
     for row in data["trace"]:
@@ -379,9 +353,10 @@ def test_implausibly_fast_airport_hop_is_retained_for_review_not_served(tmp_path
     (record,) = reader.all_records()
     assert record.evidence_kind == "inferred_ground_brackets"
     assert record.review_reasons == ["implausible_airport_timing"]
+    assert record.quality["level"] == "conflict"
     assert record.aircraft_type_code == "A320" and record.callsign == "UAL123"
-    assert reader.available_dates("AAA", "UTC").dates == []
-    assert reader.search_itineraries(query()).items == []
+    assert reader.available_dates("AAA", "UTC").dates == [date(2025, 1, 1)]
+    assert len(reader.search_itineraries(query()).items) == 1
     assert receipt["diagnostics"]["counts"]["review_reasons"]["implausible_airport_timing"] == 1
     repeated, _ = run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
     assert repeated["result"] == "already_committed"
@@ -398,4 +373,4 @@ def test_airport_timing_check_respects_uncertain_event_windows(tmp_path):
     run(tmp_path / "inputs", date(2025, 1, 1), [data], output_db=database)
     (record,) = FlightReader(database).all_records()
     assert record.review_reasons == ["airborne_airport_estimate"]
-    assert not record.needs_review and not record.itinerary_reviewed
+    assert not record.blocked_for_search and not record.itinerary_reviewed
