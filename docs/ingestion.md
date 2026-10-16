@@ -7,6 +7,10 @@ ADSB.lol supplies historical observations, not future airline schedules.
 
 ## Sources and licences
 
+For researched alternatives and measured free bulk access, see the
+[flight data source reference](flight-data-sources.md). It distinguishes installed
+pipelines from proposed reference/schedule adapters.
+
 | Source | Retained information | Data licence |
 | --- | --- | --- |
 | [ADSB.lol historical releases](https://www.adsb.lol/docs/open-data/historical/), including [2023](https://github.com/adsblol/globe_history_2023/releases) | Airport pair, callsign, ICAO aircraft type and inferred time bounds | [ODbL 1.0](https://github.com/adsblol/globe_history_2023/blob/main/LICENSE-ODbL.txt) |
