@@ -165,14 +165,31 @@ def probe_ingestion(executable, directory, environment):
     )
     assert blocked.returncode != 0 and "read/query-only" in blocked.stderr
 
+    # Exercise VRS from the installed CLI, with bounded local fixtures, no network.
+    vrs_routes, vrs_airports = root / "vrs-routes.csv", root / "vrs-airports.csv"
+    vrs_routes.write_text("Callsign,AirportCodes\nUAL123,KAAA-KBBB\n")
+    vrs_airports.write_text("Code,IATA\nKAAA,AAA\nKBBB,BBB\n")
+    reference = json.loads(
+        invoke(
+            ["vrs", "import", "--routes-csv", str(vrs_routes), "--airports-csv", str(vrs_airports)]
+        ).stdout
+    )
+    assert reference["counts"]["routes"] == 1 and not reference["flight_records_changed"]
+    checked = json.loads(invoke(["vrs", "report"]).stdout)
+    assert checked["counts"]["exact_two_airport_association"]["records"] == 2
+    assert not checked["admission_changed"]
+
     # Exercise the installed handoff on a disposable legacy-shaped snapshot.
     legacy, adopted = root / "legacy.db", root / "adopted.db"
     snapshot_code = """import sqlite3,sys
 from contextlib import closing
+from ingestion.adoption import ARCHIVE_TABLES
 with closing(sqlite3.connect(sys.argv[1])) as source, closing(sqlite3.connect(sys.argv[2])) as target:
     source.backup(target)
-    for name in ('ingestion_audit_changes','ingestion_audit_runs','ingestion_adoptions','ingestion_documents','ingestion_store_metadata'):
-        target.execute('DROP TABLE '+name)
+    tables = [row[0] for row in target.execute("SELECT name FROM sqlite_schema WHERE type='table'")]
+    for name in tables:
+        if name not in ARCHIVE_TABLES | {'ingestion_profiles'}:
+            target.execute('DROP TABLE "'+name.replace('"','""')+'"')
     target.execute('DROP INDEX ingestion_publication_time')
     target.commit()
 """

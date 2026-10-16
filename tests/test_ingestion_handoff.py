@@ -29,17 +29,12 @@ def archive(tmp_path):
     run(root, DAY, [leg_trace()])
     path = root / "itineraries.db"
     with sqlite3.connect(path) as c:
-        for name in [
-            "ingestion_vrs_snapshot",
-            "ingestion_vrs_airports",
-            "ingestion_vrs_routes",
-            "ingestion_audit_changes",
-            "ingestion_audit_runs",
-            "ingestion_adoptions",
-            "ingestion_documents",
-            "ingestion_store_metadata",
-        ]:
-            c.execute(f"DROP TABLE {name}")
+        # Keep the frozen v5 contract, not a hand-maintained list of today's
+        # private extensions. Future private tables must not leak into this fixture.
+        tables = [row[0] for row in c.execute("SELECT name FROM sqlite_schema WHERE type='table'")]
+        for name in tables:
+            if name not in adoption.ARCHIVE_TABLES | {"ingestion_profiles"}:
+                c.execute('DROP TABLE "' + name.replace('"', '""') + '"')
         c.execute("DROP INDEX ingestion_publication_time")
     writer = FlightUpdater(path)
     manual = observed("manual", "AAA", "BBB", 0, 3).model_copy(

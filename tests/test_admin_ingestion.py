@@ -1,3 +1,4 @@
+import gc
 import json
 import sqlite3
 from datetime import UTC, date, datetime
@@ -87,7 +88,16 @@ def test_shell_jobs_persist_profiles_backfill_and_skip_overlap(pipeline, capsys,
     assert '"days_skipped": 5' in capsys.readouterr().out
     assert not list((root / "raw").rglob("*.tar"))
     before = (root / "itineraries.db").read_bytes(), database.read_bytes()
-    shell.onecmd("adsblol status")
+    status_reader = ingestion.extraction_status
+
+    def collect_before_status(*args, **kwargs):
+        # Make the former deferred-connection checkpoint deterministic, without sleeps.
+        gc.collect()
+        return status_reader(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ingestion, "extraction_status", collect_before_status)
+        shell.onecmd("adsblol status")
     status = json.loads(capsys.readouterr().out)
     assert status["records"] == 4
     assert status["ranges"] == [{"start": "2025-01-01", "end": "2025-01-05", "days": 5}]

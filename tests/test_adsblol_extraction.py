@@ -13,6 +13,7 @@ from test_adsblol import asset, rules
 from test_adsblol_legs import AIRPORTS, leg_trace
 
 from core.disk_quota import database_bytes, set_quota
+from core.storage import SQLiteConnection
 from ingestion.adsblol import extraction
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.movements import AirportLookup, reduce_movement
@@ -63,8 +64,10 @@ def run(root, day, traces, **options):
 
 
 def rows(root, table):
-    with sqlite3.connect(root / "itineraries.db") as connection:
-        return connection.execute(f"SELECT * FROM {table}").fetchall()
+    # sqlite3.Connection.__exit__ commits/rolls back but does not close. Read helpers
+    # must not leave writable handles for GC to checkpoint during a later status call.
+    with SQLiteConnection(root / "itineraries.db", read_only=True).connect() as connection:
+        return [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
 
 
 def test_daily_extraction_keeps_only_itinerary_data_then_removes_raw_and_resumes(tmp_path):
