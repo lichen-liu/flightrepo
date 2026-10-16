@@ -124,11 +124,15 @@ def review_recommended_sql(alias=""):
         f"AND json_extract({v},'$.destination_iata')={p}destination_iata"
     )
     verified = route_verified_sql(alias)
+    # CASE short-circuits inside SELECT/SUM too. A boolean OR expression there
+    # eagerly decodes every JSON branch for millions of already classified rows.
     return (
-        f"({p}itinerary_reviewed=0 AND ("
+        f"CASE WHEN {p}itinerary_reviewed<>0 THEN 0 "
+        f"WHEN ({current_difference}) THEN 1 "
+        f"WHEN EXISTS(SELECT 1 FROM json_each({p}review_reasons) reason "
+        "WHERE reason.value IN ('implausible_airport_timing','callsign_variation')) THEN 1 "
+        f"WHEN {p}evidence_kind='inferred_airport_proximity' OR "
         f"EXISTS(SELECT 1 FROM json_each({p}review_reasons) reason "
-        "WHERE reason.value IN ('implausible_airport_timing','callsign_variation') "
-        f"OR (reason.value IN ('observation_gap','airborne_airport_estimate') AND NOT ({verified}))) "
-        f"OR ({p}evidence_kind='inferred_airport_proximity' AND NOT ({verified})) "
-        f"OR ({current_difference})))"
+        "WHERE reason.value IN ('observation_gap','airborne_airport_estimate')) "
+        f"THEN NOT ({verified}) ELSE 0 END"
     )

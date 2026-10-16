@@ -329,3 +329,26 @@ def test_missing_callsign_can_record_absence_but_cannot_claim_route_match():
     assert RouteVerification(match_kind="missing", **fields).callsign is None
     with pytest.raises(ValueError, match="requires a callsign"):
         RouteVerification(match_kind="exact", **fields)
+
+
+def test_confidence_sql_only_checks_route_matches_when_needed(store, monkeypatch):
+    from core.quality import review_recommended_sql
+
+    store.upsert(
+        [
+            fact("plain", "NODATA", review_reasons=[]),
+            fact("gap", "NODATA", review_reasons=["observation_gap"]),
+        ]
+    )
+    monkeypatch.setattr(
+        "core.admission.route_verified_sql", lambda alias: "reference_check_probe(0)"
+    )
+    calls = []
+    with store.connect() as c:
+        c.create_function("reference_check_probe", 1, lambda value: calls.append(value) or value)
+        assert (
+            c.execute("SELECT SUM(" + review_recommended_sql() + ") FROM flight_legs").fetchone()[0]
+            == 1
+        )
+    # Assert execution behavior, without wall-clock thresholds or dataset timing.
+    assert calls == [0]
