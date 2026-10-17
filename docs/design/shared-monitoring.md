@@ -6,6 +6,8 @@ Use one private Grafana workspace backed by one Prometheus, Loki and Alertmanage
 
 [Open the interactive layout study](monitoring-preview.html). All values in it are fictional. It demonstrates grouping and drill-down, not a custom dashboard product to build alongside Grafana.
 
+![Dashboard layout study with fictional data](monitoring-preview.png)
+
 ## What the existing installations need
 
 The inspected implementations are:
