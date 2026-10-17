@@ -306,7 +306,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 0
-            or "demo" in dataset.get("providers", [])
+            or dataset.get("data_mode") != "real"
         ):
             raise ValueError("Real serving requires a ready database without demo records")
         if count == 0:
@@ -348,7 +348,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
         return {"url": base_url, "flight_count": count, "route_search": "passed"}
     if (
         ready.get("status") != "ready"
-        or dataset.get("providers") != ["demo"]
+        or dataset.get("data_mode") != "synthetic"
         or not isinstance(count, int)
         or isinstance(count, bool)
         or count < 1

@@ -657,7 +657,7 @@ def public_responses():
         "/health/ready": {"status": "ready"},
         "/v1/catalog": {
             "dataset": {
-                "providers": ["demo"],
+                "data_mode": "synthetic",
                 "flight_count": 12,
                 "first_departure": "2026-10-17T18:00:00Z",
             }
@@ -681,7 +681,7 @@ def public_responses():
         ("/", b"another site"),
         ("/assets/app.mjs", b"outdated"),
         ("/health/ready", {"status": "unavailable"}),
-        ("/v1/catalog", {"dataset": {"providers": ["real-provider"], "flight_count": 12}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "real", "flight_count": 12}}),
         ("/v1/itineraries/search", {"items": []}),
     ],
 )
@@ -790,12 +790,12 @@ def test_public_final_response_origin_is_verified(scripts, monkeypatch):
         ("/health/ready", []),
         ("/v1/catalog", []),
         ("/v1/catalog", {"dataset": []}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": True}}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": "12"}}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": 0}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": True}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": "12"}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": 0}}),
         (
             "/v1/catalog",
-            {"dataset": {"providers": ["demo"], "flight_count": 12, "first_departure": []}},
+            {"dataset": {"data_mode": "synthetic", "flight_count": 12, "first_departure": []}},
         ),
         ("/v1/itineraries/search", []),
         ("/v1/itineraries/search", {"items": {}}),
@@ -930,7 +930,8 @@ def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
     with TestClient(application, base_url="https://fly.boboji.fyi") as client:
         response = client.get("/v1/catalog")
         assert response.status_code == 200
-        assert response.json()["dataset"]["providers"] == ["adsblol"]
+        assert response.json()["dataset"]["data_mode"] == "real"
+        assert "providers" not in response.json()["dataset"]
         assert client.get("/health/ready").json()["schema_contract"] == "flight-legs"
 
 

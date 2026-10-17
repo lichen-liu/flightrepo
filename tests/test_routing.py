@@ -8,6 +8,7 @@ from string import ascii_uppercase
 
 import pytest
 from fastapi.testclient import TestClient
+from public_helpers import rebuild_payload
 
 from admin import client as admin
 from core.connections import Airport, AirportTransfer, ConnectionWindow, RebuildRequest
@@ -142,7 +143,7 @@ def test_unbounded_reader_and_utc_local_legacy_and_rebuild_apis(tmp_path):
                 "/v1/plans/rebuild",
                 json={
                     "prefix": [
-                        {"provider": f.provider, "provider_id": f.provider_id} for f in records[:5]
+                        {"flight_id": f["flight_id"]} for f in utc.json()["items"][0]["legs"][:5]
                     ],
                     "destination": destination,
                     "horizon_end": request.horizon_end.isoformat(),
@@ -836,7 +837,10 @@ def test_rejected_selection_reports_measured_gap(tmp_path):
     app.dependency_overrides[get_store] = lambda: reader
     try:
         with TestClient(app) as client:
-            response = client.post("/v1/plans/rebuild", json=request.model_dump(mode="json"))
+            response = client.post(
+                "/v1/plans/rebuild",
+                json=rebuild_payload(FlightReader(updater.path), request.model_dump(mode="json")),
+            )
             assert response.status_code == 422
             detail = response.json()["detail"]
             assert detail["code"] == "chosen_next_connection_too_short"
@@ -1115,7 +1119,10 @@ def test_chosen_next_destination_mismatch_has_stable_error_and_http_422(tmp_path
     app.dependency_overrides[get_store] = lambda: FlightReader(updater.path)
     try:
         with TestClient(app) as client:
-            response = client.post("/v1/plans/rebuild", json=request.model_dump(mode="json"))
+            response = client.post(
+                "/v1/plans/rebuild",
+                json=rebuild_payload(FlightReader(updater.path), request.model_dump(mode="json")),
+            )
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "chosen_next_airport_mismatch"
         assert response.json()["detail"]["context"]["next_airport"] == "CCC"

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from public_helpers import rebuild_payload
 
 from core.connections import Airport, AirportTransfer, RebuildRequest
 from core.models import FlightRecord, FlightStatus
@@ -151,7 +152,7 @@ def test_api_calculation_is_read_only_and_errors_are_422(demo):
     try:
         before = reader.all_records()
         with TestClient(app) as client:
-            result = client.post("/v1/plans/rebuild", json=data["request"])
+            result = client.post("/v1/plans/rebuild", json=rebuild_payload(reader, data["request"]))
             assert result.status_code == 200 and result.json()["complete"]
             assert [
                 a["iata"] for a in client.get("/v1/airports", params={"city_id": "GB:LON"}).json()

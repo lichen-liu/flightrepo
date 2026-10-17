@@ -279,7 +279,7 @@ async def check_installation(root: Path) -> None:
             response = await client.post(
                 "/v1/plans/rebuild",
                 json={
-                    "prefix": [{"provider": leg["provider"], "provider_id": leg["provider_id"]}],
+                    "prefix": [{"flight_id": leg["flight_id"]}],
                     "destination": route["destination_iata"],
                     "horizon_end": horizon,
                     "time_basis": dataset["default_time_basis"],
@@ -314,7 +314,7 @@ async def check_installation(root: Path) -> None:
         response = await client.post(
             "/v1/plans/rebuild",
             json={
-                "prefix": [{"provider": first["provider"], "provider_id": first["provider_id"]}],
+                "prefix": [{"flight_id": first["flight_id"]}],
                 "destination": "CDG",
                 "via_airport": "AMS",
                 "next_airport": "AMS",

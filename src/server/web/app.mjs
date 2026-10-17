@@ -63,7 +63,6 @@ const showError = (id, text) => {
   $(id).textContent = text;
   $(id).hidden = !text;
 };
-const trace = (selection) => selection?.diagnostics;
 function acceptTimeError(error) {
   const detail = error?.detail;
   if (detail?.code === "airport_timezone_changed") {
@@ -88,7 +87,7 @@ function updateDatasetTag() {
   if (!data) return;
   const basis = field("time-basis").value,
     count = data.time_bases?.[basis] ?? data.flight_count,
-    demo = data.providers.length === 1 && data.providers[0] === "demo";
+    demo = data.data_mode === "synthetic";
   $("dataset-tag").textContent =
     `${demo ? "Demo · " : ""}${timeBasisLabel(basis)} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} recommended for review` : ""}`;
 }
@@ -340,7 +339,7 @@ function commonQuery() {
       .value.split(/[\s,]+/)
       .filter(Boolean)
       .map((v) => v.toUpperCase()),
-    trace: true,
+    trace: false,
     time_basis: field("time-basis").value,
   };
 }
@@ -433,7 +432,7 @@ async function search() {
       history.replaceState(null, "", url.pathname + url.search);
       renderOptions();
       renderJourney();
-      renderEvidence();
+      renderDatasetInfo();
       setView("options");
     },
     (error) => {
@@ -505,13 +504,13 @@ function renderJourney({ preserveView = false } = {}) {
     .map((f, i) => {
       const conn = selected.connections[i],
         gap = conn
-          ? `<div class="gap ${conn.airport_change ? "airport-change" : ""}"><span>${conn.airport_change ? `${e(conn.arrival_iata)} → ${e(conn.departure_iata)} · airport change` : e(conn.arrival_iata) + " connection"} · ${duration(conn.wait_minutes)}<br><span class="small">Minimum ${conn.minimum_minutes}m · ${e(conn.source)}</span></span><button type="button" data-edit="${i}">Change connection</button></div>`
+          ? `<div class="gap ${conn.airport_change ? "airport-change" : ""}"><span>${conn.airport_change ? `${e(conn.arrival_iata)} → ${e(conn.departure_iata)} · airport change` : e(conn.arrival_iata) + " connection"} · ${duration(conn.wait_minutes)}<br><span class="small">Minimum ${conn.minimum_minutes}m</span></span><button type="button" data-edit="${i}">Change connection</button></div>`
           : "";
-      return `<div class="leg" data-provider-id="${e(f.provider_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
+      return `<div class="leg" data-flight-id="${e(f.flight_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
       <div class="leg-time"><div><strong>${e(flightTimeLabel(f, "departure", zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(flightTimeLabel(f, "arrival", zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
       ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
       <div class="leg-quality">${qualityDetails(f)}</div>
-      <div class="leg-source">${e(f.provider)} · ${e(f.status)} · refreshed ${e(stamp(f.fetched_at, "UTC"))}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
+      <div class="leg-source">${e(f.status)}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
     })
     .join("");
   // A partial plan still exposes the next gap so the user can continue exploring.
@@ -532,7 +531,7 @@ function renderJourney({ preserveView = false } = {}) {
     map.setJourney(legs);
   }
   updateCursor();
-  renderEvidence();
+  renderDatasetInfo();
 }
 function updateCursor() {
   const legs = state.selection?.legs || [];
@@ -566,64 +565,16 @@ function updateCursor() {
   map.setCursor(state.cursor);
   drawTimeline($("timeline"), legs, state.cursor);
 }
-function renderEvidence() {
+function renderDatasetInfo() {
   const data = state.catalog?.dataset;
   if (!data) return;
-  const d = trace(state.selection) || state.result?.diagnostics;
   const entries = [
-    [
-      "Imported records",
-      `${data.total_record_count ?? data.flight_count} (${data.cancelled_count} cancelled)`,
-    ],
-    ["Searchable legs across all flight times and origins", String(data.flight_count)],
-    ...Object.entries(data.time_bases || {}).map(([basis, count]) =>
-      [`${timeBasisLabel(basis)} across all origins`, String(count)],
-    ),
-    ["Review recommended", String(data.needs_review_count || 0)],
-    ["Providers", data.providers.join(", ") || "None"],
-    ["Provider coverage", "Unknown"],
-    [
-      "Newest fact refresh",
-      data.newest_fact_refresh
-        ? stamp(data.newest_fact_refresh, "UTC")
-        : "None",
-    ],
-    [
-      "Oldest fact refresh",
-      data.oldest_fact_refresh
-        ? stamp(data.oldest_fact_refresh, "UTC")
-        : "None",
-    ],
+    ["Loaded flights", String(data.total_record_count ?? data.flight_count)],
+    ["Searchable flights", String(data.flight_count)],
+    ["Flights with accuracy warnings", String(data.needs_review_count || 0)],
+    ["Coverage", "May be incomplete"],
   ];
-  if (d)
-    entries.push(
-      ["Engine", d.engine_version],
-      [
-        "Search scope",
-        d.exhaustive
-          ? "Finished over loaded snapshot"
-          : "Partial: " + d.termination_reasons.join(", "),
-      ],
-      [
-        "Candidate checks",
-        `${d.stats.candidates_checked} from ${d.stats.rows_loaded} loaded rows`,
-      ],
-      ["Snapshot", d.snapshot_id],
-      ["Request", d.request_id],
-      [
-        "Trace events",
-        `${d.events.length} retained · ${d.stats.trace_events_omitted} omitted`,
-      ],
-    );
-  for (const source of data.sources || [])
-    if (source.attribution) entries.push(["Attribution", source.attribution]);
-  const sourceLinks = (data.sources || []).map((source) => {
-    const link = (url, text) => /^https?:\/\//i.test(url || "")
-      ? `<a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(text)}</a>` : e(text);
-    return `<p>${link(source.source_url, source.name || source.code)} · ${link(source.license_url, source.license_expression || "Licence unknown")}</p>`;
-  }).join("");
-  $("evidence-content").innerHTML =
-    `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>${sourceLinks}${d?.events.length ? `<details><summary>Decision trace</summary><pre>${e(JSON.stringify(d.events, null, 2))}</pre></details>` : ""}`;
+  $("dataset-content").innerHTML = `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>`;
 }
 function closeEditor() {
   editLane.cancel();
@@ -681,7 +632,7 @@ function editorRequest(notBefore = null) {
     via_airport: state.result.query.via_airport || null,
     next_airport: airportCode(editField("next-airport").value) || null,
     avoid_airports: state.result.query.avoid_airports,
-    trace: true,
+    trace: false,
     time_basis: state.result.query.time_basis || state.selection.legs[0]?.time_basis || "scheduled",
   };
 }
@@ -1013,7 +964,8 @@ $("copy-search").addEventListener("click", async () => {
 });
 $("export").addEventListener("click", () => {
   const payload = {
-    format: "flyji-journey-1",
+    format: "flyji-journey-2",
+    data_licence_notice: `${location.origin}/data-sources`,
     exported_at: new Date().toISOString(),
     query: state.result.query,
     query_inputs: state.queryValues,
@@ -1036,7 +988,7 @@ async function loadCatalog() {
   await catalogLane.run("/v1/catalog", undefined, (catalog) => {
     state.catalog = catalog;
     updateDatasetTag();
-    renderEvidence();
+    renderDatasetInfo();
   }, () => { $("dataset-tag").textContent = "Dataset statistics unavailable; search remains available."; });
 }
 async function loadBootstrap() {

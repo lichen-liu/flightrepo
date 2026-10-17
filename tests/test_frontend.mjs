@@ -174,10 +174,10 @@ test("quality badges prioritize conflicts, deduplicate labels and escape metadat
   assert.ok(!qualityBadges([flight]).includes("onclick"));
 });
 
-test("a partly confirmed journey does not claim all routes match VRS", () => {
-  const confirmed = { route_verified: true, quality: { labels: [ {code: "vrs_route_match", severity: "info", label: "VRS route match", detail: "Undated"} ] } };
-  assert.equal(qualityLabels([confirmed, {}]).length, 0);
-  assert.equal(qualityLabels([confirmed]).length, 1);
+test("informational confidence notes are confined to leg details", () => {
+  const noted = { quality: { labels: [{code: "approximate_times", severity: "info", label: "Approximate times", detail: "Times are ranges"}] } };
+  assert.equal(qualityLabels([noted]).length, 0);
+  assert.equal(qualityLabels([noted], {details: true}).length, 1);
 });
 
 

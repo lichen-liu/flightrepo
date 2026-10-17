@@ -37,7 +37,13 @@ with TestClient(server.api.app) as client:
             path = asset.relative_to(server.api.WEB_ROOT).as_posix()
             assert client.get('/assets/' + path).status_code == 200, path
     assert client.get('/health/ready').status_code == 200
-    assert client.get('/v1/catalog').status_code == 200
+    catalog = client.get('/v1/catalog')
+    assert catalog.status_code == 200
+    assert 'providers' not in catalog.json()['dataset']
+    assert 'sources' not in catalog.json()['dataset']
+    assert client.get('/data-sources').status_code == 200
+    schemas = client.get('/openapi.json').json()['components']['schemas']
+    assert not {'FlightRecord', 'RouteVerification', 'FlightRef', 'TraceEvent'}.intersection(schemas)
 """
 
 

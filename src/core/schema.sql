@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS carriers (
     metadata_updated_us INTEGER
 ) STRICT, WITHOUT ROWID;
 
--- Reference provenance is public catalog metadata, not private flight evidence.
+-- Shared backend catalog provenance; excluded from public flight API responses.
 CREATE TABLE IF NOT EXISTS reference_snapshots (
     source_id INTEGER NOT NULL REFERENCES data_sources(id),
     kind TEXT NOT NULL CHECK(kind IN ('airports','carriers')),
