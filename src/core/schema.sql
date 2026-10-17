@@ -191,31 +191,6 @@ CREATE TABLE IF NOT EXISTS flight_tombstones (
     PRIMARY KEY(source_id, source_record_key)
 ) STRICT, WITHOUT ROWID;
 
--- Two partial indexes per time basis: onward routing and global date windows.
--- Empty bases have no index entries. Do not index every possible filter.
-CREATE INDEX IF NOT EXISTS flight_legs_scheduled_origin
-ON flight_legs(origin_iata, departure_scheduled_us)
-WHERE status <> 'cancelled' AND departure_scheduled_us IS NOT NULL
-    AND arrival_scheduled_us IS NOT NULL;
-CREATE INDEX IF NOT EXISTS flight_legs_scheduled_departure
-ON flight_legs(departure_scheduled_us)
-WHERE status <> 'cancelled' AND departure_scheduled_us IS NOT NULL
-    AND arrival_scheduled_us IS NOT NULL;
-CREATE INDEX IF NOT EXISTS flight_legs_actual_origin
-ON flight_legs(origin_iata, departure_actual_us)
-WHERE status <> 'cancelled' AND departure_actual_us IS NOT NULL
-    AND arrival_actual_us IS NOT NULL;
-CREATE INDEX IF NOT EXISTS flight_legs_actual_departure
-ON flight_legs(departure_actual_us)
-WHERE status <> 'cancelled' AND departure_actual_us IS NOT NULL
-    AND arrival_actual_us IS NOT NULL;
-CREATE INDEX IF NOT EXISTS flight_legs_observed_origin
-ON flight_legs(origin_iata, departure_observed_lower_us)
-WHERE status <> 'cancelled' AND departure_observed_lower_us IS NOT NULL;
-CREATE INDEX IF NOT EXISTS flight_legs_observed_departure
-ON flight_legs(departure_observed_lower_us)
-WHERE status <> 'cancelled' AND departure_observed_lower_us IS NOT NULL;
-
 -- A common interval contract. Consumers select exactly one time_basis per query;
 -- a leg with several kinds of evidence must not become several returned flights.
 -- Cancelled/deleted flights remain auditable but cannot power routing/calendar.
