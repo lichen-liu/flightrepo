@@ -33,11 +33,18 @@
         ><a href="/docs">API</a>
       </nav>
     </header>
+    <section id="request-progress" class="request-progress" role="status" aria-live="polite" hidden>
+      <div><strong id="request-label">Connecting to flight data</strong><span id="request-elapsed" aria-hidden="true">0s</span></div>
+      <div class="request-track" aria-hidden="true"><span></span></div>
+      <progress aria-label="Waiting for backend response"></progress>
+      <p id="request-detail">Waiting for the server to respond.</p>
+    </section>
     <main>
+      <div class="explore-hero">
       <section class="search-section" aria-labelledby="page-title">
         <div class="heading-row">
           <h1 id="page-title">Flight routes</h1>
-          <span id="dataset-tag" class="tag">Loading dataset statistics…</span>
+          <span class="tag">EXPLORE / COMPARE / CONNECT</span>
         </div>
         <form id="search-form">
           <div class="search-grid">
@@ -95,10 +102,14 @@
               Search flights
             </button>
           </div>
-          <p id="coverage-scope" class="small muted" hidden></p>
           <p id="coverage-warning" class="small" role="status" hidden></p>
-          <p id="date-availability" class="small" role="status">Loading departure dates…</p>
           <button id="retry-dates" type="button" hidden>Retry departure dates</button>
+          <details class="coverage-details">
+            <summary>Airport availability details</summary>
+            <p id="coverage-scope" class="small muted" hidden></p>
+            <p id="date-availability" class="small" role="status">Loading departure dates…</p>
+            <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
+          </details>
           <div class="route-filter">
             <label
               >Via airports (optional)<span class="airport-list-input"><input
@@ -211,6 +222,72 @@
         </button>
       </section>
 
+        <section class="map-panel" aria-labelledby="map-heading">
+          <div class="panel-heading">
+            <h2 id="map-heading">Route map</h2>
+            <div class="segmented" aria-label="Map projection">
+              <button id="globe-mode" type="button" aria-pressed="true">
+                Globe</button
+              ><button id="flat-mode" type="button" aria-pressed="false">
+                Map
+              </button>
+            </div>
+          </div>
+          <div class="map-overview">
+            <div id="map-route-title" class="map-route-title">Explore the connections.</div>
+            <div id="journey-summary" class="journey-summary"><span>Choose a journey to see its path and timing.</span></div>
+          </div>
+          <div id="map-container">
+            <svg
+              id="route-map"
+              role="img"
+              aria-label="World map. Choose a flight journey to display its route."
+            ></svg
+            ><span class="map-caption" id="map-caption">Flight route</span>
+            <div id="map-loading" class="map-loading" hidden><span class="loading-orbit" aria-hidden="true"></span><strong>Finding your routes</strong><span>Waiting for flight results…</span></div>
+          </div>
+          <div class="map-toolbar">
+            <span id="map-info" class="small muted"
+              >Use the controls to rotate or zoom.</span
+            >
+            <div aria-label="Map controls">
+              <button
+                id="rotate-left"
+                type="button"
+                aria-label="Rotate globe west"
+              >
+                ←
+              </button>
+              <button
+                id="rotate-right"
+                type="button"
+                aria-label="Rotate globe east"
+              >
+                →
+              </button>
+              <button id="tilt-up" type="button" aria-label="Tilt globe up">
+                ↑
+              </button>
+              <button
+                id="tilt-down"
+                type="button"
+                aria-label="Tilt globe down"
+              >
+                ↓
+              </button>
+              <button id="zoom-out" type="button" aria-label="Zoom out">
+                −
+              </button>
+              <button id="zoom-in" type="button" aria-label="Zoom in">
+                +
+              </button>
+              <button id="fit-map" type="button">Fit journey</button>
+            </div>
+          </div>
+          <p id="map-error" class="small error" role="status" hidden></p>
+        </section>
+      </div>
+
       <nav class="mobile-views" aria-label="Workspace view">
         <button data-view="options" type="button" aria-pressed="true">
           Options</button
@@ -233,6 +310,7 @@
             Search the loaded flight records.
           </p>
           <p id="partial" class="notice" hidden></p>
+          <div class="duration-legend" aria-label="Journey duration legend"><span>Flight</span><span>Connection</span></div>
           <div id="options">
             <p class="empty">
               Choose airports and departure dates to find a route.
@@ -240,65 +318,6 @@
           </div>
         </section>
         <div class="journey-workspace">
-          <section class="map-panel" aria-labelledby="map-heading">
-            <div class="panel-heading">
-              <h2 id="map-heading">Route map</h2>
-              <div class="segmented" aria-label="Map projection">
-                <button id="globe-mode" type="button" aria-pressed="true">
-                  Globe</button
-                ><button id="flat-mode" type="button" aria-pressed="false">
-                  Map
-                </button>
-              </div>
-            </div>
-            <div id="map-container">
-              <svg
-                id="route-map"
-                role="img"
-                aria-label="World map. Choose a flight journey to display its route."
-              ></svg
-              ><span class="map-caption" id="map-caption">Flight route</span>
-            </div>
-            <div class="map-toolbar">
-              <span id="map-info" class="small muted"
-                >Use the controls to rotate or zoom.</span
-              >
-              <div aria-label="Map controls">
-                <button
-                  id="rotate-left"
-                  type="button"
-                  aria-label="Rotate globe west"
-                >
-                  ←
-                </button>
-                <button
-                  id="rotate-right"
-                  type="button"
-                  aria-label="Rotate globe east"
-                >
-                  →
-                </button>
-                <button id="tilt-up" type="button" aria-label="Tilt globe up">
-                  ↑
-                </button>
-                <button
-                  id="tilt-down"
-                  type="button"
-                  aria-label="Tilt globe down"
-                >
-                  ↓
-                </button>
-                <button id="zoom-out" type="button" aria-label="Zoom out">
-                  −
-                </button>
-                <button id="zoom-in" type="button" aria-label="Zoom in">
-                  +
-                </button>
-                <button id="fit-map" type="button">Fit journey</button>
-              </div>
-            </div>
-            <p id="map-error" class="small error" role="status" hidden></p>
-          </section>
           <section class="schedule-panel" aria-labelledby="schedule-heading">
             <div class="panel-heading">
               <h2 id="schedule-heading">Journey times</h2>

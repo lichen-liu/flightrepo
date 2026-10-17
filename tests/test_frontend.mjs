@@ -186,3 +186,18 @@ test("flight identity retains callsign and shows operator reference name", () =>
   assert.equal(flightLabel({ callsign: "N5203D" }), "N5203D (callsign)");
   assert.equal(escapeHTML(flightLabel({ callsign: "ACA541", operator_name: "<script>" })).includes("<script>"), false);
 });
+
+test("request activity clears immediately on cancellation without hiding a newer request", async (t) => {
+  const requests = transport(t), active = new Set();
+  const lane = new RequestLane((url) => { active.add(url); return () => active.delete(url); });
+  const first = lane.run('/first', undefined, () => {}, () => {});
+  assert.deepEqual([...active], ['/first']);
+  const second = lane.run('/second', undefined, () => {}, () => {});
+  assert.deepEqual([...active], ['/second']);
+  requests.get('/first').resolve({ok:true,json:async()=>({})});
+  await first;
+  assert.deepEqual([...active], ['/second']);
+  requests.get('/second').resolve({ok:true,json:async()=>({})});
+  await second;
+  assert.equal(active.size, 0);
+});

@@ -14,6 +14,8 @@ import {
   airportListSuggestions,
 } from "./format.mjs";
 import { RouteMap, drawTimeline } from "./map.mjs";
+import { RequestActivity } from "./activity.mjs";
+import { routeChain, durationChart, journeyAirports } from "./journey-visuals.mjs";
 import { DataCalendar } from "./calendar.mjs";
 import { qualityBadges, qualityDetails } from "./quality.mjs";
 
@@ -22,11 +24,13 @@ const form = $("search-form"),
   editorForm = $("connection-form");
 const field = (name) => form.elements.namedItem(name),
   editField = (name) => editorForm.elements.namedItem(name);
-const searchLane = new RequestLane(),
-  catalogLane = new RequestLane(),
-  bootstrapLane = new RequestLane(),
-  datesLane = new RequestLane(),
-  editLane = new RequestLane();
+const activity = new RequestActivity($("request-progress"));
+const track = (label, priority) => () => activity.begin(label, priority);
+const searchLane = new RequestLane(track("Finding flight routes", 5)),
+  catalogLane = new RequestLane(track("Loading dataset statistics", 0)),
+  bootstrapLane = new RequestLane(track("Loading airports", 1)),
+  datesLane = new RequestLane(track("Checking available dates", 3)),
+  editLane = new RequestLane(track("Updating your connection", 5));
 const firstCalendar = new DataCalendar(field("date")),
   lastCalendar = new DataCalendar(field("last-date"), { optional: true });
 let datesKey = null, availableDates = new Set(), independentSearch = false;
@@ -318,6 +322,7 @@ async function loadDates() {
   }, (error) => {
     datesKey = null;
     $("date-availability").textContent = errorMessage(error);
+    document.querySelector(".coverage-details").open = true;
     for (const name of ["origin", "destination"]) $(`${name}-coverage`).textContent = "Flight counts unavailable.";
     $("retry-dates").hidden = false;
   });
@@ -406,6 +411,8 @@ async function search() {
   showError("error", "");
   $("status").textContent = "Searching loaded flight data…";
   $("results").setAttribute("aria-busy", "true");
+  $("map-loading").hidden = false;
+  document.querySelector(".map-panel").setAttribute("aria-busy", "true");
   $("search-button").disabled = true;
   await searchLane.run(
     request.url,
@@ -445,6 +452,8 @@ async function search() {
     () => {
       updateSearchButton();
       $("results").setAttribute("aria-busy", "false");
+      $("map-loading").hidden = true;
+      document.querySelector(".map-panel").setAttribute("aria-busy", "false");
     },
   );
 }
@@ -479,13 +488,11 @@ function renderOptions() {
     ? result.items
         .map((item, index) => {
           const count = item.legs.length,
-            codes = [
-              item.legs[0].origin_iata,
-              ...item.legs.map((f) => f.destination_iata),
-            ];
+            codes = journeyAirports(item.legs);
           return `<button class="option" type="button" data-option="${index}" aria-pressed="${!state.selection?.edited && item.itinerary_id === state.selection?.itinerary_id}">
       <span class="option-title"><span>${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)).split(",").at(-1).trim())}</span><span>${e(duration(item.duration_minutes))}</span></span>
-      <span class="route-codes">${codes.map(e).join(" → ")}</span>
+      <span class="route-codes route-chain" aria-label="${e(codes.join(" → "))}">${routeChain(codes)}</span>
+      ${durationChart(item.legs)}
       <span class="option-times">Depart ${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)))}<br>Arrive ${e(stamp(item.arrival, zone(item.legs.at(-1).destination_iata, result)))}</span>
       <span class="option-facts"><span>${count === 1 ? "Nonstop" : `${count - 1} stop${count === 2 ? "" : "s"}`}</span>${count > 1 ? `<span>${item.connections.some((c) => c.airport_change) ? "Airport change" : "Same-airport connections"}</span>` : ""}${qualityBadges(item.legs)}</span>
     </button>`;
@@ -496,6 +503,12 @@ function renderOptions() {
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
     legs = selected?.legs || [];
+  const codes = journeyAirports(legs);
+  $("map-route-title").textContent = legs.length ? `${codes[0]} → ${codes.at(-1)}` : "Explore the connections.";
+  $("map-caption").textContent = legs.length ? codes.join(" → ") : "Choose a journey to map its route";
+  $("journey-summary").innerHTML = legs.length
+    ? `<span><b>${e(duration((Date.parse(arrivalTime(legs.at(-1))) - Date.parse(departureTime(legs[0]))) / 60000))}</b>Total journey</span><span><b>${legs.length === 1 ? "Nonstop" : `${legs.length - 1} stop${legs.length === 2 ? "" : "s"}`}</b>Connections</span><span><b>${e(stamp(departureTime(legs[0]), zone(legs[0].origin_iata)).split(",")[0])}</b>Departure</span>`
+    : '<span>Choose a journey to see its path and timing.</span>';
   $("undo").disabled = !state.history.length;
   $("export").disabled = !legs.length;
   $("journey-status").textContent = !legs.length
@@ -918,6 +931,7 @@ function syncProjection() {
 }
 function setView(view) {
   document.querySelector(".workspace").dataset.view = view;
+  document.querySelector("main").dataset.view = view;
   document
     .querySelectorAll(".mobile-views button")
     .forEach((b) =>
@@ -926,7 +940,10 @@ function setView(view) {
 }
 document.querySelector(".mobile-views").addEventListener("click", (event) => {
   const button = event.target.closest("[data-view]");
-  if (button) setView(button.dataset.view);
+  if (button) {
+    setView(button.dataset.view);
+    if (button.dataset.view === "map") document.querySelector(".map-panel").scrollIntoView({ block: "start" });
+  }
 });
 for (const [id, mode] of [
   ["globe-mode", "globe"],

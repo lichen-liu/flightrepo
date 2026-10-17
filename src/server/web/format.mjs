@@ -119,9 +119,12 @@ export function errorMessage(error) {
 
 // Latest response wins even when transport cancellation arrives too late.
 export class RequestLane {
+  constructor(onActivity = () => () => {}) { this.onActivity = onActivity; }
   generation = 0;
   controller = null;
   cancel() {
+    this.finishActivity?.();
+    this.finishActivity = null;
     this.generation++;
     this.controller?.abort();
     this.controller = null;
@@ -129,6 +132,8 @@ export class RequestLane {
   async run(url, body, receive, failed, finished = () => {}) {
     this.cancel();
     const generation = this.generation;
+    const finishActivity = this.onActivity(url);
+    this.finishActivity = finishActivity;
     const controller = (this.controller = new AbortController());
     try {
       const response = await fetch(url, {
@@ -149,8 +154,10 @@ export class RequestLane {
       if (generation === this.generation && error?.name !== "AbortError")
         await failed(error);
     } finally {
+      finishActivity();
       if (generation === this.generation) {
         this.controller = null;
+        this.finishActivity = null;
         finished();
       }
     }

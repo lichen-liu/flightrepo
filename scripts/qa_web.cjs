@@ -939,7 +939,8 @@ check("partial searches differ from exhaustive empty results", async (page) => {
   await expect(page.locator("#partial")).toBeHidden();
   await expect(page.locator("[data-option]")).toHaveCount(0);
   await expect(page.locator("#export")).toBeDisabled();
-  await expect(page.locator(".map-panel")).toBeHidden();
+  await expect(page.locator(".map-panel")).toBeVisible();
+  await expect(page.locator("#route-map .map-route")).toHaveCount(0);
 });
 
 check("storage failure can be retried", async (page) => {
@@ -1232,3 +1233,45 @@ check(
     assert.ok(plan.options.length);
   },
 );
+
+check("slow searches show indeterminate activity, elapsed time and a map overlay", async (page) => {
+  await open(page);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route("**/v1/itineraries/search/local", async route => { await gate; await route.continue(); });
+  const pending = page.waitForResponse(r => searchPath.test(new URL(r.url()).pathname) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Search flights", exact: true }).click();
+  await expect(page.locator("#request-progress")).toBeVisible();
+  await expect(page.locator("#request-label")).toHaveText("Finding flight routes");
+  await expect(page.locator("#request-progress progress")).not.toHaveAttribute("value");
+  await expect(page.locator("#map-loading")).toBeVisible();
+  await expect(page.locator("#request-elapsed")).not.toHaveText("0s");
+  await expect(page.locator("[data-option]").first()).toBeVisible();
+  release(); await pending;
+  await expect(page.locator("#map-loading")).toBeHidden();
+  await expect(page.locator("#request-progress")).toBeHidden();
+});
+
+check("failed searches clear loading activity and retain the previous journey", async (page) => {
+  await open(page);
+  const before = identity((await exported(page)).selection.legs);
+  await page.route("**/v1/itineraries/search/local", route => route.fulfill({status:503,json:{detail:{message:"Search temporarily unavailable"}}}));
+  await page.getByRole("button", { name: "Search flights", exact: true }).click();
+  await expect(page.locator("#error")).toBeVisible();
+  await expect(page.locator("#map-loading")).toBeHidden();
+  await expect(page.locator("#request-progress")).toBeHidden();
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+});
+
+check("route map leads the desktop page and options visualize flights and connections", async (page) => {
+  await open(page);
+  const map = await page.locator(".map-panel").boundingBox(), form = await page.locator(".search-section").boundingBox();
+  assert.ok(Math.abs(map.y - form.y) < 2);
+  assert.ok(map.x >= form.x + form.width);
+  await expect(page.locator(".option-timeline").first()).toBeVisible();
+  await expect(page.locator(".route-node.endpoint").first()).toBeVisible();
+  await expect(page.locator("#journey-summary")).toContainText("Total journey");
+  await page.emulateMedia({reducedMotion:"reduce",colorScheme:"dark"});
+  await expect(page.locator("#route-map")).toBeVisible();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth), false);
+});
