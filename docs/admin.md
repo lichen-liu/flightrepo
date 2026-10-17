@@ -197,9 +197,10 @@ rejected for ingestion stores. SQL inspection remains SELECT-only.
 
 Source jobs run through separate `python -m ingestion` / `flyji-ingest`, or the
 Python `IngestionStore` / `IngestionService` APIs. The producer tool supports
-`adsblol prepare/configure/run/status`, `csv configure/run/status` and
-`aerodatabox configure/run/status`; it has no manual record editor. Only explicit
-`publish --serving-db ... --start ... --end ...` changes serving. See the
+`adsblol prepare/workspace/configure/run/status`, `csv configure/run/status` and
+`aerodatabox configure/run/status`; it has no manual record editor. Serving changes only through explicit flight `publish --serving-db ... --start ... --end ...`
+or reference-only `references publish --serving-db ...`. VRS and shared reference
+imports/audits remain producer tools, not private admin writes. See the
 [producer workflow](ingestion.md#interactive-jobs-and-resume) for examples,
 resumability, source licences and publication semantics.
 

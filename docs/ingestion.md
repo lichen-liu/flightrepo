@@ -14,7 +14,9 @@ pipelines from proposed reference/schedule adapters.
 | Source | Retained information | Data licence |
 | --- | --- | --- |
 | [ADSB.lol historical releases](https://www.adsb.lol/docs/open-data/historical/), including [2023](https://github.com/adsblol/globe_history_2023/releases) | Airport pair, callsign, ICAO aircraft type and inferred time bounds | [ODbL 1.0](https://github.com/adsblol/globe_history_2023/blob/main/LICENSE-ODbL.txt) |
-| [OurAirports](https://ourairports.com/data/) airport CSV | Codes and coordinates for endpoint matching | Public domain |
+| [OurAirports](https://ourairports.com/data/) [airport CSV](https://davidmegginson.github.io/ourairports-data/airports.csv) | IATA/ICAO, names, municipality/country/region, coordinates and extraction elevation | Public domain |
+| [VRS standing data](https://github.com/vradarserver/standing-data), [ADSB.lol mirror](https://github.com/adsblol/vrs-standing-data) | Private [routes CSV](https://vrs-standing-data.adsb.lol/routes.csv) and [airport mapping CSV](https://vrs-standing-data.adsb.lol/airports.csv); compact per-leg audit result published | CC0-1.0 |
+| [VRS airline/operator CSV](https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv) | Shared carrier names and ICAO/IATA references; original callsign preserved | CC0-1.0 |
 
 Treat extracted ADSB records as a derivative database. Retain ADSB.lol attribution
 and licence links; distribution must follow ODbL notice/share-alike and database
@@ -160,6 +162,7 @@ python -m ingestion --db var/ingestion/ingestion.db
 ```text
 ingest> sources
 ingest> adsblol prepare --start 2023-07-01 --end 2023-12-31 --finish-year
+ingest> adsblol workspace --ram-mount /Volumes/FlightIngestRaw
 ingest> adsblol run --start 2023-07-01 --end 2023-07-03
 ingest> adsblol run --start 2023-08-10 --end 2023-08-12
 ingest> adsblol status
@@ -230,7 +233,7 @@ see the [adoption and audit workflow](ingestion-review.md). Producer `adopt` and
 
 Publish an explicit inclusive UTC range, one atomic transaction per day. It
 copies non-held flight facts (including partial/cancelled records for lookup),
-the airport/transfer catalog and relevant source attribution. Search keeps its
+the airport/transfer and operator catalogs, their snapshot provenance and relevant source attribution. Search keeps its
 usual complete-time/cancellation filters. Airport estimates retain visible
 labels and unverified status. Unknown-reason exclusions and unrelated reference documents
 stay private. Receipts, raw inputs, boundary state and profiles never copy.
@@ -243,10 +246,26 @@ Clearing ingestion alone does not change serving; a later explicit publication
 reconciles only its requested dates. Never swap or rename an ingestion database
 into the serving path: the backend rejects its stored role.
 
-## RAM-backed raw downloads
+## Storage placement and RAM-backed workspace
 
-For this host, temporary daily archives use a **4 GiB RAM disk**. Durable SQLite
-files, receipts, boundary state and logs remain on disk. Only one raw day is held;
+The **temporary per-day extraction database belongs on RAM**, alongside its raw
+archive. The **private ingestion database is durable and belongs on disk**, as
+does serving; neither is a disposable temporary database.
+
+| Artifact | Placement | Lifetime |
+| --- | --- | --- |
+| Raw archives / partial downloads | Verified RAM filesystem | Current day; verified raw removed after successful commit |
+| `.day-stage-*/day.db` and its journal | Same verified RAM session | Disposable staging; removed on success/failure, recreated on retry |
+| Extraction SQL sort/temp tables | Process memory (`temp_store=MEMORY`) | Current extraction connection |
+| VRS/operator reference downloads | Bounded process-memory buffers | Parsed into SQLite, no temporary raw CSV copy |
+| Prepared manifest / pinned airport CSV | Durable working root on disk | Reproducible input metadata, reused across batches |
+| Private `ingestion.db`, serving DB and WAL/SHM | Durable disk, outside the RAM mount | Committed facts, evidence, boundaries, admin state and DB-only quota |
+| Receipts, logs, reports and atomic report/receipt update files | Durable disk | Observable progress/recovery evidence |
+| Adoption / serving replacement staging copies | Destination's durable disk | SQLite backup and atomic publication handoff; not disposable day staging |
+| Bulk audit correction-plan spool | OS temporary storage on disk | Maintenance scratch; never raw traces or the day extraction DB |
+
+The completed host run used a **4 GiB RAM disk**; no RAM mount is kept active
+after ingestion finishes. Mount it before a new run. Only one raw day is held;
 verified inputs are removed after commit. The largest selected 2023 daily copy is
 about 1.81 GiB, leaving room for the downloader's mandatory 1 GiB free-space reserve.
 Larger future daily selections fail the free-space check rather than overflow.
@@ -259,15 +278,24 @@ RAM device** with `diskutil eraseVolume HFS+ FlightIngestRaw <returned-device>`.
 On Linux, use an explicitly size-limited `tmpfs` mount. Then bind a working root:
 
 ```sh
-python -m ingestion.adsblol.scratch \
+flyji-ingest --db var/ingestion/ingestion.db adsblol workspace \
   --data-root var/ingestion/adsblol-work \
-  --mount /Volumes/FlightIngestRaw \
-  --output-db var/ingestion/ingestion.db \
-  --wait
+  --ram-mount /Volumes/FlightIngestRaw --wait
 ```
 
-Use that same `--data-root` for the normal producer job. This operation only
-configures temporary storage; it neither initializes nor changes database rows.
+Use that same `--data-root` for preparation and ingestion. This named producer
+command persists the workspace choice in the private source profile; it can
+initialize the private store but does not write flight facts. The underlying
+`python -m ingestion.adsblol.scratch` binding helper remains available for frozen
+legacy workers, without initializing/changing database rows.
+
+Producer runs require verified RAM unless disk workspace was **explicitly** chosen
+with `adsblol workspace --disk-workspace` (or `--disk-workspace` on configure/run).
+That opt-in supports CI and hosts where RAM scratch is inappropriate; it is not
+a fallback after mount loss. `--ram-mount` is also accepted on configure/run.
+A RAM-bound root cannot switch to disk; use a separate root for an explicit disk
+workflow. Status reports raw/staging paths, storage mode and unavailable mount
+errors read-only. Binding rejects a durable database under the RAM mount.
 It verifies the mount is a macOS `ram://` device or Linux `tmpfs`, obtains the
 extractor's daily/output locks, and links `raw` into a dedicated RAM directory.
 `--wait` lets a running day finish, commit and clean its input before switching;
@@ -277,8 +305,8 @@ unfinished archives/partial downloads are never moved or discarded. A small
 The durable `.raw-storage.json` and a volatile session marker identify the mount.
 New producers recheck mount/device/link/session during working-space IO and stop
 if it disappears; they never silently download to the old disk directory. The
-working-space budget includes RAM raw/partial files independently of DB quota.
-The already-running frozen legacy worker can use this same link without changing
+working-space budget includes RAM raw/partial files and day staging independently of DB quota.
+A frozen legacy worker can use this same link without changing
 its code; it retains its existing filesystem free-space guard. Keep its volume
 mounted until the entire job stops. Before resuming any frozen worker, explicitly
 check the recorded mount/session: it does not have the new per-IO mount checks.
@@ -315,65 +343,23 @@ days; retained inputs or redownloads are required. These counters describe aircr
 sample rows and movement fragments, **not missing-flight percentages**. Compare
 accepted legs against a trusted flight list before claiming completeness.
 
-### January 2024 pilot
+## Completed July–December 2023 extraction
 
-Run the relaxed rules in a separate database before replacing the July–December
-2023 extraction. Prepare December 31 through February 1 for overnight context;
-report January departures separately from these boundary days. Use only ADSB.lol
-observations and the airport reference already used by extraction. There are no
-tail lookup APIs, commercial operator lists or external flight-validation joins.
+Measured on October 16, 2026: 185 input/context days transferred about **283.93 GiB**
+one day at a time; the largest preferred daily archive was **1.81 GiB**. The private
+store retained **5,539,724 legs**. Publication retained **5,539,206** July–December
+UTC departure records across **158,474 directed airport pairs** and **2,312 airports**;
+518 June 30 boundary records stayed private. All published records are searchable
+under the approved labeled policy, not certified complete or accurate schedules.
 
-Report daily candidate/searchable/review counts, available aircraft types,
-exclusions and rejection reasons, database bytes, and successful raw-input cleanup.
-`metadata.accepted_under_relaxed_review` counts evaluated candidates that no longer
-need review because of the relaxed gap/callsign rules. These candidate events can
-include later boundary refinements; use database counts for unique itineraries.
-Treat a pilot as operationally successful only after all days commit, database
-integrity/foreign-key and duplicate checks pass, itinerary time bounds are valid,
-and search/calendar can read eligible records. Inspect representative airport
-pairs and unusually long legs using retained itinerary fields. This is a
-best-effort reconstruction, not a completeness or accuracy guarantee. Airport
-estimates alone are searchable with visible labels; gap and timing cases remain
-private and available to admin for read-only inspection.
-
-## Measured storage
-
-The prepared July–December 2023 manifest plus one arrival-boundary day transfers
-about **283.93 GiB** across 185 daily inputs; its largest day is **1.81 GiB**.
-Only the current day needs raw working space. A relaxed July 10, 2023 pilot
-reconstructed **21,048 candidates** from a **1.13 GiB** archive containing 42,846
-aircraft-days: 1,322 had ground endpoints and 19,726 used airborne proximity.
-Under the earlier blanket estimate exclusion, **287** candidates were searchable
-and **20,761** awaited review. The ingestion database occupied about **31.5 MiB**, including airport metadata,
-receipts and overnight summaries. These historical admission counts predate the
-current labeled-estimate policy and do not measure complete flight coverage.
-
-A limited independent comparison against the official
-[BTS July 2023 reporting-carrier file](https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_2023_7.zip)
-found 4,992 matching airport pairs and 375 disagreements among comparable numeric
-callsigns for nine US carrier prefixes. Most disagreements were proximity
-estimates; some ground candidates crossed unobserved stops. This check does not
-verify tail identity, timestamps, types or worldwide recall. It motivated the
-earlier blanket review gate, rather than a claim of lossless extraction. Under that earlier gate,
-all 375 disagreements were retained for review; 70 comparable searchable records
-agreed and one had no reference match. This small subset does not establish
-global accuracy. The current labeled-estimate admission intentionally accepts
-some airport-assignment risk; those earlier agreement results do not establish
-accuracy for the expanded searchable set.
-
-Under the older strict extractor, a historical December 30, 2025 pilot
-processed 2.98 GiB/61,215 aircraft-days into 2,138 accepted legs across 39 types.
-Its earlier JSON representation used about 504 bytes/leg with the identity index;
-a compacted typed-fact probe used about **244 bytes/leg** with the identity and two
-observed-time indexes. Aircraft-days and flight-leg counts are not comparable.
-
-At 244 bytes/leg, 20 GiB would hold roughly 88 million fact rows before metadata:
-about 4.8 years at 50,000 legs/day or 2.4 years at 100,000. This is a fact-only
-estimate. In a pre-reset live sample, 3,783 accepted legs over 69 days occupied
-0.93 MiB of facts/indexes, while overnight summaries/index occupied 58.3 MiB.
-Boundary state, diagnostics, airport metadata and WAL materially affect capacity.
-Validate coverage first; compact boundary state without breaking disjoint backfills
-before extrapolating whole-database storage or ingesting more years.
+The populated shared catalog has **8,801 named/geolocated airports** and **5,965
+carrier/operator references**; 4,374,105 serving records resolve an undated ICAO
+operator name. **5,520,456 records** retain aircraft type codes. The serving SQLite
+family is about **3.85 GiB**, and private ingestion about **5.99 GiB**, each under its
+own persisted 20 GiB quota. Sizes include indexes/reference data and vary with WAL,
+checkpoints and later edits. Do not extrapolate fact-only byte estimates as full
+archive capacity. [Earlier pilots and storage estimates](research/ingestion-pilots.md)
+are historical comparisons, not the current admission policy.
 
 ## Selected verification and timing scope
 
@@ -395,8 +381,8 @@ audits the cached reference automatically, fetching it once when absent by defau
 (`--vrs auto`); serving reads never download or audit.
 
 Current admission and smart review are specified in [itinerary quality](itinerary-quality.md).
-Earlier pilot/held counts above are historical measurements under their recorded policies;
-they must not be read as the current search admission rule.
+The linked historical pilot/held counts describe their recorded policies, not
+the current search admission rule.
 
 
 ## Airport and operator names (shared catalog)
@@ -432,12 +418,3 @@ all reference fields and manual metadata. Clear/reset removes catalog snapshots
 alongside data without unlinking a live SQLite family. Each database's persisted
 quota still covers only its own SQLite/WAL/SHM, excluding raw workspace.
 See [schema semantics](database-schema.md#shared-airport-and-operator-reference-catalog).
-
-
-When RAM storage is bound, both raw downloads and disposable per-day SQLite
-staging (including its journal) use that verified RAM session. SQLite temporary
-sort tables for extraction stay in process memory. Losing the bound mount/session
-fails before extraction; it never silently moves these writes onto SSD. Durable
-serving/ingestion SQLite, their WAL/SHM, receipts, logs and atomic receipt-update
-files remain on disk. Unbound general-purpose CLI roots retain explicit disk mode;
-configure RAM storage before archive ingestion on this host.

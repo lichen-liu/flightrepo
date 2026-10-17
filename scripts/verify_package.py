@@ -90,6 +90,7 @@ def probe_ingestion(executable, directory, environment):
     arguments = [
         "adsblol",
         "run",
+        "--offline",
         "--manifest",
         str(manifest),
         "--airport-catalog",
@@ -118,6 +119,10 @@ def probe_ingestion(executable, directory, environment):
         events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
         return next(event for event in events if event["event"] == "day_finished")
 
+    workspace = json.loads(
+        invoke(["adsblol", "workspace", "--disk-workspace", "--data-root", str(root)]).stdout
+    )
+    assert workspace["workspace"]["mode"] == "disk"
     event = finished(invoke(arguments))
     assert event["records_applied"] == 2 and not event["counts_historical"]
     counts = event["diagnostics"]["counts"]
@@ -131,6 +136,23 @@ def probe_ingestion(executable, directory, environment):
     status = json.loads(invoke(["adsblol", "status"]).stdout)
     assert status["records"] == 2 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
+    # Seed both reference catalogs locally: this installed probe must never depend
+    # on GitHub availability or silently fetch carrier data during publication.
+    carriers = root / "carriers.csv"
+    carriers.write_text("Code,Name,ICAO,IATA\nUAL,United Airlines,UAL,UA\n")
+    catalogs = json.loads(
+        invoke(
+            [
+                "references",
+                "refresh",
+                "--airports-csv",
+                str(airports),
+                "--carriers-csv",
+                str(carriers),
+            ]
+        ).stdout
+    )
+    assert {item["kind"] for item in catalogs} == {"airports", "carriers"}
     serving = root / "serving.db"
     published = json.loads(
         invoke(
@@ -158,6 +180,15 @@ def probe_ingestion(executable, directory, environment):
         text=True,
     )
     assert json.loads(inspected.stdout)["rows"] == [[2]]
+    operator = subprocess.run(
+        admin_prefix + ["inspect", "query", "SELECT operator_name FROM flights LIMIT 1"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(operator.stdout)["rows"] == [["United Airlines"]]
     blocked = subprocess.run(
         admin_prefix + ["maintenance", "init"],
         cwd=directory,

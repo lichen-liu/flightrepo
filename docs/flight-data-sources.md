@@ -3,9 +3,9 @@
 Research checked **2026-10-15, America/Toronto**; admission policy updated October 16. This consolidates the supplied
 research handoff and our access tests. It is a source-selection reference, not a
 list of installed adapters. The [earlier source inventory](research/previous-flight-source-inventory.md) also
-preserves regional, aggregate, research-only and gated options. The running
-ingestion remains ADSB.lol-only plus the
-existing airport reference. New probes neither publish flights nor change review
+preserves regional, aggregate, research-only and gated options. The implemented pipeline uses ADSB.lol flight observations, OurAirports metadata,
+VRS route checks and VRS operator names. Research-only probes neither publish
+flights nor change review
 flags, human approvals or serving data.
 
 ## Current selection: historical operated flights only
@@ -16,6 +16,8 @@ The user selected this scope on October 15, 2026:
 | --- | --- | --- |
 | Main historical itinerary and aircraft type | ADSB.lol daily archives | Best-effort observed/inferred legs, with retained bounds, uncertainty and observed type |
 | Automatic route verification signal | VRS CC0 standing data | Undated callsign/adjacent-airport association; route plausibility, not proof of historical operation |
+| Airport identity and names | OurAirports | IATA/ICAO names, geography, coordinates/elevation; timezone enrichment is tracked in [#21](https://github.com/lichen-liu/flightrepo/issues/21) |
+| Operator names | VRS airline/operator CSV | Undated ICAO-to-name reference; does not establish the historic or marketing carrier |
 | Requested timing reference | Flight.info | A date-valid historical timetable could support **scheduled** timing; tested current/upcoming pages do not supply 2023 actual timing |
 | Requested actual timing reference | Flightradar24 | Needs permitted access, retention rights and the exact historical instance; no free persistent automated path has been established |
 
@@ -26,9 +28,11 @@ Existing scheduled/actual/observed fields remain distinct: a historical schedule
 time must not be presented as takeoff/landing or replace the observed uncertainty.
 
 [VRS producer tools](vrs-verification.md) support import, read-only reporting and
-explicit best-effort admission. A matching directed pair can confirm estimated
-airports and waive an observation-gap hold. Endpoints, times, aircraft types,
-timing/other blocking reasons and human approvals remain unchanged. Flight.info/FR24 timing extraction is not enabled: historical
+explicit best-effort audit. A directed match replaces the unconfirmed-airport
+label and makes the gap label informational. The approved admission policy makes
+all four known uncertainty categories searchable with labels, including timing
+conflicts; unknown reasons and unusable/cancelled/deleted facts stay excluded.
+Original endpoints, times, aircraft types, reasons and human approvals remain unchanged. Flight.info/FR24 timing extraction is not enabled: historical
 coverage, matching and access constraints still need resolution. The ADSB job and
 previously approved adoption/audit/publication workflow can proceed independently.
 
@@ -52,7 +56,7 @@ Batch lookup, paginated collection and whole-database download are different.
 | --- | --- | --- | --- | --- |
 | [ADSB.lol historical archives](https://www.adsb.lol/docs/open-data/historical/) | Daily release archives; ODbL-1.0; no per-flight key | Observations yield best-effort inferred legs, not independent proof of their endpoints | Past observations only; retain available observed aircraft type | Running one raw day at a time; [pipeline](ingestion.md) |
 | [BTS reporting-carrier on-time data](https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FGJ) | Public federal monthly ZIP/CSV; source notices retained | Dated US reporting-carrier flights, identifiers, tail and operating times; includes cancellation/diversion evidence | Historical only; no per-flight aircraft type field | Existing limited comparison; not a new installed source |
-| [VRS standing data](https://github.com/vradarserver/standing-data), [ADSB.lol mirror](https://github.com/adsblol/vrs-standing-data) | Whole CSVs or Git snapshot; CC0-1.0 | Undated callsign-to-airport-chain plausibility; current associations can disagree with historical operations | No service dates, departure/arrival times or aircraft assignment | Whole route CSV downloaded and local comparison demonstrated |
+| [VRS standing data](https://github.com/vradarserver/standing-data), [ADSB.lol mirror](https://github.com/adsblol/vrs-standing-data) | Whole CSVs or Git snapshot; CC0-1.0 | Undated callsign-to-airport-chain plausibility; current associations can disagree with historical operations | No service dates, departure/arrival times or aircraft assignment | Implemented: reproducible private import, daily audit and published per-leg confidence; carrier catalog also imported |
 | [OurAirports](https://ourairports.com/data/) | Whole CSVs; public domain | Airport identity, coordinates and elevation for geometric checks | Airport metadata only; no schedules or reliable flight-specific timezone offsets | Existing airport reference |
 | [FAA aircraft register](https://www.faa.gov/licenses_certificates/aircraft_certification/aircraft_registry/releasable_aircraft_download) | Public daily bulk archive with master and make/model reference files | Possible US registration-to-model enrichment; ownership/registration change over time | Registry identity only; not a flight or schedule source | Documentation checked; no new registry import |
 | [Taiwan CAA international/cross-strait timetable](https://data.gov.tw/en/datasets/9973) | One CSV; free; Open Government Data License 1.0, [terms](https://data.gov.tw/license) | A saved date-valid edition can support planned-service evidence; not proof of actual operation | Recurrence periods, both local times and planned equipment; Taiwan-related international/cross-strait scope | Live whole-file download and date expansion demonstrated |

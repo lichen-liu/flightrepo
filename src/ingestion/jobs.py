@@ -13,6 +13,7 @@ from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.pipeline import extract_range, extraction_status, inventory
 from ingestion.adsblol.policy import ExtractionPolicy
 from ingestion.adsblol.prepare import prepare_inputs
+from ingestion.adsblol.scratch import CONFIG, bind_ram, require_workspace, workspace_state
 from ingestion.providers.aerodatabox import AeroDataBoxProvider
 from ingestion.providers.csv_feed import CsvProvider
 from ingestion.service import IngestionService
@@ -51,6 +52,9 @@ def configure_parser(ingest, *, writable=True):
         offline=False,
         departure_year=None,
         finish_year=False,
+        ram_mount=None,
+        disk_workspace=False,
+        wait=False,
     )
     sources = ingest.add_subparsers(dest="source")
     sources.add_parser("sources", help="show each pipeline's purpose and configured state")
@@ -59,6 +63,22 @@ def configure_parser(ingest, *, writable=True):
         actions = source.add_subparsers(dest="ingest_action")
         source.set_defaults(ingest_action="run" if writable else "status")
         if name == "adsblol" and writable:
+            workspace = actions.add_parser(
+                "workspace", help="bind raw/day staging to RAM, or explicitly choose disk"
+            )
+            workspace.add_argument("--data-root", type=Path)
+            choice = workspace.add_mutually_exclusive_group(required=True)
+            choice.add_argument(
+                "--ram-mount", type=Path, help="existing verified RAM filesystem mount"
+            )
+            choice.add_argument(
+                "--disk-workspace", action="store_true", help="explicitly opt into disk raw/staging"
+            )
+            workspace.add_argument(
+                "--wait",
+                action="store_true",
+                help="wait for the current extraction day before binding RAM",
+            )
             prepare = actions.add_parser(
                 "prepare", help="fetch archive manifest and airport CSV; no raw flights downloaded"
             )
@@ -93,6 +113,17 @@ def configure_parser(ingest, *, writable=True):
                     help="explicit destination override; default is selected database",
                 )
                 if action != "status":
+                    choice = command.add_mutually_exclusive_group()
+                    choice.add_argument(
+                        "--ram-mount",
+                        type=Path,
+                        help="bind raw/day staging to this verified RAM mount",
+                    )
+                    choice.add_argument(
+                        "--disk-workspace",
+                        action="store_true",
+                        help="explicitly opt into disk raw/staging",
+                    )
                     command.add_argument(
                         "--manifest", type=Path, help="prepared daily archive manifest JSON"
                     )
@@ -179,6 +210,22 @@ def save_profile(path, source, data):
         )
 
 
+def select_workspace(args, path, data, *, required):
+    root = Path(data["data_root"])
+    if args.ram_mount:
+        bind_ram(root, args.ram_mount, output_db=path, wait=args.wait)
+        data["workspace_mode"] = "ram"
+    elif args.disk_workspace:
+        if (root / CONFIG).exists():
+            raise ValueError("RAM-bound root cannot fall back to disk; select a fresh --data-root")
+        data["workspace_mode"] = "disk"
+    if required or data.get("workspace_mode"):
+        state = require_workspace(root, output_db=path, mode=data.get("workspace_mode"))
+        data["workspace_mode"] = state["mode"]
+        return state
+    return workspace_state(root, output_db=path)
+
+
 def run_ingestion(args, path, settings, emit, *, interactive=False):
     if args.ingest_action not in ("status",) and args.source != "sources":
         from core.database_roles import ingestion_target
@@ -195,6 +242,16 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 "pipelines": [
                     {"source": source, "purpose": PURPOSES[source], "configured": source in saved}
                     for source in SOURCES
+                ],
+                "reference_pipelines": [
+                    {
+                        "command": "vrs import/audit/report",
+                        "purpose": "CC0 undated callsign-to-route reference; no actual timing",
+                    },
+                    {
+                        "command": "references refresh/publish",
+                        "purpose": "OurAirports airport metadata and CC0 VRS operator names",
+                    },
                 ],
                 "reference_evidence": "document FILE stores normalized API/tool evidence; publication is explicit",
                 "producer_api": "IngestionStore + IngestionService",
@@ -217,6 +274,16 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
     if args.ingest_action != "status":
         # The selected ingestion store is the only pipeline destination.
         data["output_db"] = str(path)
+    if args.ingest_action == "workspace":
+        data["data_root"] = str(
+            (args.data_root or Path(data.get("data_root", path.with_name(path.name + ".adsblol"))))
+            .expanduser()
+            .resolve()
+        )
+        state = select_workspace(args, path, data, required=True)
+        save_profile(path, source, data)
+        emit({"source": source, "workspace": state, "profile": data})
+        return
     if args.ingest_action == "prepare":
         first, last = args.start, args.end
         if interactive:
@@ -263,6 +330,15 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
                 {
                     "source": source,
                     **extraction_status(root, args.output_db or data.get("output_db") or path),
+                    "workspace": workspace_state(
+                        root, output_db=args.output_db or data.get("output_db") or path
+                    )
+                    | (
+                        {"mode": "disk"}
+                        if data.get("workspace_mode") == "disk"
+                        and not (Path(root) / CONFIG).exists()
+                        else {}
+                    ),
                 }
             )
         else:
@@ -353,6 +429,8 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
     elif source == "csv" and not Path(data["csv"]).is_file():
         raise ValueError("Licensed CSV file must exist")
     if args.ingest_action == "configure":
+        if source == "adsblol":
+            select_workspace(args, path, data, required=False)
         save_profile(path, source, data)
         emit({"configured": source, "profile": data})
         return
@@ -390,6 +468,7 @@ def run_ingestion(args, path, settings, emit, *, interactive=False):
         ]
         if missing:
             raise ValueError("Archive inventory missing for " + ", ".join(missing))
+        select_workspace(args, path, data, required=True)
         save_profile(path, source, data)
         inserted = updated = skipped = 0
         for receipt in extract_range(

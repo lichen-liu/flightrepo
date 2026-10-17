@@ -52,6 +52,7 @@ def pipeline(tmp_path, monkeypatch):
     flags = [
         "adsblol",
         "configure",
+        "--disk-workspace",
         "--manifest",
         str(manifest),
         "--airport-catalog",
@@ -318,3 +319,46 @@ def test_long_adsblol_run_commits_daily_beyond_query_window_limit(pipeline, monk
     client.LocalShell(database).onecmd("adsblol run --start 2023-07-01 --end 2023-08-09")
     assert len(rows(root, "extraction_days")) == len(rows(root, "itinerary_legs")) == 40
     assert not list((root / "raw").rglob("*.tar"))
+
+
+def test_producer_run_does_not_silently_use_unconfigured_disk(pipeline):
+    database, root, downloads, flags = pipeline
+    flags.remove("--disk-workspace")
+    flags[flags.index("configure")] = "run"
+    with pytest.raises(ValueError, match="Configure RAM"):
+        client.run(flags + ["--start", "2025-01-03", "--end", "2025-01-03"])
+    assert not downloads and not database.exists() and not root.exists()
+
+
+def test_named_ram_workspace_persists_and_lost_mount_stops_next_day(
+    pipeline, tmp_path, monkeypatch, capsys
+):
+    from pathlib import Path
+
+    from ingestion.adsblol import scratch
+
+    database, root, downloads, flags = pipeline
+    ram = tmp_path / "memory"
+    ram.mkdir()
+    monkeypatch.setattr(scratch, "ram_mount", lambda mount: Path(mount).resolve())
+    monkeypatch.setattr(scratch.os.path, "ismount", lambda mount: Path(mount) == ram)
+    client.run(["adsblol", "workspace", "--data-root", str(root), "--ram-mount", str(ram)])
+    state = json.loads(capsys.readouterr().out)["workspace"]
+    assert state["mode"] == "ram" and Path(state["staging"]).resolve().is_relative_to(ram)
+    assert not database.resolve().is_relative_to(ram)
+    flags.remove("--disk-workspace")
+    client.run(flags)
+    capsys.readouterr()
+    client.run(["adsblol", "run", "--start", "2025-01-03", "--end", "2025-01-03"])
+    assert len(downloads) == 1 and len(rows(root, "itinerary_legs")) == 1
+    assert ingestion.profiles(database)["adsblol"]["workspace_mode"] == "ram"
+    capsys.readouterr()
+    marker = next(ram.rglob(".ram-session"))
+    marker.unlink()
+    client.run(["adsblol", "status"])
+    assert not json.loads(capsys.readouterr().out)["workspace"]["available"]
+    with pytest.raises(ValueError, match="no disk fallback"):
+        client.run(["adsblol", "run", "--start", "2025-01-04", "--end", "2025-01-04"])
+    assert len(downloads) == 1 and len(rows(root, "itinerary_legs")) == 1
+    with pytest.raises(ValueError, match="cannot fall back"):
+        client.run(["adsblol", "workspace", "--disk-workspace", "--data-root", str(root)])

@@ -129,3 +129,32 @@ def test_ram_binding_includes_disposable_day_staging(tmp_path, ram, monkeypatch)
     (Path(json.loads((root / scratch.CONFIG).read_text())["raw"]) / ".ram-session").unlink()
     with pytest.raises(OSError, match="no disk fallback"):
         scratch.staging_directory(root)
+
+
+def test_durable_database_cannot_live_on_ram_mount(tmp_path, ram):
+    with pytest.raises(ValueError, match="Durable ingestion SQLite"):
+        scratch.bind_ram(tmp_path / "working", ram, output_db=ram / "ingestion.db")
+    assert not (ram / "ingestion.db").exists()
+
+
+def test_workspace_state_is_read_only_and_reports_lost_session(tmp_path, ram):
+    root = tmp_path / "durable"
+    state = scratch.bind_ram(root, ram)
+    before = (root / scratch.CONFIG).read_bytes()
+    status = scratch.require_workspace(root, output_db=root / "ingestion.db")
+    assert status["mode"] == "ram" and status["available"]
+    assert Path(status["raw"]).resolve().is_relative_to(ram)
+    assert Path(status["staging"]).resolve().is_relative_to(ram)
+    assert (root / scratch.CONFIG).read_bytes() == before
+    (Path(state["raw"]) / ".ram-session").unlink()
+    assert not scratch.workspace_state(root)["available"]
+    with pytest.raises(ValueError, match="no disk fallback"):
+        scratch.require_workspace(root, output_db=root / "ingestion.db", mode="disk")
+
+
+def test_unconfigured_producer_requires_ram_or_explicit_disk(tmp_path):
+    root, database = tmp_path / "working", tmp_path / "ingestion.db"
+    with pytest.raises(ValueError, match="Configure RAM"):
+        scratch.require_workspace(root, output_db=database)
+    assert not root.exists() and not database.exists()
+    assert scratch.require_workspace(root, output_db=database, mode="disk")["mode"] == "disk"

@@ -89,6 +89,8 @@ def bind_ram(root, mount, *, output_db=None, wait=False):
         raise ValueError("Durable data root and RAM mount must be separate")
     root.mkdir(parents=True, exist_ok=True)
     database = Path(output_db).resolve() if output_db else root / "itineraries.db"
+    if database == mount or mount in database.parents:
+        raise ValueError("Durable ingestion SQLite must be outside the RAM workspace")
     lock = database.with_name(database.name + ".extraction.lock")
     with file_mutex(root / ".extract.lock", blocking=wait) as acquired:
         if not acquired:
@@ -141,6 +143,47 @@ def bind_ram(root, mount, *, output_db=None, wait=False):
                 shutil.rmtree(target)
                 raise
             return state
+
+
+def workspace_state(root, *, output_db=None):
+    """Read-only storage diagnostics, including an unavailable bound mount."""
+    root = Path(root).expanduser().resolve()
+    configured = (root / CONFIG).exists()
+    result = dict(
+        mode="ram" if configured else "unconfigured",
+        available=True,
+        raw=str(root / "raw"),
+        staging=str(root / "raw" if configured else root),
+        database=str(Path(output_db).resolve()) if output_db else None,
+    )
+    try:
+        raw_directory(root)
+        if configured:
+            state = json.loads((root / CONFIG).read_text())
+            result.update(mount=state["mount"], capacity_bytes=state["capacity_bytes"])
+            mount = Path(state["mount"])
+            if output_db and (
+                Path(output_db).resolve() == mount or mount in Path(output_db).resolve().parents
+            ):
+                raise ValueError("Durable ingestion SQLite must be outside the RAM workspace")
+    except (OSError, ValueError, KeyError) as error:
+        result.update(available=False, error=str(error))
+    return result
+
+
+def require_workspace(root, *, output_db, mode=None):
+    """Producer default is verified RAM; disk storage requires an explicit opt-in."""
+    state = workspace_state(root, output_db=output_db)
+    if not state["available"]:
+        raise ValueError(state["error"])
+    if state["mode"] == "ram":
+        return state
+    if mode == "disk":
+        return state | {"mode": "disk"}
+    raise ValueError(
+        "Configure RAM storage with adsblol workspace --ram-mount MOUNT before running; "
+        "disk working space requires explicit --disk-workspace"
+    )
 
 
 def main():

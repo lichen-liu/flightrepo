@@ -76,7 +76,9 @@ python -m admin --db var/ingestion/ingestion.db inspect query \
 Review large held/conflict cohorts first and collect date-specific evidence when
 available. Keep uncertainty/conflict labels visible; do not invent endpoint/time fixes. Preserve explicit human
 approvals. Publication continues to copy only eligible itinerary facts and airport
-metadata; reference tables and reports never enter serving SQLite.
+metadata. Private route/airport-chain reference tables and reports never enter
+serving. The separate shared `carriers` dimension and its provenance are explicitly
+published for operator names; see [reference catalogs](ingestion.md#airport-and-operator-names-shared-catalog).
 
 ## Explicit best-effort route admission
 
@@ -101,7 +103,8 @@ airport pair, mapped reference chain and audit result: exact, adjacent, differen
 incomplete or missing. Negative results never count as route verification. SQL, routing, calendar, admin, audit and publication use
 the same policy. Changed callsigns/endpoints invalidate old evidence. The private
 store retains an immutable snapshot receipt in `ingestion_documents`; only compact
-per-flight evidence and VRS attribution enter serving, never the reference catalog.
+per-flight route evidence and VRS attribution enter serving, never the private
+route/airport-chain catalog. The shared operator-name catalog is a separate dimension.
 An explicit writer performs an additive field/view upgrade for existing stores.
 Old readers that only understand positive matches must be upgraded before
 negative results are published. [Unified confidence labels and review](itinerary-quality.md)

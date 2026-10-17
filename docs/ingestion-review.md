@@ -10,9 +10,14 @@ approval or historical timing. Unknown reasons remain excluded. Future schedule
 ingestion is deferred; Flight.info/FR24 historical timing access is not yet established.
 Admin can inspect the private SQLite tables but cannot launch these writes.
 
-## 1. Finish the existing job
+## 1. Finish a legacy job before adoption
 
-Keep its pinned runtime and successful days. The July–December 2023 job includes
+Adoption is only for an existing unmarked v5 archive. Normal new producer jobs
+write directly to private ingestion SQLite and do not need adoption. Never
+reset an already adopted store to repeat this handoff.
+
+Keep a running legacy job's pinned runtime and successful days. The completed
+July–December 2023 job included
 **2024-01-01 as an arrival-context input**, retaining 2023 departures. Do not restart
 it against the new store or overwrite its raw-day directory. Final validation must
 check every expected input day, not only the latest date. Preserve its source DB
