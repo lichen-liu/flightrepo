@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>boboji Operations — design preview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font:
+          14px/1.5 system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: #e9eff8;
+        background: #0b1019;
+        --muted: #9aa9bd;
+        --line: #293445;
+        --green: #84dfbf;
+        --amber: #f1c57b;
+        --red: #ff969f;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button,
+      select {
+        font: inherit;
+        color: inherit;
+        background: #141d2b;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 8px 12px;
+        min-height: 38px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover,
+      select:hover {
+        border-color: #7d90ac;
+      }
+      button:focus-visible,
+      select:focus-visible,
+      a:focus-visible {
+        outline: 2px solid #a8baff;
+        outline-offset: 3px;
+      }
+      button[aria-pressed="true"] {
+        border-color: #9fb2fc;
+        background: #273650;
+        color: #dce5ff;
+      }
+      a {
+        color: #b5c6ff;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        font-size: 30px;
+        font-weight: 620;
+        letter-spacing: -0.035em;
+      }
+      h2 {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      h3 {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .muted,
+      small {
+        color: var(--muted);
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 16px 32px;
+        background: #0e1521;
+        flex-wrap: wrap;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        letter-spacing: 0.04em;
+      }
+      .brand b {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid #465d74;
+        border-radius: 9px;
+        color: var(--green);
+      }
+      .preview {
+        color: var(--amber);
+        border: 1px solid #665436;
+        border-radius: 20px;
+        padding: 4px 10px;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+      }
+      main {
+        max-width: 1800px;
+        margin: auto;
+        padding: 28px 32px 48px;
+      }
+      .heading,
+      .controls,
+      .section-heading,
+      .card-title,
+      .legend,
+      .summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .heading {
+        align-items: flex-start;
+        margin-bottom: 24px;
+      }
+      .heading p {
+        margin-top: 5px;
+        color: var(--muted);
+      }
+      .controls {
+        justify-content: flex-start;
+        margin-bottom: 18px;
+      }
+      .controls label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .group {
+        display: flex;
+        gap: 4px;
+      }
+      .divider {
+        width: 1px;
+        height: 26px;
+        background: var(--line);
+        margin: 0 6px;
+      }
+      .summary {
+        align-items: stretch;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-bottom: 22px;
+      }
+      .summary > div {
+        padding: 17px 20px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #111a27;
+      }
+      .summary small {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .summary strong {
+        font-size: 25px;
+        font-weight: 550;
+        letter-spacing: -0.03em;
+      }
+      .summary span {
+        margin-left: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .site-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .site-card,
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: #111925;
+        overflow: hidden;
+      }
+      .card-top {
+        padding: 20px 22px 0;
+      }
+      .card-title p {
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .status {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--green);
+        white-space: nowrap;
+      }
+      .status::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 100%;
+        background: currentColor;
+      }
+      .warn {
+        color: var(--amber);
+      }
+      .bad {
+        color: var(--red);
+      }
+      .unknown {
+        color: #acb7c8;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 22px;
+      }
+      .stats dt {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .stats dd {
+        margin: 0;
+        font-size: 25px;
+        font-weight: 520;
+        letter-spacing: -0.03em;
+      }
+      .stats dd small {
+        font-size: 12px;
+      }
+      .chart {
+        padding: 0 15px;
+        position: relative;
+      }
+      .chart svg {
+        width: 100%;
+        height: 135px;
+        display: block;
+        overflow: visible;
+      }
+      .chart-label {
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 7px 0;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: #8090a8;
+        padding: 0 7px 8px;
+      }
+      .legend {
+        padding: 0 22px 15px;
+        justify-content: flex-start;
+        gap: 14px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .swatch {
+        display: inline-block;
+        width: 14px;
+        height: 2px;
+        vertical-align: middle;
+        margin-right: 5px;
+      }
+      .replica-wrap {
+        border-top: 1px solid var(--line);
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+        font-size: 12px;
+      }
+      th {
+        font-weight: 450;
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td,
+      th {
+        padding: 10px 14px;
+        border-bottom: 1px solid #243040;
+        white-space: nowrap;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      .replica-wrap td:first-child,
+      .replica-wrap th:first-child {
+        padding-left: 22px;
+      }
+      .replica-button {
+        border: 0;
+        padding: 0;
+        min-height: 30px;
+        background: transparent;
+        color: #bed1ff;
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+      .deployment {
+        padding: 10px 22px;
+        background: #101722;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .panel {
+        margin-top: 20px;
+      }
+      .section-heading {
+        padding: 17px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      .section-heading small {
+        font-size: 11px;
+      }
+      .host-name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .bar {
+        display: inline-block;
+        height: 5px;
+        width: 75px;
+        background: #283447;
+        border-radius: 5px;
+        vertical-align: middle;
+        margin-right: 8px;
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        background: #93b4dc;
+      }
+      .bottom-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+        gap: 20px;
+      }
+      .log {
+        display: grid;
+        grid-template-columns: 65px 55px 1fr;
+        gap: 10px;
+        padding: 11px 20px;
+        font:
+          11px/1.6 ui-monospace,
+          monospace;
+        border-bottom: 1px solid #202c3c;
+      }
+      .log:last-child {
+        border: 0;
+      }
+      .log .message {
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+      .log time {
+        color: var(--muted);
+      }
+      .pipeline {
+        padding: 18px 20px;
+      }
+      .pipeline > div {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 0;
+      }
+      .pipeline p {
+        margin-top: 12px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .notice {
+        border: 1px solid #675338;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 20px;
+        color: #f1d4a2;
+        background: #2b241c;
+        font-size: 12px;
+      }
+      .notes {
+        margin-top: 22px;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 11px;
+        flex-wrap: wrap;
+      }
+      #selection {
+        font-size: 12px;
+        color: #bdcfff;
+      }
+      @media (min-width: 1700px) {
+        .chart svg {
+          height: 160px;
+        }
+      }
+      @media (max-width: 1050px) {
+        .heading {
+          display: block;
+        }
+        .heading > .controls {
+          margin-top: 16px;
+        }
+        .site-grid,
+        .bottom-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 600px) {
+        header {
+          padding: 14px 16px;
+        }
+        main {
+          padding: 20px 14px;
+        }
+        .summary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .summary > div {
+          padding: 12px;
+        }
+        .summary strong {
+          font-size: 21px;
+        }
+        .summary span {
+          display: block;
+          margin: 2px 0 0;
+        }
+        .controls {
+          gap: 10px;
+        }
+        button,
+        select {
+          min-height: 42px;
+        }
+        .divider {
+          display: none;
+        }
+        .card-top {
+          padding: 16px 16px 0;
+        }
+        .stats dd {
+          font-size: 22px;
+        }
+        .legend {
+          padding-left: 16px;
+        }
+        .section-heading {
+          align-items: flex-start;
+        }
+        .log {
+          padding: 10px 14px;
+          grid-template-columns: 55px 45px 1fr;
+          gap: 5px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <b>b/</b><strong>boboji</strong><span class="muted">/ Operations</span>
+      </div>
+      <span class="preview">DESIGN PREVIEW · FICTIONAL DATA</span>
+    </header>
+    <main>
+      <div class="heading">
+        <div>
+          <h1>Service overview</h1>
+          <p>Public availability, application performance and shared hosts.</p>
+        </div>
+        <div class="controls">
+          <label
+            >Topology
+            <select id="topology" aria-label="Topology">
+              <option value="single">One replica per site</option>
+              <option value="local">Multiple · one host</option>
+              <option value="distributed">Multiple · two hosts</option>
+            </select></label
+          >
+          <label
+            >Scenario
+            <select id="scenario" aria-label="Scenario">
+              <option value="normal">Normal</option>
+              <option value="replica">One replica fails</option>
+              <option value="collector">Collector stops</option>
+              <option value="host">Serving host offline</option>
+            </select></label
+          >
+        </div>
+      </div>
+      <div class="controls">
+        <div class="group" aria-label="Filter by site">
+          <button data-site="all" aria-pressed="true">All sites</button
+          ><button data-site="flightrepo" aria-pressed="false">Flyji</button
+          ><button data-site="trip_dollar" aria-pressed="false">
+            Trip Split
+          </button>
+        </div>
+        <span class="divider"></span>
+        <label
+          >Host
+          <select id="host" aria-label="Host">
+            <option value="all">All hosts</option>
+            <option value="mac-01">mac-01</option>
+            <option value="linux-01" disabled>linux-01</option>
+          </select></label
+        >
+        <label
+          >Window
+          <select id="window" aria-label="Window">
+            <option value="30">30 minutes</option>
+            <option value="60" selected>1 hour</option>
+            <option value="360">6 hours</option>
+          </select></label
+        >
+        <span class="divider"></span>
+        <div class="group" aria-label="Chart metric">
+          <button data-metric="latency" aria-pressed="true">Latency</button
+          ><button data-metric="traffic" aria-pressed="false">Traffic</button>
+        </div>
+        <label
+          ><input id="replica-lines" type="checkbox" checked /> Replica
+          lines</label
+        >
+      </div>
+      <p id="notice" class="notice" hidden></p>
+      <div id="summary" class="summary" aria-live="polite"></div>
+      <div id="sites" class="site-grid"></div>
+      <section class="panel" aria-labelledby="hosts-heading">
+        <div class="section-heading">
+          <h2 id="hosts-heading">Shared hosts</h2>
+          <small
+            >Collected once per host · not attributed to individual apps</small
+          >
+        </div>
+        <div style="overflow-x: auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Host / sites</th>
+                <th>Telemetry</th>
+                <th>CPU</th>
+                <th>Memory available</th>
+                <th>Disk available</th>
+                <th>Collector</th>
+              </tr>
+            </thead>
+            <tbody id="hosts"></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="bottom-grid">
+        <section
+          class="panel"
+          id="logs-panel"
+          tabindex="-1"
+          aria-labelledby="logs-heading"
+        >
+          <div class="section-heading">
+            <h2 id="logs-heading">Recent events</h2>
+            <span id="selection">All displayed sites</span
+            ><button id="clear-selection" hidden>Clear selection</button>
+          </div>
+          <div id="logs"></div>
+        </section>
+        <section class="panel" aria-labelledby="pipeline-heading">
+          <div class="section-heading">
+            <h2 id="pipeline-heading">Monitoring pipeline</h2>
+            <small>Independent from app deployments</small>
+          </div>
+          <div id="pipeline" class="pipeline"></div>
+        </section>
+      </div>
+      <div class="notes">
+        <span
+          >Sample values only. No telemetry is collected, no services are
+          contacted, and controls do not change production.</span
+        ><a href="shared-monitoring.md"
+          >Read the architecture and rollout proposal →</a
+        >
+      </div>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const sites = [
+        {
+          id: "flightrepo",
+          title: "Flyji",
+          stack: "FastAPI · SQLite",
+          color: "#a9baff",
+          rps: 8.2,
+          p95: 1.34,
+          error: 0.12,
+          rss: 186,
+          revision: "e30976f",
+        },
+        {
+          id: "trip_dollar",
+          title: "Trip Split",
+          stack: "Flask · Waitress",
+          color: "#86d7c8",
+          rps: 1.6,
+          p95: 0.082,
+          error: 0,
+          rss: 64,
+          revision: "8e12ac0",
+        },
+      ];
+      const state = { site: "all", metric: "latency", selected: null };
+      function replicas(site) {
+        const mode = $("topology").value;
+        return [
+          { id: "r01", host: "mac-01" },
+          ...(mode !== "single" ? [{ id: "r02", host: "mac-01" }] : []),
+          ...(mode === "distributed" ? [{ id: "r01", host: "linux-01" }] : []),
+        ].map((r, i) => ({ ...r, index: i, site: site.id }));
+      }
+      function status(replica) {
+        const scenario = $("scenario").value;
+        if (scenario === "collector" && replica.host === "mac-01")
+          return "unknown";
+        if (scenario === "host" && replica.host === "mac-01") return "down";
+        if (
+          scenario === "replica" &&
+          replica.site === "flightrepo" &&
+          replica.host === "mac-01" &&
+          replica.id === "r01"
+        )
+          return "down";
+        return "up";
+      }
+      function badge(value, text) {
+        const cls =
+          value === "up"
+            ? ""
+            : value === "down"
+              ? "bad"
+              : value === "unknown"
+                ? "unknown"
+                : "warn";
+        return `<span class="status ${cls}">${text}</span>`;
+      }
+      function duration(value) {
+        return value < 1
+          ? `${Math.round(value * 1000)} <small>ms</small>`
+          : `${value.toFixed(2)} <small>s</small>`;
+      }
+      function chart(site, rows) {
+        const gap = rows.every((r) => status(r) === "unknown"),
+          outage = rows.every((r) => status(r) === "down");
+        const showReplicas = $("replica-lines").checked;
+        const reporting = rows.filter((r) => status(r) === "up");
+        const aggregateOffset = reporting.length === 1 ? reporting[0].index : 0;
+        const partial = rows.some((r) => status(r) === "unknown");
+        const path = (offset, scale = 1) =>
+          Array.from({ length: 41 }, (_, i) => {
+            const wave =
+              Math.sin(i * 0.7 + offset) * 5 +
+              Math.sin(i * 0.23 + offset) * 7 +
+              (i > 24 && i < 28 ? 10 : 0);
+            return `${i ? "L" : "M"}${12 + i * 13.8},${Math.max(16, Math.min(100, 73 - wave * scale - offset * 4)).toFixed(1)}`;
+          }).join(" ");
+        const lines = rows
+          .filter((r) => status(r) === "up")
+          .map(
+            (r, i) =>
+              `<path d="${path(r.index, 0.8)}" fill="none" stroke="${site.color}" stroke-opacity=".45" stroke-width="1.3" ${i % 2 ? 'stroke-dasharray="4 4"' : ""}/>`,
+          )
+          .join("");
+        const label =
+          (state.metric === "latency" ? "Request p95" : "Requests / second") +
+          (partial ? " · partial visibility" : " · synthetic series");
+        return `<div class="chart"><div class="chart-label"><span>${label}</span><span>${gap ? "No recent data" : outage ? "Unavailable" : state.metric === "latency" ? (site.id === "flightrepo" ? "0–2 s" : "0–150 ms") : site.id === "flightrepo" ? "0–12 req/s" : "0–3 req/s"}</span></div><svg viewBox="0 0 580 125" role="img" aria-label="${site.title}: fictional ${state.metric} trend${gap ? " with a data gap" : ""}"><g stroke="#273343" stroke-dasharray="2 5"><path d="M12 25H564 M12 62H564 M12 100H564"/></g>${gap ? '<rect x="12" y="14" width="552" height="92" fill="#202a38"/><text x="288" y="65" fill="#acb7c8" text-anchor="middle" font-size="12">No samples · collector last seen 2m 38s ago</text>' : outage ? '<path d="M12 100H564" stroke="#ff969f" stroke-width="2"/><text x="288" y="62" fill="#ff969f" text-anchor="middle" font-size="12">Origin unreachable</text>' : `${showReplicas ? lines : ""}<path d="${path(aggregateOffset, reporting.length === 1 ? 0.8 : 1)}" fill="none" stroke="${site.color}" stroke-width="2.5"/><path d="M359 12V104" stroke="#7f90af" stroke-dasharray="3 5"/><text x="366" y="19" fill="#94a4bb" font-size="9">deploy</text>`}</svg><div class="axis"><span>−${$("window").value}m</span><span>−${Number($("window").value) / 2}m</span><span>Now</span></div></div><div class="legend"><span><i class="swatch" style="background:${site.color}"></i>Site aggregate</span>${showReplicas ? rows.map((r, i) => `<span><i class="swatch" style="background:${site.color};opacity:${0.5 + i * 0.15}"></i>${r.host}/${r.id}${status(r) === "unknown" ? " · no data" : status(r) === "down" ? " · down" : ""}</span>`).join("") : ""}</div>`;
+      }
+      function renderSite(site) {
+        const all = replicas(site),
+          rows = all.filter(
+            (r) => $("host").value === "all" || r.host === $("host").value,
+          );
+        if (!rows.length) return "";
+        const healthy = all.filter((r) => status(r) === "up").length,
+          unknown = all.some((r) => status(r) === "unknown");
+        const unavailable = !healthy && !unknown,
+          tag = unavailable
+            ? badge("down", "Public unavailable")
+            : unknown
+              ? badge("warn", "Visibility degraded")
+              : healthy < all.length
+                ? badge("warn", "Public up · replica degraded")
+                : badge("up", "Public available");
+        const freshRows = rows.filter((r) => status(r) === "up");
+        const fresh = freshRows.length > 0;
+        const observedRps = (site.rps * freshRows.length) / all.length;
+        const observedP95 =
+          freshRows.length === 1
+            ? site.p95 * (1 + freshRows[0].index * 0.08)
+            : site.p95;
+        return `<article class="site-card"><div class="card-top"><div class="card-title"><div><h2>${site.title}</h2><p>${site.id} · ${site.stack} · ${all.length} replica${all.length === 1 ? "" : "s"}</p></div>${tag}</div><dl class="stats"><div><dt>Observed requests / sec</dt><dd>${fresh ? observedRps.toFixed(1) : "—"}</dd></div><div><dt>Server errors</dt><dd>${fresh ? site.error.toFixed(2) + " <small>%</small>" : "—"}</dd></div><div><dt>Observed p95</dt><dd>${fresh ? duration(observedP95) : "—"}</dd></div></dl></div>${chart(site, rows)}<div class="replica-wrap"><table><thead><tr><th>Replica</th><th>Host</th><th>Origin</th><th>p95</th><th>RSS</th></tr></thead><tbody>${rows
+          .map((r) => {
+            const s = status(r);
+            return `<tr><td><button class="replica-button" data-replica="${site.id}/${r.host}/${r.id}" aria-label="Inspect ${site.title} ${r.host} ${r.id}">${r.id} ↗</button></td><td class="muted mono">${r.host}</td><td>${badge(s, s === "up" ? "Ready" : s === "down" ? "Down" : "No data")}</td><td>${s === "up" ? duration(site.p95 * (1 + r.index * 0.08)) : "—"}</td><td class="muted">${s === "up" ? site.rss + r.index * 9 + " MiB" : "—"}</td></tr>`;
+          })
+          .join(
+            "",
+          )}</tbody></table></div><div class="deployment">Public probes: independent monitoring host · revision <span class="mono">${site.revision}</span> · ${fresh ? "sampled 8s ago" : "last sample 2m 38s ago"}</div></article>`;
+      }
+      function render() {
+        const distributed = $("topology").value === "distributed";
+        $("host").querySelector('[value="linux-01"]').disabled = !distributed;
+        if (!distributed && $("host").value === "linux-01")
+          $("host").value = "all";
+        const chosen = sites.filter(
+          (s) => state.site === "all" || state.site === s.id,
+        );
+        const shown = chosen
+          .flatMap(replicas)
+          .filter(
+            (r) => $("host").value === "all" || r.host === $("host").value,
+          );
+        const publicUp = chosen.filter((s) =>
+          replicas(s).some((r) => status(r) !== "down"),
+        ).length;
+        const up = shown.filter((r) => status(r) === "up").length,
+          unknown = shown.filter((r) => status(r) === "unknown").length;
+        const hostNames = [...new Set(shown.map((r) => r.host))];
+        const incident =
+          hostNames.includes("mac-01") &&
+          ($("scenario").value === "replica"
+            ? chosen.some((s) => s.id === "flightrepo")
+            : $("scenario").value !== "normal");
+        $("summary").innerHTML =
+          `<div><small>Public sites</small><strong>${publicUp} / ${chosen.length}</strong><span>reachable</span></div><div><small>Observed replicas</small><strong>${up} / ${shown.length}</strong><span>${unknown ? unknown + " without data" : "ready"}</span></div><div><small>Active incidents</small><strong class="${incident ? "warn" : ""}">${incident ? "1" : "0"}</strong><span>${incident ? "grouped by cause" : "in this example"}</span></div><div><small>Reporting hosts</small><strong>${hostNames.filter((h) => !(["collector", "host"].includes($("scenario").value) && h === "mac-01")).length} / ${hostNames.length}</strong><span>fresh telemetry</span></div>`;
+        const notes = {
+          normal: "",
+          replica:
+            "Example incident: a Flyji replica is down. With other healthy replicas, the site remains reachable; inspect the affected row without leaving its site group.",
+          collector:
+            "Example incident: mac-01 stopped reporting. Public probes remain independent. Missing telemetry is unknown, not zero traffic or a healthy origin.",
+          host: "Example incident: mac-01 is offline. One grouped host incident replaces repeated alerts for every dependent app. Remote replicas remain visible.",
+        };
+        $("notice").hidden = !incident;
+        $("notice").textContent = notes[$("scenario").value];
+        $("sites").innerHTML = chosen.map(renderSite).join("");
+        $("sites").style.gridTemplateColumns =
+          chosen.length === 1 ? "minmax(0,1fr)" : "";
+        $("hosts").innerHTML = hostNames
+          .map((host) => {
+            const missing =
+              ["collector", "host"].includes($("scenario").value) &&
+              host === "mac-01";
+            const labels = chosen
+              .filter((s) => replicas(s).some((r) => r.host === host))
+              .map((s) => s.title)
+              .join(" · ");
+            return `<tr><td><div class="host-name"><strong class="mono">${host}</strong><small>${host === "mac-01" ? "macOS" : "Linux"}</small></div><small>${labels}</small></td><td>${badge(missing ? "unknown" : "up", missing ? "Stale · 2m 38s" : "Fresh · 8s")}</td><td>${missing ? "—" : '<span class="bar"><i style="width:32%"></i></span>32%'}</td><td>${missing ? "—" : "8.4 GiB"}</td><td>${missing ? "—" : "184 GiB"}</td><td>${missing ? "No recent data" : "One shared Alloy"}</td></tr>`;
+          })
+          .join("");
+        renderLogs(chosen);
+        const degraded = ["collector", "host"].includes($("scenario").value);
+        $("pipeline").innerHTML =
+          `<div><span>Central public probes</span>${badge("up", "Running")}</div><div><span>Host collection</span>${badge(degraded ? "unknown" : "up", degraded ? "mac-01 missing" : "Reporting")}</div><div><span>Metric storage</span>${badge("up", "Prometheus")}</div><div><span>Log storage</span>${badge("up", "Loki")}</div><div><span>Notification path</span>${badge("up", "Heartbeat received")}</div><p>Persistent history lives outside app releases. Collector status is separate from public site availability.</p>`;
+        document
+          .querySelectorAll("[data-site]")
+          .forEach((b) =>
+            b.setAttribute(
+              "aria-pressed",
+              String(b.dataset.site === state.site),
+            ),
+          );
+        document
+          .querySelectorAll("[data-metric]")
+          .forEach((b) =>
+            b.setAttribute(
+              "aria-pressed",
+              String(b.dataset.metric === state.metric),
+            ),
+          );
+      }
+      function renderLogs(chosen) {
+        const selected = state.selected?.split("/");
+        $("selection").textContent = selected
+          ? selected.join(" / ")
+          : state.site === "all"
+            ? "All displayed sites"
+            : chosen[0].title;
+        $("clear-selection").hidden = !selected;
+        const entries = chosen
+          .filter((s) => !selected || s.id === selected[0])
+          .flatMap((site) => [
+            {
+              time: "14:28:09",
+              level: "info",
+              message: `${site.id} / ${selected ? selected[1] + "/" + selected[2] : "mac-01/r01"} · request_completed · status=200`,
+            },
+            {
+              time: "14:24:16",
+              level: "info",
+              message: `${site.id} · deployment_ready · revision=${site.revision}`,
+            },
+            {
+              time: "14:24:02",
+              level: "info",
+              message: `${site.id} · process_started · stable replica slot retained`,
+            },
+          ]);
+        const logHost = selected?.[1] || $("host").value;
+        const incidentInView =
+          logHost !== "linux-01" &&
+          ($("scenario").value === "replica"
+            ? chosen.some((s) => s.id === "flightrepo") &&
+              (!selected ||
+                (selected[0] === "flightrepo" && selected[2] === "r01"))
+            : $("scenario").value !== "normal");
+        if (incidentInView)
+          entries.unshift({
+            time: "14:29:12",
+            level: "warn",
+            message:
+              $("scenario").value === "replica"
+                ? "flightrepo / mac-01/r01 · origin_probe_failed"
+                : `mac-01 · ${$("scenario").value === "host" ? "host_unreachable" : "telemetry_stale"}`,
+          });
+        $("logs").innerHTML = entries
+          .map(
+            (e) =>
+              `<div class="log"><time>${e.time}</time><span class="${e.level === "warn" ? "warn" : "muted"}">${e.level.toUpperCase()}</span><span class="message">${e.message}</span></div>`,
+          )
+          .join("");
+      }
+      document.addEventListener("click", (event) => {
+        const site = event.target.closest("[data-site]"),
+          metric = event.target.closest("[data-metric]"),
+          replica = event.target.closest("[data-replica]");
+        if (site) {
+          state.site = site.dataset.site;
+          state.selected = null;
+          render();
+        }
+        if (metric) {
+          state.metric = metric.dataset.metric;
+          render();
+        }
+        if (replica) {
+          state.selected = replica.dataset.replica;
+          render();
+          $("logs-panel").focus();
+          $("logs-panel").scrollIntoView({
+            block: "nearest",
+            behavior: "auto",
+          });
+        }
+      });
+      ["topology", "scenario", "host", "window", "replica-lines"].forEach(
+        (id) =>
+          $(id).addEventListener("change", () => {
+            state.selected = null;
+            render();
+          }),
+      );
+      $("clear-selection").addEventListener("click", () => {
+        state.selected = null;
+        render();
+      });
+      render();
+    </script>
+  </body>
+</html>
