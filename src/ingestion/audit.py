@@ -126,11 +126,7 @@ def audit_database(
     started = datetime.now(UTC)
     # Apply excludes ingestion jobs across the scan and transaction. Direct tool
     # updates are still handled by generation/revision/airport comparisons below.
-    with (
-        job_lock(path, blocking=False)
-        if apply
-        else nullcontext(True) as acquired
-    ):
+    with job_lock(path, blocking=False) if apply else nullcontext(True) as acquired:
         if not acquired:
             raise ValueError("Finish the active ingestion job before applying an audit")
         with TemporaryFile(mode="w+t", encoding="utf-8") as patches:
