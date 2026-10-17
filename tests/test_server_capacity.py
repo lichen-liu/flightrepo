@@ -48,8 +48,12 @@ def test_capacity_rejects_excess_work_keeps_health_available_and_releases_slots(
             else:
                 finish.set()
                 assert (await first).status_code == 200
-            assert gate.slots.acquire(blocking=False)
-            gate.slots.release()
+            finish.set()
+            if outcome == "error":
+                with pytest.raises(RuntimeError, match="read failed"):
+                    await client.get("/v1/itineraries/search")
+            else:
+                assert (await client.get("/v1/itineraries/search")).status_code == 200
 
     asyncio.run(run())
 

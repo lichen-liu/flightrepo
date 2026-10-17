@@ -1,10 +1,17 @@
 # Ingestion, serving and public API contracts
 
 **SQLite contract: `flight-legs`, version 1.** The authoritative
-[shared DDL](../src/core/schema.sql), [private ingestion DDL](../src/ingestion/schema.sql)
+[shared DDL](../src/core/schema.sql), [query indexes](../src/core/query_indexes.sql), [private ingestion DDL](../src/ingestion/schema.sql)
 and [storage adapter](../src/core/storage.py) define the implementation. SQLite
 3.38+ is required for STRICT tables and built-in JSON. Read-only startup does not
 initialize, migrate or seed real databases.
+
+The durable stores have partial indexes for origin/departure, global departure
+windows and destination/arrival in each time basis. Empty bases retain only empty
+index roots. Disposable daily staging uses the same typed tables, keys and checks
+without the serving query indexes. The private publication-time index remains
+available in ingestion. Indexes are additive; existing files receive them only
+through explicit writer initialization. No startup migration runs in the server.
 
 ## Store boundaries
 

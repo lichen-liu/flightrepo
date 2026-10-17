@@ -36,4 +36,3 @@ WHERE status <> 'cancelled' AND departure_actual_us IS NOT NULL
 CREATE INDEX IF NOT EXISTS flight_legs_observed_destination
 ON flight_legs(destination_iata, arrival_observed_lower_us)
 WHERE status <> 'cancelled' AND departure_observed_lower_us IS NOT NULL;
-

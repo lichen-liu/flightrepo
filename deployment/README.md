@@ -105,9 +105,13 @@ Install backend/frontend/admin together while the hosted jobs are stopped. Resum
 a compatible producer against its separate ingestion file; publish explicitly to
 the serving path. Never use an ingestion database as the serving file. `manage.py check` and `check --public`
 validate real readiness and a route from the actual dataset, rather than hardcoded
-demo airports/dates. `/health/ready` exposes schema identity and selected time basis;
+demo airports/dates. `/health/ready` checks readable storage and exposes schema identity;
 admin `overview --json` reports the file path and same schema. Historical ADSB records use
 observed time bounds and partial coverage; they cannot supply future schedules.
+
+Read concurrency, SQL deadlines, index upgrades and repeatable load probes are
+described in [backend operations](../docs/backend-operations.md). Readiness no
+longer counts flights or selects a time basis; use `/v1/catalog` for those facts.
 
 Application overlays recorded in `installation.json` are verified before serving.
 Replacing the installed wheel while retaining an overlay receipt fails startup
