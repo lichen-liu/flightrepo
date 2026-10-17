@@ -61,30 +61,21 @@
           </div>
           <form id="search-form">
             <div class="search-grid">
-              <label
-                >From<input
-                  name="origin"
-                  id="origin"
-                  type="text"
-                  list="airport-suggestions"
-                  pattern="[A-Za-z]{3}"
-                  title="Enter a three-letter airport code."
-                  aria-label="From"
-                  placeholder="e.g. YYZ"
-                  autocomplete="off"
-                  autocapitalize="characters"
-                  spellcheck="false"
-                  data-airport-code
-                  aria-describedby="origin-name origin-coverage coverage-scope"
-                  required /><span id="origin-name" class="airport-name"
-                  >Three-letter airport code</span
-                ><span
-                  id="origin-coverage"
-                  class="airport-coverage"
-                  role="status"
-                  hidden
-                ></span
-              ></label>
+              <div class="airport-field">
+                <label for="origin">From</label>
+                <div class="airport-picker">
+                  <input name="origin" id="origin" type="text"
+                    pattern="[A-Za-z]{3}" title="Choose an airport or enter its three-letter code."
+                    placeholder="City or airport" autocomplete="off" spellcheck="false"
+                    data-airport-code data-airport-search
+                    aria-describedby="origin-name origin-coverage coverage-scope" required />
+                  <button type="button" class="airport-clear" aria-label="Clear from airport" hidden>×</button>
+                  <div class="airport-suggestions" id="origin-suggestions" role="listbox" aria-label="From airports" hidden></div>
+                  <span class="airport-picker-status small" role="status" hidden></span>
+                </div>
+                <span id="origin-name" class="airport-name">Search by city, name or code</span>
+                <span id="origin-coverage" class="airport-coverage" role="status" hidden></span>
+              </div>
               <button
                 id="swap"
                 type="button"
@@ -92,30 +83,21 @@
               >
                 ⇄
               </button>
-              <label
-                >To<input
-                  name="destination"
-                  id="destination"
-                  type="text"
-                  list="airport-suggestions"
-                  pattern="[A-Za-z]{3}"
-                  title="Enter a three-letter airport code."
-                  aria-label="To"
-                  placeholder="e.g. CDG"
-                  autocomplete="off"
-                  autocapitalize="characters"
-                  spellcheck="false"
-                  data-airport-code
-                  aria-describedby="destination-name destination-coverage coverage-scope"
-                  required /><span id="destination-name" class="airport-name"
-                  >Three-letter airport code</span
-                ><span
-                  id="destination-coverage"
-                  class="airport-coverage"
-                  role="status"
-                  hidden
-                ></span
-              ></label>
+              <div class="airport-field">
+                <label for="destination">To</label>
+                <div class="airport-picker">
+                  <input name="destination" id="destination" type="text"
+                    pattern="[A-Za-z]{3}" title="Choose an airport or enter its three-letter code."
+                    placeholder="City or airport" autocomplete="off" spellcheck="false"
+                    data-airport-code data-airport-search
+                    aria-describedby="destination-name destination-coverage coverage-scope" required />
+                  <button type="button" class="airport-clear" aria-label="Clear to airport" hidden>×</button>
+                  <div class="airport-suggestions" id="destination-suggestions" role="listbox" aria-label="To airports" hidden></div>
+                  <span class="airport-picker-status small" role="status" hidden></span>
+                </div>
+                <span id="destination-name" class="airport-name">Search by city, name or code</span>
+                <span id="destination-coverage" class="airport-coverage" role="status" hidden></span>
+              </div>
               <label
                 >Departure date<input
                   name="date"
@@ -135,7 +117,7 @@
               <summary>Airport availability details</summary>
               <p id="coverage-scope" class="small muted" hidden></p>
               <p id="date-availability" class="small" role="status">
-                Loading departure dates…
+                Choose airports to see available dates.
               </p>
               <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
             </details>
@@ -244,7 +226,7 @@
             </details>
           </form>
           <p id="status" class="status" role="status" aria-live="polite">
-            Loading the airport catalog…
+            Choose your airports and a departure date to find flights.
           </p>
           <p id="error" class="error" role="alert" hidden></p>
           <button id="retry-catalog" type="button" hidden>

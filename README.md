@@ -128,8 +128,9 @@ For browser tests, start the demo in another terminal, then run:
 
 ```sh
 npm install --prefix var/browser-qa --no-save playwright@1.62.1
-var/browser-qa/node_modules/.bin/playwright install chromium
+var/browser-qa/node_modules/.bin/playwright install chromium webkit
 NODE_PATH=var/browser-qa/node_modules node scripts/qa_web.cjs
+NODE_PATH=var/browser-qa/node_modules FLYJI_QA_BROWSER=webkit node --test --test-name-pattern='calendar|fresh visits|airport lookup|phone airport|delayed bootstrap|statistics loaded' scripts/qa_web.cjs
 ```
 
 Browser tests check search, editing, undo, error recovery, keyboard access and responsive use against the real API. They compare flight identities and constraints rather than saved screenshots or exact presentation strings. Failed cases save a screenshot under ignored `var/web-qa/`.

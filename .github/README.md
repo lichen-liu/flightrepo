@@ -4,7 +4,7 @@ PR checks are label-triggered, including PRs stacked on another development
 branch. Checks on `main` are automatic. Both run pytest
 on Python 3.13 (the required check) and 3.14 (the deployed runtime), verify Python
 style, frontend behavior and the installed wheel, and exercise the served demo in
-Chromium. Browser tooling is used only for QA;
+Chromium, plus calendar and airport-picker checks in WebKit. Browser tooling is used only for QA;
 the app itself still needs only Python and SQLite.
 
 ## Before merging a PR

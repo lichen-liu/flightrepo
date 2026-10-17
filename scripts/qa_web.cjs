@@ -3,16 +3,17 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test, before, after } = require("node:test");
-const { chromium } = require("playwright");
+const { chromium, webkit } = require("playwright");
 const { expect } = require("playwright/test");
 const base = process.env.FLYJI_QA_URL || "http://127.0.0.1:8013";
+const demoSearch = `${base}?origin=YYZ&destination=CDG&date=2026-10-17&time-basis=scheduled&input-clock=local`;
 const out = process.env.FLYJI_QA_OUTPUT || path.resolve("var/web-qa");
 const searchPath = /\/v1\/itineraries\/search(?:\/local)?$/;
 const identity = (legs) =>
   legs.map(({ flight_id }) => ({ flight_id }));
 let browser;
 before(async () => {
-  browser = await chromium.launch({
+  browser = await (process.env.FLYJI_QA_BROWSER === "webkit" ? webkit : chromium).launch({
     headless: true,
     ...(process.env.FLYJI_QA_BROWSER === "chrome" ? { channel: "chrome" } : {}),
   });
@@ -77,7 +78,7 @@ async function result(page, endpoint, action) {
   return response.json();
 }
 async function open(page, routes = true) {
-  const data = await result(page, searchPath, () => page.goto(base));
+  const data = await result(page, searchPath, () => page.goto(demoSearch));
   await expect(
     page.getByRole("button", { name: "Search flights", exact: true }),
   ).toBeEnabled();
@@ -134,7 +135,7 @@ check("stop count defaults to unbounded and survives links exports and connectio
   const pending = page.waitForRequest((request) => new URL(request.url()).pathname === "/v1/plans/rebuild");
   await next(page);
   assert.equal((await pending).postDataJSON().max_legs, null);
-  await result(page, searchPath, () => page.goto(`${base}?stops=5`));
+  await result(page, searchPath, () => page.goto(`${demoSearch}&stops=5`));
   await expect(page.getByLabel("Maximum stops")).toHaveValue("5");
   const finite = await search(page);
   assert.equal(finite.query.max_legs, 6);
@@ -191,7 +192,7 @@ check("calendar disables gaps, repairs unavailable links, and handles origins wi
     const origin = new URL(route.request().url()).searchParams.get("origin");
     await fulfillAvailability(route, { origin, timezone: "America/Toronto", dates: origin === "YYZ" ? ["2026-10-17", "2026-10-19"] : [] });
   });
-  await result(page, searchPath, () => page.goto(`${base}?date=2025-01-01`));
+  await result(page, searchPath, () => page.goto(demoSearch.replace("2026-10-17", "2025-01-01")));
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
   await page.locator("#date").click();
   await expect(page.locator('#date-calendar [data-date="2026-10-18"]')).toBeDisabled();
@@ -301,7 +302,7 @@ check("date availability failures remain disabled until a retry succeeds", async
   await page.route("**/v1/search-availability?*", (route) => fail
     ? route.fulfill({ status: 503, json: { detail: "Date data unavailable" } })
     : route.continue());
-  await page.goto(base);
+  await page.goto(demoSearch);
   await expect(page.locator("#date-availability")).toContainText("Date data unavailable");
   await expect(page.locator("#search-button")).toBeDisabled();
   fail = false;
@@ -511,6 +512,13 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await open(page);
   const calendar = page.locator("#date-calendar");
   await page.locator("#date").tap();
+  await calendar.getByRole("button", { name: "Next month with data" }).tap();
+  await expect(calendar).toBeVisible();
+  await expect(calendar.getByRole("button", { name: "Month with departure data" })).toHaveAttribute("data-value", "2026-11");
+  await expect(calendar.getByRole("button", { name: "Next month with data" })).toBeDisabled();
+  await calendar.getByRole("button", { name: "Previous month with data" }).tap();
+  await expect(calendar).toBeVisible();
+  await expect(calendar.getByRole("button", { name: "Month with departure data" })).toHaveAttribute("data-value", "2026-10");
   await calendar.getByRole("button", { name: "Month with departure data" }).tap();
   await calendar.getByRole("button", { name: "November 2026", exact: true }).tap();
   await expect(calendar).toBeVisible();
@@ -958,7 +966,7 @@ check("storage failure can be retried", async (page) => {
         })
       : route.continue(),
   );
-  await page.goto(base);
+  await page.goto(demoSearch);
   await expect(page.getByRole("alert")).toBeVisible();
   fail = false;
   await page
@@ -1202,7 +1210,7 @@ check("timezone changes after loading dates are corrected before retry", async (
   const pending = page.waitForResponse((r) =>
     searchPath.test(new URL(r.url()).pathname),
   );
-  await page.goto(base);
+  await page.goto(demoSearch);
   const failed = await pending;
   assert.equal(failed.status(), 422);
   assert.equal((await failed.json()).detail.code, "airport_timezone_changed");
@@ -1289,4 +1297,126 @@ check("globe fit keeps a distant origin visible beside clustered connection airp
     await expect(page.locator("#route-map .map-airport-label", {hasText:code})).toBeVisible();
   await page.getByRole("button", {name:"Fit journey",exact:true}).click();
   await expect(page.locator("#route-map .map-airport-label", {hasText:"YYZ"})).toBeVisible();
+});
+
+
+check("fresh visits keep airports blank and do not search automatically", async (page) => {
+  const calls = [];
+  page.on("request", (request) => {
+    if (searchPath.test(new URL(request.url()).pathname) || request.url().includes("/v1/search-availability?")) calls.push(request.url());
+  });
+  const bootstrap = page.waitForResponse("**/v1/bootstrap");
+  await page.goto(base);
+  await bootstrap;
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("");
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator("#search-button")).toBeDisabled();
+  assert.deepEqual(calls, []);
+});
+
+check("airport lookup supports names keyboard selection clearing and swapping", async (page) => {
+  await page.goto(base);
+  const origin = page.getByLabel("From", { exact: true }), destination = page.getByLabel("To", { exact: true });
+  const lookup = page.waitForResponse((r) => new URL(r.url()).pathname === "/v1/airports");
+  await origin.fill("Heathrow");
+  await lookup;
+  await expect(page.locator('#origin-suggestions [data-airport="LHR"]')).toBeVisible();
+  await origin.press("ArrowDown");
+  await expect(origin).toHaveAttribute("aria-activedescendant", /origin-suggestions-\d+/);
+  await origin.press("Enter");
+  await expect(origin).toHaveValue("LHR");
+  await expect(page.locator("#origin-name")).toContainText("Heathrow");
+  await expect(page.locator("#origin-suggestions")).toBeHidden();
+  await destination.fill("NRT");
+  await page.getByRole("button", { name: "Swap origin and destination" }).click();
+  await expect(origin).toHaveValue("NRT");
+  await expect(destination).toHaveValue("LHR");
+  await page.getByRole("button", { name: "Clear from airport" }).click();
+  await expect(origin).toHaveValue("");
+  await expect(origin).toBeFocused();
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator("#search-button")).toBeDisabled();
+});
+
+check("phone airport suggestions are tappable and fit the screen", async (page) => {
+  await page.goto(base);
+  const input = page.getByLabel("From", { exact: true });
+  await input.fill("Heathrow");
+  const option = page.locator('#origin-suggestions [data-airport="LHR"]');
+  await expect(option).toBeVisible();
+  await option.tap();
+  await expect(input).toHaveValue("LHR");
+  await expect(page.locator("#origin-suggestions")).toBeHidden();
+  await input.tap();
+  await expect(page.locator("#origin-suggestions")).toBeVisible();
+  await page.getByLabel("To", { exact: true }).tap();
+  await expect(page.locator("#origin-suggestions")).toBeHidden();
+  const bounds = await input.boundingBox();
+  assert.ok(bounds.width > 180, "phone airport inputs have room for names");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+}, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
+
+check("airport lookup ignores stale replies and permits codes during lookup failures", async (page) => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const intercepted = new Promise(resolve => { started = resolve; });
+  await page.route("**/v1/airports?*", async route => {
+    const q = new URL(route.request().url()).searchParams.get("q");
+    if (q === "Heathrow") {
+      started(); await gate;
+      await route.fulfill({ json: [{ iata: "LHR", name: "Heathrow" }] });
+    } else await route.fulfill({ status: 503, json: { detail: "Unavailable" } });
+  });
+  try {
+    await page.goto(base);
+    const input = page.getByLabel("From", { exact: true });
+    await input.fill("Heathrow");
+    await intercepted;
+    await input.fill("YYZ");
+    await expect(page.locator(".airport-picker-status").first()).toContainText("lookup unavailable");
+    release();
+    await expect(input).toHaveValue("YYZ");
+    await expect(page.locator('#origin-suggestions [data-airport="LHR"]')).toHaveCount(0);
+    await page.getByLabel("To", { exact: true }).fill("CDG");
+    await expect(page.locator("#search-button")).toBeEnabled();
+  } finally { release(); }
+});
+
+check("airport lookup supports local searches without bootstrap airport metadata", async (page) => {
+  await page.route("**/v1/bootstrap", async route => {
+    const response = await route.fetch(), data = await response.json();
+    await route.fulfill({ response, json: { ...data, airports: [] } });
+  });
+  await page.goto(base);
+  await page.getByLabel("From", { exact: true }).fill("YYZ");
+  await page.getByLabel("To", { exact: true }).fill("CDG");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  const data = await search(page);
+  assert.equal(data.departure_timezone, "America/Toronto");
+  assert.ok(data.items.length);
+});
+
+check("delayed bootstrap selects available flight times without replacing typed airports", async page => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route("**/v1/bootstrap", async route => {
+    const response = await route.fetch(), data = await response.json();
+    await gate;
+    await route.fulfill({ response, json: { ...data, default_time_basis: "observed", available_time_bases: ["observed"] } });
+  });
+  await page.route("**/v1/search-availability?*", route => fulfillAvailability(route, {
+    timezone: "America/Toronto", dates: ["2026-10-17"],
+  }));
+  try {
+    await page.goto(base);
+    await page.getByLabel("From", { exact: true }).fill("YYZ");
+    await page.getByLabel("To", { exact: true }).fill("NRT");
+    release();
+    await expect(page.getByLabel("Flight times")).toHaveValue("observed");
+    await expect(page.getByLabel("From", { exact: true })).toHaveValue("YYZ");
+    await expect(page.getByLabel("To", { exact: true })).toHaveValue("NRT");
+    await expect(page.locator("#date-availability")).toContainText("Observed historical legs");
+    await expect(page.locator("[data-option]")).toHaveCount(0);
+  } finally { release(); }
 });

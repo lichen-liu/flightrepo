@@ -89,11 +89,14 @@ export class DataCalendar {
         input.focus();
       }
     });
-    document.addEventListener("click", (event) => {
+    document.addEventListener("pointerdown", (event) => {
       if (event.target !== input && !this.panel.contains(event.target)) this.close();
     });
     input.parentElement.addEventListener("focusout", (event) => {
-      if (!input.parentElement.contains(event.relatedTarget)) this.close();
+      // Safari touch buttons blur the selected day without taking focus.
+      // Outside taps are handled above; keyboard focus still closes on exit.
+      if (event.relatedTarget && !input.parentElement.contains(event.relatedTarget))
+        this.close();
     });
   }
   setDates(dates, { preserveEmptySelection = false } = {}) {
