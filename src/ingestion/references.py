@@ -9,9 +9,8 @@ from pathlib import Path
 import httpx
 
 from core.database_roles import require_ingestion
-from core.file_lock import file_mutex
 from core.storage import SQLiteConnection, source_id, utc_us
-from ingestion.store import IngestionStore, check_quota
+from ingestion.store import IngestionStore, check_quota, job_lock
 from ingestion.updater import FlightUpdater
 
 AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
@@ -164,7 +163,7 @@ def import_catalog(path, kind, data, *, source_url=None):
     now = utc_us(datetime.now(UTC))
     digest = hashlib.sha256(data).hexdigest()
     store = IngestionStore(path)
-    with file_mutex(Path(str(store.path) + ".job.lock"), blocking=False) as acquired:
+    with job_lock(store.path, blocking=False) as acquired:
         if not acquired:
             raise ValueError("Stop the active ingestion job before importing references")
         store.initialize()

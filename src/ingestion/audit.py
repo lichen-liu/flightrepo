@@ -11,12 +11,11 @@ from uuid import uuid4
 from core.admission import blocked_for_search, route_verified_sql
 from core.database_roles import is_ingestion, require_ingestion
 from core.disk_quota import database_bytes
-from core.file_lock import file_mutex
 from core.quality import review_recommended_sql
 from core.storage import EPOCH, SQLiteConnection, refresh_admission_view, utc_us
 from ingestion.adsblol.legs import distance_km
 from ingestion.publish import PARTITION_TIME_SQL
-from ingestion.store import IngestionStore
+from ingestion.store import IngestionStore, job_lock
 from ingestion.validation import semantic_health
 
 VERSION = "retained-itinerary-audit-v2"
@@ -128,7 +127,7 @@ def audit_database(
     # Apply excludes ingestion jobs across the scan and transaction. Direct tool
     # updates are still handled by generation/revision/airport comparisons below.
     with (
-        file_mutex(Path(str(path) + ".job.lock"), blocking=False)
+        job_lock(path, blocking=False)
         if apply
         else nullcontext(True) as acquired
     ):
