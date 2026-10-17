@@ -2,14 +2,29 @@
 
 import json
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from core.connections import Airport, AirportTransfer
+from core.database_roles import require_serving
 from core.models import FlightRecord
-from core.storage import SCHEMA, SQLiteConnection, source_id, store_flight, utc_us
+from core.storage import (
+    SCHEMA,
+    SQLiteConnection,
+    source_id,
+    store_flight,
+    upgrade_route_verification,
+    utc_us,
+)
 
 
 class FlightUpdater(SQLiteConnection):
+    @contextmanager
+    def connect(self):
+        with super().connect() as connection:
+            require_serving(connection)
+            yield connection
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -24,6 +39,7 @@ class FlightUpdater(SQLiteConnection):
                     "Legacy database schema; initialize a new file for the shared flight-leg contract"
                 )
             connection.executescript(SCHEMA)
+            upgrade_route_verification(connection)
 
     def upsert(self, records: Iterable[FlightRecord], *, restore=True) -> int:
         records = [FlightRecord.model_validate(record.model_dump()) for record in records]
@@ -44,6 +60,8 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM ingestion_batches")
             connection.execute("DELETE FROM airport_transfers")
             connection.execute("DELETE FROM airports")
+            connection.execute("DELETE FROM carriers")
+            connection.execute("DELETE FROM reference_snapshots")
             # A hosted file may also hold observed itinerary facts and their resume state.
             tables = {
                 row[0]
@@ -63,7 +81,9 @@ class FlightUpdater(SQLiteConnection):
 
     def create_airport(self, airport: Airport) -> None:
         """Insert one validated airport without replacing existing metadata."""
-        airport = Airport.model_validate(airport.model_dump())
+        airport = Airport.model_validate(
+            {key: getattr(airport, key) for key in airport.model_fields_set}
+        )
         with self.connect() as connection:
             cursor = connection.execute(
                 """INSERT INTO airports (iata, name, city_id, timezone, latitude, longitude)
@@ -75,16 +95,34 @@ class FlightUpdater(SQLiteConnection):
                 OR airports.latitude IS NULL OR airports.longitude IS NULL""",
                 airport.model_dump(),
             )
+            self._update_airport_reference(connection, airport)
             if cursor.rowcount == 0:
                 raise ValueError(
                     f"Airport {airport.iata} already exists; use airports import to update it"
                 )
 
+    @staticmethod
+    def _update_airport_reference(connection, airport):
+        # Legacy admin imports do not erase new fields they never supplied.
+        fields = [
+            key
+            for key in ("icao", "municipality", "country_code", "region_code")
+            if key in airport.model_fields_set
+        ]
+        if fields:
+            connection.execute(
+                "UPDATE airports SET " + ",".join(key + "=?" for key in fields) + " WHERE iata=?",
+                [getattr(airport, key) for key in fields] + [airport.iata],
+            )
+
     def update_airports(
         self, airports: Iterable[Airport], transfers: Iterable[AirportTransfer]
     ) -> None:
         """Validate a complete metadata batch, then write it atomically."""
-        airports = [Airport.model_validate(a.model_dump()) for a in airports]
+        airports = [
+            Airport.model_validate({key: getattr(a, key) for key in a.model_fields_set})
+            for a in airports
+        ]
         transfers = [AirportTransfer.model_validate(t.model_dump()) for t in transfers]
         with self.connect() as connection:
             connection.executemany(
@@ -93,6 +131,8 @@ class FlightUpdater(SQLiteConnection):
                 timezone=excluded.timezone, latitude=excluded.latitude, longitude=excluded.longitude""",
                 [a.model_dump() for a in airports],
             )
+            for airport in airports:
+                self._update_airport_reference(connection, airport)
             invalid = connection.execute("""SELECT 1 FROM airport_transfers t
                 JOIN airports a ON a.iata=t.arrival_iata JOIN airports b ON b.iata=t.departure_iata
                 WHERE a.city_id IS NULL OR b.city_id IS NULL OR a.city_id != b.city_id LIMIT 1""").fetchone()
@@ -150,6 +190,8 @@ class FlightUpdater(SQLiteConnection):
         if current is not None:
             current["codeshares"] = json.loads(current["codeshares"])
             current["review_reasons"] = json.loads(current.get("review_reasons", "[]"))
+            if current.get("route_verification") is not None:
+                current["route_verification"] = json.loads(current["route_verification"])
         if current is None or FlightRecord.model_validate(current) != original:
             raise ValueError("Flight changed or was deleted; reload it before updating or deleting")
 

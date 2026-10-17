@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 
 import pytest
 from fastapi.testclient import TestClient
+from public_helpers import rebuild_payload
 
 from core.connections import Airport, AirportTransfer
 from core.models import FlightRecord, FlightStatus
@@ -33,7 +34,9 @@ def demo(tmp_path):
         [AirportTransfer.model_validate(t) for t in data["transfers"]],
     )
     updater.upsert([FlightRecord.model_validate(f) for f in data["flights"]])
-    return updater, FlightReader(updater.path), data
+    reader = FlightReader(updater.path)
+    data["request"] = rebuild_payload(reader, data["request"])
+    return updater, reader, data
 
 
 @pytest.fixture
@@ -187,7 +190,8 @@ def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_preci
     catalog = client.get("/v1/catalog").json()["dataset"]
     assert catalog["flight_count"] == catalog["total_record_count"] == 12
     assert catalog["time_bases"] == {"scheduled": 12, "observed": 0, "actual": 1}
-    assert datetime.fromisoformat(catalog["newest_fact_refresh"]) == updated.fetched_at
+    assert "newest_fact_refresh" not in catalog
+    assert demo[1].web_catalog().dataset.newest_fact_refresh == updated.fetched_at
 
 
 def test_airport_coverage_counts_exact_airports_and_missing_directions(client, demo):
@@ -440,7 +444,7 @@ def test_wide_departure_range_remains_editable(client):
     plan = client.post(
         "/v1/plans/rebuild",
         json={
-            "prefix": [{"provider": legs[0]["provider"], "provider_id": legs[0]["provider_id"]}],
+            "prefix": [{"flight_id": legs[0]["flight_id"]}],
             "destination": "CDG",
             "horizon_end": result["query"]["horizon_end"],
             "max_legs": 3,
@@ -608,7 +612,9 @@ def test_rebuild_preserves_avoided_airports(client, demo):
         "CDG",
     ]
     assert all(o["flight"]["destination_iata"] != "AMS" for o in plan["options"])
-    query["chosen_next"] = {"provider": "demo", "provider_id": "lhr-ams-early"}
+    query["chosen_next"] = rebuild_payload(
+        demo[1], {"prefix": [{"provider": "demo", "provider_id": "lhr-ams-early"}]}
+    )["prefix"][0]
     denied = client.post("/v1/plans/rebuild", json=query)
     assert (
         denied.status_code == 422
@@ -637,7 +643,8 @@ def test_local_normalization_and_flight_loading_share_a_snapshot(demo, monkeypat
 def test_catalog_has_facts_but_does_not_claim_coverage(client):
     catalog = client.get("/v1/catalog").json()
     assert catalog["dataset"]["flight_count"] == 12
-    assert catalog["dataset"]["providers"] == ["demo"]
+    assert catalog["dataset"]["data_mode"] == "synthetic"
+    assert "providers" not in catalog["dataset"] and "sources" not in catalog["dataset"]
     assert catalog["dataset"]["coverage"] == "unknown"
     assert not catalog["airports_truncated"]
     assert len(catalog["airports"]) == 8
@@ -682,9 +689,7 @@ def test_ordered_via_list_search_and_rebuild(client, demo, endpoint):
     rebuild = demo[2]["request"] | {"via_airport": ["LHR", "AMS"], "next_airport": "AMS"}
     plan = client.post("/v1/plans/rebuild", json=rebuild).json()
     assert plan["complete"] and plan["legs"] == legs
-    rebuild["prefix"] = [
-        {"provider": f["provider"], "provider_id": f["provider_id"]} for f in legs[:2]
-    ]
+    rebuild["prefix"] = [{"flight_id": f["flight_id"]} for f in legs[:2]]
     rebuild["next_airport"] = "CDG"
     kept = client.post("/v1/plans/rebuild", json=rebuild).json()
     assert kept["complete"] and kept["legs"][:2] == legs[:2]
@@ -769,7 +774,9 @@ def test_next_airport_filters_before_option_page_and_chosen_validation(client, d
     assert plan["complete"] and len(plan["options"]) == 1
     assert plan["options"][0]["flight"]["destination_iata"] == "CDG"
     assert plan["options_total"] == 1 and not plan["options_truncated"]
-    query["chosen_next"] = {"provider": "demo", "provider_id": "lhr-ams-early"}
+    query["chosen_next"] = rebuild_payload(
+        demo[1], {"prefix": [{"provider": "demo", "provider_id": "lhr-ams-early"}]}
+    )["prefix"][0]
     denied = client.post("/v1/plans/rebuild", json=query)
     assert denied.status_code == 422
     assert denied.json()["detail"]["code"] == "chosen_next_airport_mismatch"
@@ -780,9 +787,7 @@ def test_rebuild_retains_required_via_for_prefix_and_tail(client, demo):
     plan = client.post("/v1/plans/rebuild", json=query).json()
     assert plan["complete"]
     assert [f["destination_iata"] for f in plan["legs"]] == ["LHR", "AMS", "CDG"]
-    query["prefix"] = [
-        {"provider": f["provider"], "provider_id": f["provider_id"]} for f in plan["legs"][:2]
-    ]
+    query["prefix"] = [{"flight_id": f["flight_id"]} for f in plan["legs"][:2]]
     query["next_airport"] = "CDG"
     continued = client.post("/v1/plans/rebuild", json=query).json()
     assert continued["complete"] and continued["legs"][:2] == plan["legs"][:2]
@@ -1017,3 +1022,247 @@ def test_time_resolution_finds_exact_airport_beyond_suggestion_limit(client, dem
     assert response.status_code == 200, response.text
     assert response.json()["timezone"] == "America/Toronto"
     assert response.json()["utc"] == "2026-10-18T16:00:00Z"
+
+
+def test_readiness_does_not_build_catalog_or_quality_statistics(client, demo, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Readiness must not build the full web catalog")
+
+    monkeypatch.setattr(FlightReader, "web_catalog", forbidden)
+    result = client.get("/health/ready")
+    assert result.status_code == 200
+    assert result.json()["flight_count"] == len(demo[2]["flights"])
+
+
+def test_readiness_rejects_wrong_schema_contract(client, demo):
+    with demo[0].connect() as c:
+        c.execute("UPDATE schema_metadata SET version=999")
+    assert client.get("/health/ready").status_code == 503
+
+
+PUBLIC_PRIVATE_KEYS = {
+    "provider",
+    "provider_id",
+    "route_verification",
+    "route_verified",
+    "reference_sha256",
+    "reference_airports",
+    "review_reasons",
+    "evidence_kind",
+    "itinerary_reviewed",
+    "fetched_at",
+    "sources",
+    "providers",
+    "source",
+    "snapshot_id",
+    "request_id",
+    "engine_version",
+    "events",
+    "departure_observed_lower",
+    "departure_observed_upper",
+    "arrival_observed_lower",
+    "arrival_observed_upper",
+}
+
+
+def assert_public(value):
+    if isinstance(value, dict):
+        assert not PUBLIC_PRIVATE_KEYS.intersection(value), value
+        for child in value.values():
+            assert_public(child)
+    elif isinstance(value, list):
+        for child in value:
+            assert_public(child)
+    elif isinstance(value, str):
+        assert not any(
+            source in value.lower() for source in ("adsblol", "adsb.lol", "vrs", "ourairports")
+        ), value
+
+
+def test_public_contract_strips_provenance_from_every_nested_result(client, demo):
+    from core.models import RouteVerification
+
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={
+            "provider": "adsblol",
+            "provider_id": "private-source-key",
+            "callsign": "ACA541",
+            "route_verification": RouteVerification(
+                match_kind="different",
+                reference_sha256="a" * 64,
+                callsign="ACA541",
+                origin_iata="YYZ",
+                destination_iata="LHR",
+                reference_airports=["YYZ", "SEA"],
+            ),
+        }
+    )
+    demo[0].upsert([record])
+    responses = [
+        client.get("/v1/catalog"),
+        client.get("/v1/bootstrap"),
+        client.get("/v1/flights?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
+        client.get("/v1/routes?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
+        client.get(
+            "/v1/itineraries?origin=YYZ&destination=CDG&start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"
+        ),
+        client.post("/v1/itineraries/search/local", json=request(trace=True)),
+        client.post("/v1/plans/rebuild", json=demo[2]["request"] | {"trace": True}),
+    ]
+    for response in responses:
+        assert response.status_code == 200, response.text
+        assert_public(response.json())
+        assert response.headers["link"] == '</data-sources>; rel="license"'
+    search = responses[-2].json()
+    response = client.post("/v1/itineraries/search", json=search["query"] | {"trace": True})
+    assert response.status_code == 200, response.text
+    assert_public(response.json())
+    # Backend/admin still retains the full evidence unchanged.
+    assert (
+        demo[1].flight("adsblol", "private-source-key").route_verification
+        == record.route_verification
+    )
+    assert "private-source-key" not in response.text
+
+
+def test_public_schema_never_references_internal_flight_models(client):
+    schema = client.get("/openapi.json").json()
+    for name in (
+        "FlightRecord",
+        "RouteVerification",
+        "FlightRef",
+        "SearchDiagnostics",
+        "TraceEvent",
+    ):
+        assert name not in schema["components"]["schemas"]
+    for model in schema["components"]["schemas"].values():
+        assert not PUBLIC_PRIVATE_KEYS.intersection(model.get("properties", {}))
+
+
+def test_public_flight_ids_are_stable_indexed_and_reject_tampering_or_reused_rows(client, demo):
+    from server.public import identity
+
+    query = demo[2]["request"]
+    token = query["prefix"][0]["flight_id"]
+    assert client.post("/v1/plans/rebuild", json=query).status_code == 200
+    changed = token[:-1] + ("0" if token[-1] != "0" else "1")
+    for invalid in (changed, "flight_9999999999999999999_" + "0" * 32):
+        response = client.post(
+            "/v1/plans/rebuild", json=query | {"prefix": [{"flight_id": invalid}]}
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "flight_missing"
+        assert_public(response.json())
+    with demo[0].connect() as c:
+        row_id = int(token.split("_")[1])
+        c.execute(
+            "UPDATE flight_legs SET source_record_key='replacement-key' WHERE id=?", (row_id,)
+        )
+    assert identity(row_id, "demo", "replacement-key") != token
+    assert client.post("/v1/plans/rebuild", json=query).json()["detail"]["code"] == "flight_missing"
+    # Source identity input is no longer a public request contract.
+    legacy = query | {"prefix": [{"provider": "demo", "provider_id": "yyz-lhr"}]}
+    assert client.post("/v1/plans/rebuild", json=legacy).status_code == 422
+
+
+def test_source_notice_is_separate_accessible_escaped_and_has_no_download_inputs(client, demo):
+    with demo[0].connect() as c:
+        c.execute(
+            "UPDATE data_sources SET name=?,source_url=?,license_expression=?,license_url=?,attribution=?",
+            (
+                "ADSB.lol <script>",
+                "https://www.adsb.lol/private/path.csv",
+                "ODbL-1.0",
+                "https://opendatacommons.org/licenses/odbl/1-0/",
+                "Contains information from ADSB.lol.",
+            ),
+        )
+    page = client.get("/")
+    assert 'href="/data-sources"' in page.text
+    notice = client.get("/data-sources")
+    assert notice.status_code == 200
+    assert "Data sources &amp; licences" in notice.text
+    assert 'href="https://www.adsb.lol/"' in notice.text
+    assert (
+        "ODbL-1.0" in notice.text
+        and 'href="https://opendatacommons.org/licenses/odbl/1-0/"' in notice.text
+    )
+    assert "<script>" not in notice.text and "&lt;script&gt;" in notice.text
+    assert "/private/path.csv" not in notice.text
+    assert_public(client.get("/v1/catalog").json())
+
+
+def test_public_accuracy_summary_retains_warning_without_audit_details(demo):
+    from server.public import quality
+
+    record = FlightRecord.model_validate(demo[2]["flights"][0])
+    for reason, expected in [
+        ("observation_gap", "uncertain_itinerary"),
+        ("implausible_airport_timing", "timing_conflict"),
+    ]:
+        result = quality(record.model_copy(update={"review_reasons": [reason]})).model_dump()
+        assert result["labels"][0]["code"] == expected
+        assert_public(result)
+        assert reason not in json.dumps(result) or reason == "timing_conflict"
+
+
+def test_public_error_context_and_budget_errors_do_not_serialize_internal_diagnostics():
+    from core.routing.models import IncompleteSearchError, SearchDiagnostics, SearchStats
+    from server.api import routing_http_error
+
+    error = RoutingError(
+        "prefix_gap",
+        "Connection is too short",
+        context={
+            "provider": "adsblol",
+            "provider_id": "secret",
+            "flight_ref": ["adsblol", "secret"],
+            "wait_minutes": 20,
+            "minimum_minutes": 45,
+        },
+    )
+    result = routing_http_error(error).detail
+    assert result["context"] == {"wait_minutes": 20, "minimum_minutes": 45}
+    assert_public(result)
+    diagnostic = SearchDiagnostics(
+        snapshot_id="private",
+        request_id="private",
+        ranking="fewest_legs",
+        exhaustive=False,
+        stats=SearchStats(),
+        events=[{"candidate": ["adsblol", "secret"], "decision": "accepted"}],
+    )
+    assert_public(routing_http_error(IncompleteSearchError(diagnostic)).detail)
+
+
+def test_public_identity_batches_and_sources_with_the_same_key_remain_distinct(demo):
+    from server.public import references
+
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    records = [original.model_copy(update={"provider_id": str(i)}) for i in range(430)]
+    records.append(original.model_copy(update={"provider": "another", "provider_id": "0"}))
+    demo[0].upsert(records)
+    mapped = references(demo[1], records)
+    assert len(mapped) == len(set(mapped.values())) == 431
+    assert mapped == references(demo[1], list(reversed(records)))
+    with demo[1].connect() as c:
+        plan = [
+            row[3]
+            for row in c.execute(
+                "EXPLAIN QUERY PLAN SELECT f.id,s.code,f.source_record_key FROM data_sources s "
+                "JOIN flight_legs f ON f.source_id=s.id WHERE s.code=? AND f.source_record_key IN (?)",
+                (original.provider, "0"),
+            )
+        ]
+    assert any("SEARCH f USING" in step for step in plan)
+    assert not any("SCAN f" in step for step in plan)
+
+
+def test_public_dataset_mode_cannot_hide_mixed_demo_and_real_data(client, demo):
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={"provider": "actual-feed"}
+    )
+    demo[0].upsert([record])
+    result = client.get("/v1/catalog").json()
+    assert result["dataset"]["data_mode"] == "mixed"
+    assert_public(result)

@@ -1186,3 +1186,11 @@ footer {
 .calendar-footer button {
   font-size: 12px;
 }
+
+/* Quality vocabulary is textual as well as coloured. */
+.quality-badge { display: inline-block; border: 1px solid currentColor; border-radius: 4px; padding: 2px 5px; }
+.quality-info { color: var(--muted); }
+.quality-caution { color: #805100; }
+.quality-warning { color: #a32625; }
+.quality-detail { font-size: 11px; margin-top: 5px; overflow-wrap: anywhere; }
+.quality-detail.quality-warning { border-left: 3px solid currentColor; padding-left: 7px; }

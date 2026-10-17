@@ -657,7 +657,7 @@ def public_responses():
         "/health/ready": {"status": "ready"},
         "/v1/catalog": {
             "dataset": {
-                "providers": ["demo"],
+                "data_mode": "synthetic",
                 "flight_count": 12,
                 "first_departure": "2026-10-17T18:00:00Z",
             }
@@ -681,7 +681,7 @@ def public_responses():
         ("/", b"another site"),
         ("/assets/app.mjs", b"outdated"),
         ("/health/ready", {"status": "unavailable"}),
-        ("/v1/catalog", {"dataset": {"providers": ["real-provider"], "flight_count": 12}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "real", "flight_count": 12}}),
         ("/v1/itineraries/search", {"items": []}),
     ],
 )
@@ -790,12 +790,12 @@ def test_public_final_response_origin_is_verified(scripts, monkeypatch):
         ("/health/ready", []),
         ("/v1/catalog", []),
         ("/v1/catalog", {"dataset": []}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": True}}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": "12"}}),
-        ("/v1/catalog", {"dataset": {"providers": ["demo"], "flight_count": 0}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": True}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": "12"}}),
+        ("/v1/catalog", {"dataset": {"data_mode": "synthetic", "flight_count": 0}}),
         (
             "/v1/catalog",
-            {"dataset": {"providers": ["demo"], "flight_count": 12, "first_departure": []}},
+            {"dataset": {"data_mode": "synthetic", "flight_count": 12, "first_departure": []}},
         ),
         ("/v1/itineraries/search", []),
         ("/v1/itineraries/search", {"items": {}}),
@@ -908,7 +908,11 @@ def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
     root = tmp_path / "runtime"
     root.mkdir()
     database = tmp_path / "real.db"
-    run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=database)
+    from ingestion.publish import publish_day
+
+    staging = tmp_path / "ingestion.db"
+    run(tmp_path / "inputs", date(2025, 1, 1), [leg_trace()], output_db=staging)
+    publish_day(staging, database, date(2025, 1, 1))
     (root / "settings.json").write_text(
         json.dumps(
             {
@@ -926,7 +930,8 @@ def test_real_mode_serves_observed_legs_without_seeding_demo(tmp_path, scripts):
     with TestClient(application, base_url="https://fly.boboji.fyi") as client:
         response = client.get("/v1/catalog")
         assert response.status_code == 200
-        assert response.json()["dataset"]["providers"] == ["adsblol"]
+        assert response.json()["dataset"]["data_mode"] == "real"
+        assert "providers" not in response.json()["dataset"]
         assert client.get("/health/ready").json()["schema_contract"] == "flight-legs"
 
 
@@ -957,3 +962,62 @@ def test_real_mode_requires_an_initialized_database_and_rejects_demo(tmp_path, s
     updater.upsert([FlightRecord.model_validate(fixture["flights"][0])])
     with pytest.raises(ValueError, match="demo flight records"):
         scripts.serve.create_server(root)
+
+
+def test_startup_readiness_allows_archive_aggregation_without_request_flood(scripts, monkeypatch):
+    clock = [0.0]
+    timeouts = []
+    monkeypatch.setattr(scripts.manage.time, "monotonic", lambda: clock[0])
+
+    class Response(io.BytesIO):
+        status = 200
+
+    def ready(url, timeout):
+        timeouts.append(timeout)
+        # A normal archive query can take several seconds, not one second.
+        assert timeout >= 4
+        clock[0] += 4
+        return Response(b'{"status":"ready"}')
+
+    monkeypatch.setattr(scripts.manage, "urlopen", ready)
+    scripts.manage.wait_for_server(8014)
+    assert timeouts == [20]
+
+
+def test_startup_readiness_deadline_is_bounded_after_timeouts(scripts, monkeypatch):
+    clock = [0.0]
+    timeouts = []
+    monkeypatch.setattr(scripts.manage.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        scripts.manage.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+    def unavailable(url, timeout):
+        timeouts.append(timeout)
+        clock[0] += timeout
+        raise TimeoutError("slow readiness")
+
+    monkeypatch.setattr(scripts.manage, "urlopen", unavailable)
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        scripts.manage.wait_for_server(8014)
+    assert len(timeouts) == 3 and max(timeouts) <= 20
+    assert clock[0] <= 60.2
+
+
+def test_public_probe_allows_slow_archive_responses_with_bounded_requests(scripts, monkeypatch):
+    bodies = public_responses()
+    budgets = []
+
+    def open_url(request, timeout):
+        budgets.append(timeout)
+        # A 12-second response is valid for a large archive; no wall-clock wait.
+        if timeout < 12:
+            raise TimeoutError("archive aggregation exceeded request budget")
+        value = bodies[urlsplit(request.full_url).path]
+        return Response(
+            value if isinstance(value, bytes) else json.dumps(value).encode(), request.full_url
+        )
+
+    stub_requests(scripts, monkeypatch, open_url)
+    assert scripts.manage.probe("https://fly.boboji.fyi")["route_search"] == "passed"
+    assert budgets and all(12 <= timeout <= 20 for timeout in budgets)

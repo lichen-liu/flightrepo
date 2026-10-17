@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
+from core.admission import blocked_for_search
+from core.quality import describe_quality
 from core.routing.models import airport_code, airport_codes, utc_instant
 
 
@@ -13,6 +15,26 @@ class FlightStatus(StrEnum):
     LANDED = "landed"
     CANCELLED = "cancelled"
     UNKNOWN = "unknown"
+
+
+class RouteVerification(BaseModel):
+    """An undated route-reference audit result, never a human or timing approval."""
+
+    source: Literal["vrs"] = "vrs"
+    match_kind: Literal["exact", "adjacent", "different", "incomplete", "missing"]
+    reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    callsign: str | None = Field(default=None, min_length=1)
+    operator_icao: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    operator_name: str | None = Field(default=None, min_length=1)
+    reference_airports: list[str | None] | None = Field(default=None, max_length=64)
+    origin_iata: str = Field(pattern=r"^[A-Z]{3}$")
+    destination_iata: str = Field(pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def matched_identity(self):
+        if self.match_kind in {"exact", "adjacent"} and not (self.callsign or "").strip():
+            raise ValueError("A positive route match requires a callsign")
+        return self
 
 
 class FlightRecord(BaseModel):
@@ -31,20 +53,85 @@ class FlightRecord(BaseModel):
     fetched_at: datetime
     aircraft_type_code: str | None = Field(default=None, pattern=r"^[A-Z0-9]{2,8}$")
     callsign: str | None = Field(default=None, min_length=1)
+    operator_icao: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    operator_name: str | None = Field(default=None, min_length=1)
     evidence_kind: Literal[
         "source_reported", "inferred_ground_brackets", "inferred_airport_proximity", "manual"
     ] = "source_reported"
     review_reasons: list[
-        Literal["airborne_airport_estimate", "observation_gap", "callsign_variation"]
+        Literal[
+            "airborne_airport_estimate",
+            "observation_gap",
+            "callsign_variation",
+            "implausible_airport_timing",
+        ]
     ] = Field(default_factory=list)
     itinerary_reviewed: bool = False
+    route_verification: RouteVerification | None = None
+
+    @model_validator(mode="after")
+    def current_operator_reference(self):
+        import re
+
+        callsign = (self.callsign or "").strip().upper()
+        if (
+            not self.operator_name
+            or not self.operator_icao
+            or not re.fullmatch(r"[A-Z]{3}[0-9][A-Z0-9]{0,4}", callsign)
+            or callsign[:3] != self.operator_icao
+        ):
+            self.operator_name = self.operator_icao = None
+        return self
+
+    @property
+    def current_route_reference(self):
+        proof = self.route_verification
+        return (
+            proof
+            if (
+                proof is not None
+                and proof.callsign == ((self.callsign or "").strip().upper() or None)
+                and proof.origin_iata == self.origin_iata
+                and proof.destination_iata == self.destination_iata
+            )
+            else None
+        )
+
+    @property
+    def route_verified(self):
+        proof = self.current_route_reference
+        return bool(proof and proof.callsign and proof.match_kind in {"exact", "adjacent"})
+
+    @property
+    def quality(self):
+        proof = self.current_route_reference
+        data = describe_quality(
+            reasons=self.review_reasons,
+            evidence_kind=self.evidence_kind,
+            reference_result=proof.match_kind if proof else None,
+            reviewed=self.itinerary_reviewed,
+            observed=self.effective_time_basis == "observed",
+            aircraft_type=self.aircraft_type_code,
+            provider=self.provider,
+        )
+        recommended = not self.itinerary_reviewed and data["level"] in {"uncertain", "conflict"}
+        data.update(
+            review_recommended=recommended,
+            review_status="manual"
+            if self.itinerary_reviewed
+            else "recommended"
+            if recommended
+            else "not_requested",
+        )
+        return data
 
     @property
     def needs_review(self):
-        return (
-            bool(self.review_reasons or self.evidence_kind == "inferred_airport_proximity")
-            and not self.itinerary_reviewed
-        )
+        return self.quality["review_recommended"]
+
+    @property
+    def blocked_for_search(self):
+        return blocked_for_search(self.review_reasons, self.itinerary_reviewed)
 
     departure_observed_lower: datetime | None = None
     departure_observed_upper: datetime | None = None
@@ -101,6 +188,13 @@ class FlightRecord(BaseModel):
     @model_serializer(mode="wrap")
     def preserve_legacy_shape(self, handler):
         data = handler(self)
+        quality = self.quality
+        if quality["labels"]:
+            data["quality"] = quality
+        if self.route_verification is None:
+            data.pop("route_verification", None)
+        else:
+            data["route_verified"] = self.route_verified
         if not self.review_reasons:
             data.pop("review_reasons", None)
         if not self.itinerary_reviewed:
@@ -109,6 +203,8 @@ class FlightRecord(BaseModel):
             data.pop("aircraft_type_code", None)
         for name in (
             "callsign",
+            "operator_icao",
+            "operator_name",
             "departure_observed_lower",
             "departure_observed_upper",
             "arrival_observed_lower",

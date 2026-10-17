@@ -6,11 +6,15 @@ from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
+from core.database_roles import ingestion_target
+from core.file_lock import file_mutex
+from core.quality import review_recommended_sql
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.policy import ExtractionPolicy
+from ingestion.adsblol.scratch import raw_directory
 
 
 def inventory(path, boundary_manifest=None):
@@ -66,21 +70,28 @@ def extract_range(
         if policy_path
         else ExtractionPolicy()
     )
-    for day in days:
-        yield extract_day(
-            root,
-            day,
-            grouped[day],
-            airports,
-            rules,
-            limit=limit,
-            policy_db=policy_db,
-            download=download,
-            client=client,
-            departure_year=departure_year,
-            output_db=output_db,
-            refresh_diagnostics=refresh_diagnostics,
-        )
+    database = Path(output_db).resolve() if output_db else Path(root).resolve() / "itineraries.db"
+    ingestion_target(database)
+    from ingestion.references import import_catalog
+
+    raw_directory(root)
+    import_catalog(database, "airports", Path(airports_path).read_bytes())
+    with file_mutex(Path(str(database) + ".job.lock")):
+        for day in days:
+            yield extract_day(
+                root,
+                day,
+                grouped[day],
+                airports,
+                rules,
+                limit=limit,
+                policy_db=policy_db,
+                download=download,
+                client=client,
+                departure_year=departure_year,
+                output_db=output_db,
+                refresh_diagnostics=refresh_diagnostics,
+            )
 
 
 def extraction_status(root, output_db=None):
@@ -118,7 +129,7 @@ def extraction_status(root, output_db=None):
             "SELECT COUNT(DISTINCT leg_id) FROM searchable_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol')"
         ).fetchone()[0]
         needs_review = connection.execute(
-            "SELECT COUNT(*) FROM flights WHERE provider='adsblol' AND itinerary_reviewed=0 AND (evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)"
+            f"SELECT COUNT(*) FROM flights WHERE provider='adsblol' AND {review_recommended_sql()}"
         ).fetchone()[0]
         legacy = [
             row[0]

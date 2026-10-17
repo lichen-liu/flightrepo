@@ -54,7 +54,7 @@ def read_settings(root: Path) -> dict:
 def validate_database(database: Path, *, data_mode="synthetic") -> int:
     from server.reader import FlightReader
 
-    stats = FlightReader(database).stats()
+    stats = FlightReader(database, serving_only=True).stats()
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
         schema = connection.execute(
             "SELECT contract,version FROM schema_metadata WHERE id=1"
@@ -203,7 +203,7 @@ def create_server(root: Path):
     app = FastAPI(title=original.title, description=original.description, version=original.version)
     app.user_middleware = list(original.user_middleware)
     app.exception_handlers = dict(original.exception_handlers)
-    reader = FlightReader(database)
+    reader = FlightReader(database, serving_only=True)
     app.dependency_overrides[get_store] = lambda: reader
     # include_router binds overrides to this app without changing original routes/caches.
     app.include_router(original.router)
@@ -244,6 +244,7 @@ async def check_installation(root: Path) -> None:
             "/",
             "/assets/app.css",
             "/assets/app.mjs",
+            "/assets/quality.mjs",
             "/assets/map.mjs",
             "/assets/vendor/d3-7.9.0.min.js",
             "/assets/vendor/world-110m.geojson",
@@ -278,7 +279,7 @@ async def check_installation(root: Path) -> None:
             response = await client.post(
                 "/v1/plans/rebuild",
                 json={
-                    "prefix": [{"provider": leg["provider"], "provider_id": leg["provider_id"]}],
+                    "prefix": [{"flight_id": leg["flight_id"]}],
                     "destination": route["destination_iata"],
                     "horizon_end": horizon,
                     "time_basis": dataset["default_time_basis"],
@@ -313,7 +314,7 @@ async def check_installation(root: Path) -> None:
         response = await client.post(
             "/v1/plans/rebuild",
             json={
-                "prefix": [{"provider": first["provider"], "provider_id": first["provider_id"]}],
+                "prefix": [{"flight_id": first["flight_id"]}],
                 "destination": "CDG",
                 "via_airport": "AMS",
                 "next_airport": "AMS",

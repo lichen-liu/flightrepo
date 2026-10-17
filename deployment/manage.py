@@ -24,6 +24,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from serve import read_settings
 
 LABELS = {"server": "fyi.boboji.flyji.server", "tunnel": "fyi.boboji.flyji.tunnel"}
+# Match startup and ongoing probes; real-archive aggregation needs headroom
+# beyond ten seconds while every HTTP operation remains bounded.
+HTTP_PROBE_TIMEOUT = 20
 
 
 def runtime_root() -> Path:
@@ -103,10 +106,14 @@ def job_definitions(root: Path, cloudflared: str) -> dict:
 
 
 def wait_for_server(port: int):
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
+    deadline = time.monotonic() + 60
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            with urlopen(f"http://127.0.0.1:{port}/health/ready", timeout=1) as response:
+            # Real archives need longer than a demo to aggregate readiness. A short
+            # read timeout leaves expensive requests running and floods startup.
+            with urlopen(
+                f"http://127.0.0.1:{port}/health/ready", timeout=min(HTTP_PROBE_TIMEOUT, remaining)
+            ) as response:
                 data = json.load(response)
                 if response.status == 200 and data.get("status") == "ready":
                     return
@@ -272,7 +279,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
                 "User-Agent": "Flyji-Deployment-Check/1.0",
             },
         )
-        with opener.open(request, timeout=10) as response:
+        with opener.open(request, timeout=HTTP_PROBE_TIMEOUT) as response:
             if origin(response.geturl()) != expected_origin:
                 raise ValueError("The response is not from the configured Flyji origin.")
             content = response.read(1_000_001)
@@ -299,7 +306,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 0
-            or "demo" in dataset.get("providers", [])
+            or dataset.get("data_mode") != "real"
         ):
             raise ValueError("Real serving requires a ready database without demo records")
         if count == 0:
@@ -341,7 +348,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
         return {"url": base_url, "flight_count": count, "route_search": "passed"}
     if (
         ready.get("status") != "ready"
-        or dataset.get("providers") != ["demo"]
+        or dataset.get("data_mode") != "synthetic"
         or not isinstance(count, int)
         or isinstance(count, bool)
         or count < 1

@@ -102,7 +102,8 @@ flight records; the seed step cannot insert demo data in this mode. Existing
 synthetic installations keep their default mode and original smoke checks.
 
 Install backend/frontend/admin together while the hosted jobs are stopped. Resume
-only a writer using the same schema and path. `manage.py check` and `check --public`
+a compatible producer against its separate ingestion file; publish explicitly to
+the serving path. Never use an ingestion database as the serving file. `manage.py check` and `check --public`
 validate real readiness and a route from the actual dataset, rather than hardcoded
 demo airports/dates. `/health/ready` exposes schema identity and selected time basis;
 admin `overview --json` reports the file path and same schema. Historical ADSB records use

@@ -4,21 +4,11 @@ import sqlite3
 
 from core.connections import Airport
 from core.models import FlightRecord
+from core.prompts import ask
 from core.routing.models import RouteSearchRequest
 from core.storage import SQLiteConnection
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
-
-
-def ask(label, default=None):
-    while True:
-        suffix = f" [{default}]" if default is not None else ""
-        value = input(f"{label}{suffix}: ").strip()
-        if value.lower() == "cancel":
-            raise EOFError
-        if value or default is not None:
-            return value or default
-        print("A value is required.")
 
 
 def yes_no(label, default="n"):
@@ -138,14 +128,16 @@ def edit_flight(path, provider, provider_id, output):
 
 def approve_flight(path, provider, provider_id, confirmed, output):
     original = FlightReader(path).flight(provider, provider_id)
-    if not original.needs_review:
-        raise ValueError("This flight has no pending itinerary estimates to approve")
+    if original.itinerary_reviewed:
+        raise ValueError("This flight has already been manually reviewed")
+    if not (original.review_reasons or original.evidence_kind == "inferred_airport_proximity"):
+        raise ValueError("This flight has no itinerary uncertainty to review")
     if not confirmed:
         print(f"Database: {path.resolve()}")
         output(original)
         print("Check both airports and time bounds; use flight edit first for corrections.")
         try:
-            if not yes_no("Approve this itinerary for route search?"):
+            if not yes_no("Mark this itinerary as manually reviewed?"):
                 print("Approval cancelled.")
                 return
         except (EOFError, KeyboardInterrupt):

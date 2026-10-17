@@ -37,7 +37,13 @@ with TestClient(server.api.app) as client:
             path = asset.relative_to(server.api.WEB_ROOT).as_posix()
             assert client.get('/assets/' + path).status_code == 200, path
     assert client.get('/health/ready').status_code == 200
-    assert client.get('/v1/catalog').status_code == 200
+    catalog = client.get('/v1/catalog')
+    assert catalog.status_code == 200
+    assert 'providers' not in catalog.json()['dataset']
+    assert 'sources' not in catalog.json()['dataset']
+    assert client.get('/data-sources').status_code == 200
+    schemas = client.get('/openapi.json').json()['components']['schemas']
+    assert not {'FlightRecord', 'RouteVerification', 'FlightRef', 'TraceEvent'}.intersection(schemas)
 """
 
 
@@ -86,11 +92,11 @@ def probe_ingestion(executable, directory, environment):
         "iata_code,latitude_deg,longitude_deg,scheduled_service,type\nAAA,40,-70,yes,large_airport\nBBB,41,-71,yes,large_airport\n"
     )
     rules.write_text("{}")
-    prefix = [str(executable), "-m", "admin", "--db", str(root / "admin.db")]
+    prefix = [str(executable), "-m", "ingestion", "--db", str(root / "ingestion.db")]
     arguments = [
-        "ingest",
         "adsblol",
         "run",
+        "--offline",
         "--manifest",
         str(manifest),
         "--airport-catalog",
@@ -119,6 +125,10 @@ def probe_ingestion(executable, directory, environment):
         events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
         return next(event for event in events if event["event"] == "day_finished")
 
+    workspace = json.loads(
+        invoke(["adsblol", "workspace", "--disk-workspace", "--data-root", str(root)]).stdout
+    )
+    assert workspace["workspace"]["mode"] == "disk"
     event = finished(invoke(arguments))
     assert event["records_applied"] == 2 and not event["counts_historical"]
     counts = event["diagnostics"]["counts"]
@@ -129,9 +139,180 @@ def probe_ingestion(executable, directory, environment):
     assert not archive.exists()
     repeat = finished(invoke(arguments))
     assert repeat["counts_historical"] and repeat["records_applied"] == 0
-    status = json.loads(invoke(["ingest", "adsblol", "status"]).stdout)
+    status = json.loads(invoke(["adsblol", "status"]).stdout)
     assert status["records"] == 2 and status["diagnostics"]["days_reported"] == 1
     assert status["diagnostics"]["totals"]["counts"] == counts
+    # Seed both reference catalogs locally: this installed probe must never depend
+    # on GitHub availability or silently fetch carrier data during publication.
+    carriers = root / "carriers.csv"
+    carriers.write_text("Code,Name,ICAO,IATA\nUAL,United Airlines,UAL,UA\n")
+    catalogs = json.loads(
+        invoke(
+            [
+                "references",
+                "refresh",
+                "--airports-csv",
+                str(airports),
+                "--carriers-csv",
+                str(carriers),
+            ]
+        ).stdout
+    )
+    assert {item["kind"] for item in catalogs} == {"airports", "carriers"}
+    serving = root / "serving.db"
+    published = json.loads(
+        invoke(
+            [
+                "publish",
+                "--vrs",
+                "cached",
+                "--serving-db",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert published["inserted"] == 2
+    admin_prefix = [str(executable), "-m", "admin", "--db", str(root / "ingestion.db")]
+    inspected = subprocess.run(
+        admin_prefix + ["inspect", "query", "SELECT count(*) FROM flights"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(inspected.stdout)["rows"] == [[2]]
+    operator = subprocess.run(
+        admin_prefix + ["inspect", "query", "SELECT operator_name FROM flights LIMIT 1"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(operator.stdout)["rows"] == [["United Airlines"]]
+    blocked = subprocess.run(
+        admin_prefix + ["maintenance", "init"],
+        cwd=directory,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert blocked.returncode != 0 and "read/query-only" in blocked.stderr
+
+    # Exercise VRS from the installed CLI, with bounded local fixtures, no network.
+    vrs_routes, vrs_airports = root / "vrs-routes.csv", root / "vrs-airports.csv"
+    vrs_routes.write_text("Callsign,AirportCodes\nUAL123,KAAA-KBBB\n")
+    vrs_airports.write_text("Code,IATA\nKAAA,AAA\nKBBB,BBB\n")
+    reference = json.loads(
+        invoke(
+            ["vrs", "import", "--routes-csv", str(vrs_routes), "--airports-csv", str(vrs_airports)]
+        ).stdout
+    )
+    assert reference["counts"]["routes"] == 1 and not reference["flight_records_changed"]
+    checked = json.loads(invoke(["vrs", "report"]).stdout)
+    assert checked["counts"]["exact_two_airport_association"]["records"] == 2
+    assert not checked["admission_changed"]
+    audited_routes = json.loads(
+        invoke(
+            [
+                "publish",
+                "--vrs",
+                "cached",
+                "--serving-db",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert audited_routes["route_audit"]["status"] == "checked"
+    assert audited_routes["route_audit"]["counts"]["reference_exact"] == 2
+    quality_queue = json.loads(invoke(["review", "queue"]).stdout)
+    assert quality_queue["version"] == "itinerary-cohort-review-v1"
+    inspected_review = subprocess.run(
+        admin_prefix + ["review", "queue"],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(inspected_review.stdout)["pending_records"] == 0
+
+    # Exercise the installed handoff on a disposable legacy-shaped snapshot.
+    legacy, adopted = root / "legacy.db", root / "adopted.db"
+    snapshot_code = """import sqlite3,sys
+from contextlib import closing
+from ingestion.adoption import ARCHIVE_TABLES
+with closing(sqlite3.connect(sys.argv[1])) as source, closing(sqlite3.connect(sys.argv[2])) as target:
+    source.backup(target)
+    tables = [row[0] for row in target.execute("SELECT name FROM sqlite_schema WHERE type='table'")]
+    for name in tables:
+        if name not in ARCHIVE_TABLES | {'ingestion_profiles'}:
+            target.execute('DROP TABLE "'+name.replace('"','""')+'"')
+    target.execute('DROP INDEX ingestion_publication_time')
+    target.commit()
+"""
+    subprocess.run(
+        [str(executable), "-c", snapshot_code, str(root / "ingestion.db"), str(legacy)],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    handoff = json.loads(
+        invoke(
+            [
+                "--db",
+                str(adopted),
+                "adopt",
+                "--from-db",
+                str(legacy),
+                "--source-root",
+                str(root),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert handoff["role"] == "ingestion" and handoff["source_changed"] is False
+    audited = json.loads(
+        invoke(
+            ["--db", str(adopted), "audit", "--apply", "--report", str(root / "audit.json")]
+        ).stdout
+    )
+    assert audited["health"]["passed"] and audited["counts"]["records"] == 2
+    replacement = root / "replacement.db"
+    released = json.loads(
+        invoke(
+            [
+                "--db",
+                str(adopted),
+                "publish",
+                "--vrs",
+                "cached",
+                "--serving-db",
+                str(replacement),
+                "--preserve-serving",
+                str(serving),
+                "--start",
+                "2025-01-01",
+                "--end",
+                "2025-01-01",
+            ]
+        ).stdout
+    )
+    assert released["inserted"] == 2
 
 
 def main():

@@ -1,21 +1,25 @@
 """Flight queries over the shared local itinerary database."""
 
-import json
+import sqlite3
 from bisect import bisect_left
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from core.admission import ADMITTED_SQL
 from core.connections import Airport, AirportTransfer, RebuildRequest, RebuiltPlan
+from core.database_roles import require_serving
 from core.models import FlightRecord, RouteSummary
 from core.planning import rebuild_from_snapshot, validate_prefix
+from core.quality import review_recommended_sql
 from core.routing.models import RouteSearchRequest, RoutingError, airport_code
 from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot, flight_key
-from core.storage import EPOCH, SQLiteConnection, utc_text, utc_us
+from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
 from server.web_models import (
     AirportCoverage,
@@ -30,8 +34,16 @@ from server.web_models import (
 
 
 class FlightReader(SQLiteConnection):
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, serving_only=False):
         super().__init__(path, read_only=True)
+        self.serving_only = serving_only
+
+    @contextmanager
+    def connect(self):
+        with super().connect() as connection:
+            if self.serving_only:
+                require_serving(connection)
+            yield connection
 
     def stats(self) -> dict:
         with self.connect() as connection:
@@ -56,12 +68,7 @@ class FlightReader(SQLiteConnection):
             "time_bases": bases,
         }
 
-    @staticmethod
-    def _record(row):
-        data = dict(row)
-        data["codeshares"] = json.loads(data["codeshares"])
-        data["review_reasons"] = json.loads(data.get("review_reasons", "[]"))
-        return FlightRecord.model_validate(data)
+    _record = staticmethod(flight_record)
 
     def _window(
         self,
@@ -84,13 +91,9 @@ class FlightReader(SQLiteConnection):
         """Query shared facts with typed time bounds and deterministic limits."""
         clauses, params = [], []
         if needs_review:
-            clauses.append(
-                "(evidence_kind = 'inferred_airport_proximity' OR json_array_length(review_reasons) > 0) AND itinerary_reviewed = 0"
-            )
+            clauses.append(review_recommended_sql())
         if searchable_only or time_basis is not None:
-            clauses.append(
-                "((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1)"
-            )
+            clauses.append(ADMITTED_SQL)
         departure_column, arrival_column = "departure", "arrival"
         if time_basis is not None:
             departure_column = (
@@ -156,11 +159,19 @@ class FlightReader(SQLiteConnection):
             for key, query in {
                 "routes": "SELECT COUNT(*) FROM (SELECT DISTINCT origin_iata, destination_iata FROM flights)",
                 "flight_airports": "SELECT COUNT(*) FROM (SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)",
+                "named_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL",
                 "catalog_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL",
                 "transfers": "SELECT COUNT(*) FROM airport_transfers",
                 "missing_airports": "SELECT COUNT(*) FROM (SELECT origin_iata AS iata FROM flights UNION SELECT destination_iata FROM flights) WHERE iata NOT IN (SELECT iata FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL)",
             }.items():
                 totals[key] = connection.execute(query).fetchone()[0]
+            totals["reference_carriers"] = (
+                connection.execute("SELECT COUNT(*) FROM carriers").fetchone()[0]
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE name='carriers'"
+                ).fetchone()
+                else 0
+            )
             for key, column in (("providers", "provider"), ("statuses", "status")):
                 totals[key] = dict(
                     connection.execute(
@@ -341,10 +352,9 @@ class FlightReader(SQLiteConnection):
     @staticmethod
     def _review_counts(connection):
         return dict(
-            connection.execute("""SELECT
+            connection.execute(f"""SELECT
             (SELECT COUNT(DISTINCT leg_id) FROM searchable_legs) searchable_flights,
-            COUNT(*) FILTER (WHERE (evidence_kind = 'inferred_airport_proximity' OR json_array_length(review_reasons) > 0)
-                AND itinerary_reviewed = 0) needs_review_count FROM flights""").fetchone()
+            COUNT(*) FILTER (WHERE {review_recommended_sql()}) needs_review_count FROM flights""").fetchone()
         )
 
     @staticmethod
@@ -465,6 +475,38 @@ class FlightReader(SQLiteConnection):
             "utc": resolve_local(local_time, exact.timezone, fold=fold),
         }
 
+    def readiness(self):
+        """Check serving storage/counts without building confidence or airport catalogs."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            require_serving(connection)
+            contract = connection.execute(
+                "SELECT contract,version FROM schema_metadata WHERE id=1"
+            ).fetchone()
+            if tuple(contract or ()) != ("flight-legs", 1):
+                raise sqlite3.DatabaseError("Unsupported flight schema contract")
+            complete = " OR ".join(
+                [
+                    "(departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL)",
+                    "departure_observed_lower_us IS NOT NULL",
+                    "(departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL)",
+                ]
+            )
+            count = connection.execute(
+                f"SELECT COUNT(*) FROM flight_legs f WHERE status <> 'cancelled' "
+                f"AND ({complete}) AND {ADMITTED_SQL} AND NOT EXISTS "
+                "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
+                "AND t.source_record_key=f.source_record_key)"
+            ).fetchone()[0]
+            basis = self._default_basis(connection)
+        return dict(
+            status="ready",
+            flight_count=count,
+            schema_contract="flight-legs",
+            schema_version=1,
+            time_basis=basis,
+        )
+
     def web_catalog(self) -> WebCatalog:
         with self.connect() as connection:
             connection.execute("BEGIN")
@@ -481,29 +523,27 @@ class FlightReader(SQLiteConnection):
                 else f"departure_{basis}_us"
                 for basis in conditions
             }
-            aggregates = ",".join(
-                f"COALESCE(SUM(eligible AND ({condition})),0) {basis}_count,"
-                f"MIN(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_first,"
-                f"MAX(CASE WHEN eligible AND ({condition}) THEN {columns[basis]} END) {basis}_last"
-                for basis, condition in conditions.items()
-            )
+            # Check admission a bounded number of times per fact. Repeating a
+            # flattened eligibility expression in each aggregate multiplies JSON
+            # evidence checks across every time basis on multi-million-row files.
             complete = " OR ".join(f"({condition})" for condition in conditions.values())
             facts = dict(
-                connection.execute(f"""WITH live AS (
-                SELECT f.*, status <> 'cancelled' AND (
-                    (evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
-                    OR itinerary_reviewed=1) eligible
+                connection.execute(f"""SELECT COUNT(*) total_record_count,
+                COUNT(*) FILTER (WHERE status <> 'cancelled' AND ({complete}) AND {ADMITTED_SQL}) flight_count,
+                COALESCE(SUM({review_recommended_sql()}),0) needs_review_count,
+                COALESCE(SUM(status = 'cancelled'),0) cancelled_count,
+                MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh
                 FROM flight_legs f WHERE NOT EXISTS (
                     SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key
-                )) SELECT COUNT(*) total_record_count,
-                COALESCE(SUM(eligible AND ({complete})),0) flight_count,
-                COALESCE(SUM((evidence_kind='inferred_airport_proximity' OR json_array_length(review_reasons)>0)
-                    AND itinerary_reviewed=0),0) needs_review_count,
-                COALESCE(SUM(status = 'cancelled'), 0) cancelled_count,
-                MIN(last_seen_us) oldest_fact_refresh, MAX(last_seen_us) newest_fact_refresh,
-                {aggregates} FROM live""").fetchone()
+                )""").fetchone()
             )
+            for basis in conditions:
+                row = connection.execute(
+                    "SELECT COUNT(*),MIN(departure_lower_us),MAX(departure_lower_us) FROM searchable_legs WHERE time_basis=?",
+                    (basis,),
+                ).fetchone()
+                facts[f"{basis}_count"], facts[f"{basis}_first"], facts[f"{basis}_last"] = row
             for key in ("oldest_fact_refresh", "newest_fact_refresh"):
                 if facts[key] is not None:
                     facts[key] = EPOCH + timedelta(microseconds=facts[key])
@@ -535,8 +575,7 @@ class FlightReader(SQLiteConnection):
             suggestion = connection.execute(
                 f"""SELECT origin_iata,destination_iata FROM flight_legs f
                 WHERE status <> 'cancelled' AND ({conditions[basis]})
-                AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0)
-                    OR itinerary_reviewed=1)
+                AND {ADMITTED_SQL}
                 AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)
                 ORDER BY {columns[basis]},source_id,source_record_key LIMIT 1""",
@@ -544,7 +583,7 @@ class FlightReader(SQLiteConnection):
             rows = list(
                 connection.execute("""WITH active_codes(iata) AS (
                 SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
-                SELECT a.iata, a.name, a.city_id, a.timezone, a.latitude, a.longitude
+                SELECT a.*
                 FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""")
             )
         return WebCatalog(
@@ -573,7 +612,7 @@ class FlightReader(SQLiteConnection):
                 row = connection.execute(
                     f"SELECT origin_iata,destination_iata,{column} FROM flight_legs f "
                     f"WHERE status <> 'cancelled' AND ({condition}) "
-                    "AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons)=0) OR itinerary_reviewed=1) "
+                    f"AND {ADMITTED_SQL} "
                     "AND NOT EXISTS (SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
                     "AND t.source_record_key=f.source_record_key) "
                     f"ORDER BY {column},source_id,source_record_key LIMIT 1",
@@ -584,7 +623,7 @@ class FlightReader(SQLiteConnection):
             suggested = first.get(basis)
             rows = connection.execute("""WITH active_codes(iata) AS (
                 SELECT origin_iata FROM flight_legs UNION SELECT destination_iata FROM flight_legs)
-                SELECT a.iata,a.name,a.city_id,a.timezone,a.latitude,a.longitude
+                SELECT a.*
                 FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata
                 LIMIT 1001""").fetchall()
         return WebBootstrap(
@@ -823,11 +862,16 @@ class FlightReader(SQLiteConnection):
         if city_id:
             clauses.append("city_id = ?")
             params.append(city_id)
-        if query:
-            clauses.append("(iata = ? OR name LIKE ?)")
-            params.extend((query.upper(), "%" + query + "%"))
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
+            if query:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(airports)")}
+                matches = ["iata = ?", "name LIKE ?"]
+                params.extend((query.upper(), "%" + query + "%"))
+                if "icao" in columns:
+                    matches.extend(["icao = ?", "municipality LIKE ?"])
+                    params.extend((query.upper(), "%" + query + "%"))
+                clauses.append("(" + " OR ".join(matches) + ")")
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
             rows = connection.execute(
                 "SELECT * FROM airports" + where + " ORDER BY city_id, iata LIMIT ?",
                 [*params, limit],
@@ -886,7 +930,7 @@ class FlightReader(SQLiteConnection):
         limit: int = 500,
     ) -> list[RouteSummary]:
         where, params = self._where(start, end, origin, destination)
-        where += " AND ((evidence_kind <> 'inferred_airport_proximity' AND json_array_length(review_reasons) = 0) OR itinerary_reviewed = 1)"
+        where += f" AND {ADMITTED_SQL}"
         with self.connect() as connection:
             rows = connection.execute(
                 f"""SELECT origin_iata, destination_iata, COUNT(*) flight_count,

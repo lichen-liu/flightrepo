@@ -9,7 +9,7 @@ const base = process.env.FLYJI_QA_URL || "http://127.0.0.1:8013";
 const out = process.env.FLYJI_QA_OUTPUT || path.resolve("var/web-qa");
 const searchPath = /\/v1\/itineraries\/search(?:\/local)?$/;
 const identity = (legs) =>
-  legs.map(({ provider, provider_id }) => ({ provider, provider_id }));
+  legs.map(({ flight_id }) => ({ flight_id }));
 let browser;
 before(async () => {
   browser = await chromium.launch({
@@ -142,6 +142,48 @@ check("stop count defaults to unbounded and survives links exports and connectio
   await page.getByLabel("Maximum stops").selectOption("any");
   const unlimited = await search(page);
   assert.equal(unlimited.query.max_legs, null);
+});
+
+check("accuracy warnings remain visible without disclosing audit evidence", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.items[0].legs[0].quality = { level: "uncertain", labels: [
+      { code: "uncertain_itinerary", severity: "caution", label: "Uncertain itinerary", detail: "Some itinerary information is uncertain." },
+    ] };
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator("[data-option]").first()).toContainText("Uncertain itinerary");
+  await expect(page.locator("#legs")).toContainText("Uncertain itinerary");
+});
+
+check("public responses exports and page keep provenance inside the backend", async (page) => {
+  const data = await open(page);
+  const exportedData = await exported(page);
+  const forbidden = /adsblol|adsb\.lol|ourairports|vrs|provider_id|route_verification|reference_sha256|review_reasons|evidence_kind|snapshot_id/;
+  assert.doesNotMatch(JSON.stringify(data), forbidden);
+  assert.doesNotMatch(JSON.stringify(exportedData), forbidden);
+  assert.doesNotMatch(await page.locator("body").innerText(), forbidden);
+  const notice = page.getByRole("link", {name: "Data sources & licences"});
+  await expect(notice).toBeVisible();
+  assert.equal(new URL(exportedData.data_licence_notice).pathname, "/data-sources");
+  await notice.click();
+  await expect(page.getByRole("heading", {name: "Data sources & licences"})).toBeVisible();
+});
+
+check("uncertain and conflicting flight evidence has consistent visible labels", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.items[0].legs[0].quality = {level:"conflict",labels:[
+      {code:"observation_gap",severity:"caution",label:"Observation gap",detail:"An intermediate stop may be unobserved."},
+      {code:"timing_conflict",severity:"warning",label:"Timing conflict",detail:"Airports and time window imply an implausible speed."},
+    ]};
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  await expect(page.locator("[data-option]").first()).toContainText("Timing conflict");
+  await expect(page.locator("[data-option]").first()).toContainText("Observation gap");
+  await expect(page.locator("#legs .quality-warning")).toContainText("implausible speed");
 });
 
 check("calendar disables gaps, repairs unavailable links, and handles origins with no data", async (page) => {
@@ -608,7 +650,8 @@ check(
     );
     assert.deepEqual(selected.query.via_airport, ["AMS"]);
     assert.equal(selected.coverage, "unknown");
-    assert.ok(selected.selection.diagnostics.snapshot_id);
+    assert.equal(selected.selection.diagnostics.snapshot_id, undefined);
+    assert.ok(selected.data_licence_notice.endsWith("/data-sources"));
     assert.equal(new URL(page.url()).searchParams.get("via"), "AMS");
     const reloaded = await context.newPage();
     await reloaded.goto(page.url());

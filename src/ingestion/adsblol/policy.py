@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ExtractionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_gap_seconds: int = Field(default=21600, ge=1, le=86400)
+    review_gap_seconds: int = Field(default=1800, ge=1, le=86400)
     max_terminal_seconds: int = Field(default=1800, ge=1, le=7200)
     min_airborne_seconds: int = Field(default=60, ge=1)
     airport_radius_km: float = Field(default=25, gt=0, le=100)

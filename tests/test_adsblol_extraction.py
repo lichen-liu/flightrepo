@@ -13,9 +13,11 @@ from test_adsblol import asset, rules
 from test_adsblol_legs import AIRPORTS, leg_trace
 
 from core.disk_quota import database_bytes, set_quota
+from core.storage import SQLiteConnection
 from ingestion.adsblol import extraction
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.movements import AirportLookup, reduce_movement
+from ingestion.store import STORE_SCHEMA, IngestionStore
 from ingestion.updater import FlightUpdater
 
 
@@ -62,8 +64,10 @@ def run(root, day, traces, **options):
 
 
 def rows(root, table):
-    with sqlite3.connect(root / "itineraries.db") as connection:
-        return connection.execute(f"SELECT * FROM {table}").fetchall()
+    # sqlite3.Connection.__exit__ commits/rolls back but does not close. Read helpers
+    # must not leave writable handles for GC to checkpoint during a later status call.
+    with SQLiteConnection(root / "itineraries.db", read_only=True).connect() as connection:
+        return [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
 
 
 def test_daily_extraction_keeps_only_itinerary_data_then_removes_raw_and_resumes(tmp_path):
@@ -239,7 +243,7 @@ def test_parallel_repeated_day_commits_only_once(tmp_path):
 
 def test_external_output_database_is_excluded_from_working_budget(tmp_path):
     root, target = tmp_path / "scratch", tmp_path / "hosted" / "flights.db"
-    FlightUpdater(target).initialize()
+    IngestionStore(target).initialize()
     receipt, item = run(root, date(2025, 1, 1), [leg_trace()], output_db=target, policy_db=target)
     assert receipt["counts"]["records_inserted"] == 1
     assert not (root / "itineraries.db").exists()
@@ -261,7 +265,7 @@ def test_raw_working_space_can_exceed_database_quota(tmp_path, external):
     root = tmp_path / "scratch"
     root.mkdir()
     target = tmp_path / "hosted.db" if external else root / "itineraries.db"
-    FlightUpdater(target).initialize()
+    IngestionStore(target).initialize()
     set_quota(target, 1024**2)
     # Retained raw data is deliberately larger than the persisted database limit.
     raw = root / "raw" / "current-copy.tar"
@@ -281,7 +285,7 @@ def test_raw_working_space_can_exceed_database_quota(tmp_path, external):
 
 def test_uncommitted_database_pages_are_checked_against_persisted_quota(tmp_path):
     target = tmp_path / "flights.db"
-    FlightUpdater(target).initialize()
+    IngestionStore(target).initialize()
     set_quota(target, database_bytes(target) + 512 * 1024)
     budget = extraction.ExtractionBudget(tmp_path / "scratch", output_db=target)
     with sqlite3.connect(target) as connection:
@@ -430,6 +434,9 @@ def test_previous_day_ground_refines_airborne_origin_without_a_duplicate(tmp_pat
 
 def test_partial_schema_initialization_can_be_repaired_on_restart(tmp_path):
     with sqlite3.connect(tmp_path / "itineraries.db") as connection:
+        connection.executescript(
+            STORE_SCHEMA.split("CREATE TABLE IF NOT EXISTS ingestion_profiles", 1)[0]
+        )
         connection.execute(
             "CREATE TABLE itinerary_legs(key TEXT PRIMARY KEY, departure_date TEXT NOT NULL, data TEXT NOT NULL)"
         )

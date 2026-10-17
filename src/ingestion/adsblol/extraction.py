@@ -5,11 +5,12 @@ import json
 import re
 import sqlite3
 from collections import Counter
-from contextlib import closing, nullcontext
+from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.database_roles import ingestion_target
 from core.disk_quota import database_bytes, file_bytes, policy
 from core.file_lock import file_mutex
 from core.models import FlightRecord
@@ -23,6 +24,7 @@ from ingestion.adsblol.archive import (
     verified,
 )
 from ingestion.adsblol.diagnostics import LOGGER, Diagnostics
+from ingestion.adsblol.legs import airport_timing_is_implausible
 from ingestion.adsblol.movements import (
     AirportLookup,
     LeadingMovement,
@@ -30,8 +32,10 @@ from ingestion.adsblol.movements import (
     advance_boundary,
     reduce_movement,
 )
+from ingestion.adsblol.scratch import raw_directory, staging_directory
+from ingestion.store import IDENTITY_SCHEMA, STORE_SCHEMA
 
-PIPELINE_VERSION = "observed-itinerary-v3"
+PIPELINE_VERSION = "observed-itinerary-v5"
 
 SOURCE_ROWS = [
     (
@@ -61,7 +65,9 @@ CREATE TABLE IF NOT EXISTS extraction_sources (
 """
 
 SCHEMA = (
-    SERVING_SCHEMA
+    IDENTITY_SCHEMA
+    + SERVING_SCHEMA
+    + STORE_SCHEMA
     + SOURCE_SCHEMA
     + """
 CREATE VIEW IF NOT EXISTS itinerary_legs AS
@@ -143,6 +149,7 @@ def receipt_scope(receipt, saved_config):
 def save_leg(connection, leg, counters, *, diagnostics=None):
     # Departure evidence may improve when a previous day is backfilled. Anchor
     # the movement to its arrival observation so that refinement keeps one key.
+    # Keep the source identity namespace stable across filtering revisions.
     identity = f"observed-itinerary-v3:{leg.icao_hex}:{leg.arrival_lower.isoformat()}"
     key = hashlib.blake2b(identity.encode(), digest_size=16).hexdigest()
     return save_candidate(
@@ -154,6 +161,32 @@ def save_leg(connection, leg, counters, *, diagnostics=None):
     )
 
 
+def implausible_airport_timing(connection, data):
+    """Flag inconsistent airport/time claims using the widest retained time window.
+
+    This deliberately generous civil-flight bound does not depend on a type or
+    operator whitelist. It catches false short hops without discarding evidence.
+    Missing airport coordinates cannot establish a contradiction.
+    """
+    points = {
+        code: (lat, lon)
+        for code, lat, lon in connection.execute(
+            "SELECT iata,latitude,longitude FROM airports WHERE iata IN (?,?)",
+            (data["origin_iata"], data["destination_iata"]),
+        )
+        if lat is not None and lon is not None
+    }
+    if len(points) != 2:
+        return False
+    elapsed = (
+        datetime.fromisoformat(data["arrival_upper"])
+        - datetime.fromisoformat(data["departure_lower"])
+    ).total_seconds()
+    return airport_timing_is_implausible(
+        points[data["origin_iata"]], points[data["destination_iata"]], elapsed
+    )
+
+
 def save_candidate(connection, key, data, counters, *, diagnostics=None):
     protected = connection.execute(
         "SELECT 1 FROM flight_tombstones WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? UNION ALL SELECT 1 FROM flight_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? AND locally_modified_us IS NOT NULL",
@@ -162,6 +195,12 @@ def save_candidate(connection, key, data, counters, *, diagnostics=None):
     if protected:
         counters["records_protected"] += 1
         return False
+    if implausible_airport_timing(connection, data):
+        reasons = data.get("review_reasons", [])
+        if "implausible_airport_timing" not in reasons:
+            data = {**data, "review_reasons": [*reasons, "implausible_airport_timing"]}
+            if diagnostics is not None:
+                diagnostics.count("review_reasons", "implausible_airport_timing")
     old = connection.execute("SELECT data FROM itinerary_legs WHERE key=?", (key,)).fetchone()
     if old is not None and json.loads(old[0]) != data:
         previous = json.loads(old[0])
@@ -317,7 +356,12 @@ class ExtractionBudget:
             for path in databases
             for item in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"))
         }
-        return sum(file_bytes(path) for path in self.root.rglob("*") if path not in excluded)
+        used = sum(file_bytes(path) for path in self.root.rglob("*") if path not in excluded)
+        # pathlib does not recurse through the configured RAM symlink.
+        raw = raw_directory(self.root)
+        if raw.is_symlink():
+            used += directory_bytes(raw.resolve())
+        return used
 
     def check_database(self, connection=None):
         limit = self.database_ceiling()
@@ -355,7 +399,7 @@ class ExtractionBudget:
 def cleanup_raw(root, receipt):
     """Remove only recorded inputs that still match their committed hashes."""
     for item in receipt["inputs"]:
-        path = root / "raw" / receipt["day"] / item["name"]
+        path = raw_directory(root) / receipt["day"] / item["name"]
         if not path.exists():
             continue
         saved = {**item, "date": receipt["day"]}
@@ -550,7 +594,7 @@ def _extract_day(
     database.parent.mkdir(parents=True, exist_ok=True)
     with (
         closing(sqlite3.connect(database, timeout=10)) as connection,
-        TemporaryDirectory(prefix=".day-stage-", dir=root) as scratch,
+        TemporaryDirectory(prefix=".day-stage-", dir=staging_directory(root)) as scratch,
         closing(sqlite3.connect(Path(scratch) / "day.db")) as staged,
     ):
         connection.execute("PRAGMA foreign_keys=ON")
@@ -593,7 +637,7 @@ def _extract_day(
                     canonical(assets),
                 ),
             ).lastrowid
-        output = root / "raw"
+        output = raw_directory(root)
         diagnostics.phase = "download"
         if download:
             other = budget.used() - directory_bytes(output) if output.exists() else budget.used()
@@ -621,6 +665,7 @@ def _extract_day(
                 "UPDATE ingestion_batches SET inputs_json=? WHERE id=?",
                 (canonical(inputs), batch_id),
             )
+        staged.execute("PRAGMA temp_store=MEMORY")
         staged.executescript(SCHEMA)
         with staged:
             record_sources(staged)
@@ -771,13 +816,11 @@ def extract_day(
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     budget = ExtractionBudget(root, limit, policy_db, output_db=output_db)
+    ingestion_target(budget.database)
     # Serialize by destination as well as scratch directory when these differ.
-    lock = (
-        budget.database.with_name(budget.database.name + ".extraction.lock")
-        if output_db
-        else root / ".extract.lock"
-    )
-    with file_mutex(root / ".extract.lock"), file_mutex(lock) if output_db else nullcontext():
+    lock = budget.database.with_name(budget.database.name + ".extraction.lock")
+    with file_mutex(root / ".extract.lock"), file_mutex(lock):
+        raw_directory(root)
         counters = Counter(
             records_inserted=0,
             records_updated=0,

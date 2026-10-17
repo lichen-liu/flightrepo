@@ -7,12 +7,14 @@ export const escapeHTML = (value) =>
       ],
   );
 export const ref = (flight) => ({
-  provider: flight.provider,
-  provider_id: flight.provider_id,
+  flight_id: flight.flight_id,
 });
 export const departureTime = (f) => f.departure_lower ?? f.departure_scheduled ?? f.departure_observed_lower ?? f.departure_actual;
 export const arrivalTime = (f) => f.arrival_upper ?? f.arrival_scheduled ?? f.arrival_observed_upper ?? f.arrival_actual;
-export const flightLabel = (f) => f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : f.provider_id);
+export const flightLabel = (f) => {
+  const identity = f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : "Flight");
+  return f.operator_name ? `${identity} · ${f.operator_name} (operator)` : identity;
+};
 export function flightTimeLabel(f, event, zone = "UTC") {
   const point = event === "departure" ? departureTime(f) : arrivalTime(f);
   const lower = f[`${event}_lower`] || point, upper = f[`${event}_upper`] || point;

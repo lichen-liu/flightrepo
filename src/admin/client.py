@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from admin.admission import apply_admission
 from admin.ingestion import add_ingestion_commands, run_ingestion
 from admin.management import (
     approve_flight,
@@ -27,13 +28,16 @@ from admin.management import (
 )
 from core.config import LOCAL_DATA_DIR, get_settings
 from core.connections import Airport, AirportTransfer, RebuildRequest
+from core.database_roles import ingestion_path, sqlite_file
 from core.disk_quota import policy, set_quota, storage_status
 from core.models import FlightRecord, FlightStatus
 from core.planning import rebuild_from_snapshot
 from core.routing.debug import replay, replay_document
 from core.routing.models import RouteSearchRequest, airport_code, utc_instant
 from core.routing.search import search_routes
+from ingestion import review as review_tools
 from ingestion.adsblol.diagnostics import configure_logging
+from ingestion.store import IngestionStore
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
 
@@ -97,6 +101,8 @@ def clear_database(path):
     path = path.resolve()
     if not path.is_relative_to(LOCAL_DATA_DIR.resolve()):
         raise ValueError("clear-data only supports data files under the project's var directory")
+    if ingestion_path(path):
+        return IngestionStore(path).clear()
     FlightUpdater(path).reset()
     return FlightReader(path).stats()
 
@@ -167,7 +173,10 @@ def print_overview(summary):
         f"Transfer rules: {summary['transfers']:,}"
     )
     print(
-        f"Searchable flights: {summary['searchable_flights']:,}   Awaiting itinerary review: {summary['needs_review_count']:,}"
+        f"Searchable flights: {summary['searchable_flights']:,}   Review recommended: {summary['needs_review_count']:,}"
+    )
+    print(
+        f"Named airports: {summary['named_airports']:,}   Operator references: {summary['reference_carriers']:,}"
     )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
@@ -188,7 +197,7 @@ def print_overview(summary):
     for route in summary["top_routes"]:
         print(f"  {route['origin_iata']} -> {route['destination_iata']}: {route['flights']:,}")
     if not summary["flights"]:
-        print("  No flights yet. Use create-route or import-json to add flights.")
+        print("  No flights yet.")
 
 
 def disk_quota(value):
@@ -221,6 +230,7 @@ def parser():
         "overview", help="database coverage, counts and fetch timestamps"
     )
     overview.add_argument("--json", action="store_true", help="print structured JSON")
+    review_tools.configure_commands(commands, writes=False, reports=False)
     commands.add_parser("create-route", help="enter connected flight records, preview and save")
     commands.add_parser("create-airport", help="enter airport metadata, preview and save")
     storage = commands.add_parser("storage", help="database disk usage and live quota")
@@ -235,7 +245,7 @@ def parser():
     flights.add_argument(
         "--needs-review",
         action="store_true",
-        help="only uncertain itinerary estimates awaiting approval",
+        help="records with confidence labels recommending review; eligibility is separate",
     )
     flights.add_argument("--origin", type=airport_code)
     flights.add_argument("--destination", type=airport_code)
@@ -328,9 +338,19 @@ def parser():
     sql.add_argument("sql")
     sql.add_argument("--limit", type=query_limit, default=20)
 
-    maintenance = commands.add_parser("maintenance", help="initialize schema or clear local data")
+    maintenance = commands.add_parser(
+        "maintenance", help="initialize schema, apply admission policy or clear local data"
+    )
     operations = maintenance.add_subparsers(dest="maintenance_action", required=True)
     operations.add_parser("init", help="explicitly initialize the Flyji schema")
+    operations.add_parser(
+        "apply-admission",
+        help="admit labeled airport estimates; retain timing/gap review and manual decisions",
+    )
+    reset = operations.add_parser(
+        "reset", help="reset ingestion data/configuration; keep file/schema"
+    )
+    reset.add_argument("--yes", action="store_true", help="confirm ingestion reset")
     clear = operations.add_parser(
         "clear-data", help="delete all flights, airports and transfers; keep schema"
     )
@@ -393,6 +413,52 @@ def run(arguments, *, database_path=None, interactive=False):
         output(replay(read_json(args.path)))
         return
     path = (args.db or database_path or get_settings().database_path).expanduser().resolve()
+    destinations = [getattr(args, "snapshot_out", None)]
+    if args.command == "export-json" or (
+        args.command == "airports" and args.airport_action == "export"
+    ):
+        destinations.append(args.path)
+    for destination in filter(None, destinations):
+        destination = Path(destination).expanduser().resolve()
+        family = [path, Path(str(path) + "-wal"), Path(str(path) + "-shm")]
+        if any(
+            destination == member
+            or (destination.exists() and member.exists() and destination.samefile(member))
+            for member in family
+        ) or sqlite_file(destination):
+            raise ValueError("Export output cannot overwrite a database or its SQLite sidecars")
+    if ingestion_path(path):
+        reading = args.command in {
+            None,
+            "overview",
+            "review",
+            "inspect",
+            "flights",
+            "search",
+            "routes",
+            "export-json",
+            "debug",
+            "ingest",
+        }
+        reading |= args.command == "flight" and args.flight_action == "show"
+        reading |= args.command == "airports" and args.airport_action != "import"
+        reading |= args.command == "storage" and not hasattr(args, "size")
+        reading |= args.command == "db" and not args.create
+        lifecycle = args.command == "maintenance" and args.maintenance_action in {
+            "clear-data",
+            "reset",
+        }
+        if not (reading or lifecycle):
+            raise ValueError(
+                "Ingestion admin is read/query-only except explicit clear-data/reset; use producer tools"
+            )
+        if lifecycle:
+            if not args.yes:
+                raise ValueError("Supply --yes to clear/reset the ingestion database")
+            output(IngestionStore(path).clear(reset=args.maintenance_action == "reset"))
+            return
+    if args.command == "db" and args.create and args.target and ingestion_path(args.target):
+        raise ValueError("Admin cannot initialize or modify an ingestion store")
     if args.command is None:
         LocalShell(path).cmdloop()
     elif args.command == "db":
@@ -403,10 +469,16 @@ def run(arguments, *, database_path=None, interactive=False):
             query_database(target, "SELECT name FROM sqlite_schema LIMIT 1", 1)
         print(f"Database: {target}")
         return target
+    elif args.command == "review":
+        output(review_tools.read_command(path, args))
     elif args.command == "maintenance":
+        if args.maintenance_action == "reset":
+            raise ValueError("reset is for ingestion stores; serving uses clear-data")
         if args.maintenance_action == "init":
             FlightUpdater(path).initialize()
             output({"initialized": path})
+        elif args.maintenance_action == "apply-admission":
+            output(apply_admission(path))
         else:
             if not args.yes:
                 raise ValueError(
@@ -535,6 +607,8 @@ class LocalShell(cmd.Cmd):
         super().__init__()
         self.database_path = (database_path or get_settings().database_path).expanduser().resolve()
         self.intro += f"\nDatabase: {self.database_path}"
+        if ingestion_path(self.database_path):
+            self.intro += "\nIngestion store: read/query only; clear-data/reset require --yes. Producer jobs use flyji-ingest."
 
     def default(self, line):
         try:

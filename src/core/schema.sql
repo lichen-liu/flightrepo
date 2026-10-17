@@ -16,12 +16,6 @@ CREATE TABLE IF NOT EXISTS database_policy (
 ) STRICT;
 INSERT OR IGNORE INTO database_policy VALUES (1, 21474836480);
 
-CREATE TABLE IF NOT EXISTS ingestion_profiles (
-    source TEXT PRIMARY KEY,
-    data TEXT NOT NULL CHECK(json_valid(data)),
-    last_used INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE CHECK(length(trim(code)) > 0),
@@ -36,6 +30,10 @@ CREATE TABLE IF NOT EXISTS data_sources (
 CREATE TABLE IF NOT EXISTS airports (
     iata TEXT PRIMARY KEY CHECK(iata GLOB '[A-Z][A-Z][A-Z]'),
     name TEXT,
+    icao TEXT,
+    municipality TEXT,
+    country_code TEXT,
+    region_code TEXT,
     city_id TEXT,
     timezone TEXT,
     latitude REAL CHECK(latitude BETWEEN -90 AND 90),
@@ -45,6 +43,27 @@ CREATE TABLE IF NOT EXISTS airports (
     CHECK((latitude IS NULL) = (longitude IS NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS airports_city ON airports(city_id, iata) WHERE city_id IS NOT NULL;
+
+-- Shared, compact operator reference. IATA identifiers are not unique.
+CREATE TABLE IF NOT EXISTS carriers (
+    code TEXT PRIMARY KEY CHECK(length(trim(code)) BETWEEN 1 AND 16),
+    name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+    icao TEXT UNIQUE CHECK(icao IS NULL OR icao GLOB '[A-Z][A-Z][A-Z]'),
+    iata TEXT CHECK(iata IS NULL OR iata GLOB '[A-Z0-9][A-Z0-9]'),
+    metadata_source_id INTEGER REFERENCES data_sources(id),
+    metadata_updated_us INTEGER
+) STRICT, WITHOUT ROWID;
+
+-- Shared backend catalog provenance; excluded from public flight API responses.
+CREATE TABLE IF NOT EXISTS reference_snapshots (
+    source_id INTEGER NOT NULL REFERENCES data_sources(id),
+    kind TEXT NOT NULL CHECK(kind IN ('airports','carriers')),
+    source_url TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+    fetched_us INTEGER NOT NULL,
+    row_count INTEGER NOT NULL CHECK(row_count>0),
+    PRIMARY KEY(source_id,kind)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS airport_transfers (
     arrival_iata TEXT NOT NULL REFERENCES airports(iata),
@@ -108,6 +127,8 @@ CREATE TABLE IF NOT EXISTS flight_legs (
         CHECK(evidence_kind IN ('source_reported', 'inferred_ground_brackets', 'inferred_airport_proximity', 'manual')),
     review_reasons TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(review_reasons) AND json_type(review_reasons) = 'array'),
     itinerary_reviewed INTEGER NOT NULL DEFAULT 0 CHECK(itinerary_reviewed IN (0,1)),
+    route_verification TEXT CHECK(route_verification IS NULL OR
+        (json_valid(route_verification) AND json_type(route_verification)='object')),
     departure_scheduled_us INTEGER,
     arrival_scheduled_us INTEGER,
     departure_actual_us INTEGER,
@@ -209,7 +230,7 @@ SELECT f.id AS leg_id, f.source_id, f.source_record_key,
        'scheduled_departure' AS departure_event,
        'scheduled_arrival' AS arrival_event
 FROM flight_legs f
-WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_scheduled_us IS NOT NULL
     AND f.arrival_scheduled_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -221,7 +242,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_actual_us, f.arrival_actual_us,
        f.departure_actual_kind, f.arrival_actual_kind
 FROM flight_legs f
-WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_actual_us IS NOT NULL
     AND f.arrival_actual_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
@@ -233,7 +254,7 @@ SELECT f.id, f.source_id, f.source_record_key,
        f.arrival_observed_lower_us, f.arrival_observed_upper_us,
        'ground_to_air_transition', 'air_to_ground_transition'
 FROM flight_legs f
-WHERE ((f.evidence_kind <> 'inferred_airport_proximity' AND json_array_length(f.review_reasons) = 0) OR f.itinerary_reviewed = 1)
+WHERE NOT (f.itinerary_reviewed=0 AND EXISTS (SELECT 1 FROM json_each(f.review_reasons) AS reason WHERE reason.value IS NULL OR reason.value NOT IN ('airborne_airport_estimate','callsign_variation','implausible_airport_timing','observation_gap')))
     AND f.status <> 'cancelled' AND f.departure_observed_lower_us IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
                     WHERE t.source_id = f.source_id AND t.source_record_key = f.source_record_key);

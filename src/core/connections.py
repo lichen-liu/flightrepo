@@ -29,6 +29,19 @@ from core.routing.models import (
 class Airport(BaseModel):
     iata: str = Field(pattern=r"^[A-Z]{3}$")
     name: str | None = Field(default=None, min_length=1)
+    icao: str | None = None
+    municipality: str | None = None
+    country_code: str | None = None
+    region_code: str | None = None
+
+    @model_serializer(mode="wrap")
+    def reference_fields(self, handler):
+        data = handler(self)
+        for name in ("icao", "municipality", "country_code", "region_code"):
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
+
     city_id: str | None = Field(default=None, min_length=1)
     timezone: str | None = None
     latitude: float | None = Field(default=None, ge=-90, le=90)

@@ -1,0 +1,258 @@
+{
+  "research_date": "2026-10-15",
+  "timezone": "America/Toronto",
+  "scope": "Read-only public access and bounded bulk probes; no production import/admission changes",
+  "raw_temporary_storage": "RAM disk only; removed after research",
+  "vrs": {
+    "url": "https://vrs-standing-data.adsb.lol/routes.csv",
+    "status": 200,
+    "bytes": 18957159,
+    "sha256": "f91ae7152ed78680455d072f20aa510d6f10ee9cd5710d44a8fa1668be890b33",
+    "content_type": "text/csv; charset=utf-8",
+    "last_modified": "Sun, 20 Sep 2026 18:48:31 GMT",
+    "rows": 620700,
+    "columns": [
+      "Callsign",
+      "Code",
+      "Number",
+      "AirlineCode",
+      "AirportCodes"
+    ]
+  },
+  "vrs_july_10_comparison": {
+    "checked_at": "2026-10-16T00:55:48.595122+00:00",
+    "scope": "full UTC departure intervals July10 2023; readonly live snapshot",
+    "reference_rows": 620700,
+    "route_chain_lengths": {
+      "2": 586173,
+      "3": 30496,
+      "4": 3477,
+      "9": 16,
+      "6": 91,
+      "7": 46,
+      "5": 385,
+      "8": 7,
+      "10": 3,
+      "12": 3,
+      "11": 3
+    },
+    "counts": {
+      "records": 22412,
+      "held_records": 14045,
+      "adjacent_leg_in_multistop_association": 446,
+      "no_callsign_reference": 6261,
+      "held_no_callsign_reference": 3021,
+      "held_adjacent_leg_in_multistop_association": 301,
+      "exact_two_airport_association": 5839,
+      "held_exact_two_airport_association": 3676,
+      "different_current_route_association": 9866,
+      "held_different_current_route_association": 7047
+    },
+    "date_valid_reference": false,
+    "normalization": "Exact callsign after trim/uppercase only; no guessed carrier conversions or zero trimming",
+    "flight_records_changed": false,
+    "verdict": "Offline bulk matching works; matches are undated route plausibility, conflicts/absences do not prove a historical flight false or justify auto-release"
+  },
+  "taiwan_download": {
+    "method": "macOS system curl with normal TLS verification; no insecure flags",
+    "url": "https://www.caa.gov.tw/FileAtt.ashx?id=16679&lang=1",
+    "bytes": 133668,
+    "sha256": "ebfd2e8f207a46f250fe48c53b53770d10a1fec342a18a73e19f349574bb0f35",
+    "encoding": "utf-8-sig",
+    "rows": 1471,
+    "columns": [
+      "Airline",
+      "FlightNumber",
+      "CodeShareInfo",
+      "DepartureAirport",
+      "DepartureDateTime",
+      "TransitAirport_1",
+      "TransitAirportArrival_1",
+      "TransitAirportDeparture_1",
+      "TransitAirport_2",
+      "TransitAirportArrival_2",
+      "TransitAirportDeparture_2",
+      "TransitAirport_3",
+      "TransitAirportArrival_3",
+      "TransitAirportDeparture_3",
+      "TransitAirport_4",
+      "TransitAirportArrival_4",
+      "TransitAirportDeparture_4",
+      "TransitAirport_5",
+      "TransitAirportArrival_5",
+      "TransitAirportDeparture_5",
+      "ArrivalAirport",
+      "ArrivalDateTime",
+      "ScheduleStartDate",
+      "ScheduleEndDate",
+      "WeekDay",
+      "AircraftType",
+      "AircraftTypeSecondary_1",
+      "AircraftTypeSecondary_2",
+      "AircraftTypeSecondary_3",
+      "AircraftTypeSecondary_4",
+      "AircraftTypeSecondary_5",
+      "Flag"
+    ]
+  },
+  "taiwan_shape": {
+    "checked_at": "2026-10-16T00:55:48.602915+00:00",
+    "csv_rows": 1471,
+    "validity_min": "2026-09-28",
+    "validity_max": "2026-10-25",
+    "future_cutoff_local_date": "2026-10-15",
+    "rows_covering_cutoff_or_future": 719,
+    "expanded_future_departures_before_dedup": 2125,
+    "unique_departure_keys": 2125,
+    "future_min": "2026-10-15",
+    "future_max": "2026-10-25",
+    "aircraft_primary_present": 1471,
+    "aircraft_primary_values": [
+      "319",
+      "320",
+      "321",
+      "32N",
+      "32Q",
+      "333",
+      "738",
+      "739",
+      "73J",
+      "77W",
+      "781",
+      "788",
+      "789"
+    ],
+    "days_pattern_lengths": {
+      "7": 1471
+    },
+    "multi_stop_rows": 0,
+    "departure_time_example": "1120",
+    "expansion_scope": "Research count from effective ranges/weekday mask only; no production ingestion, UTC conversion, codeshare reconciliation or verification of actual operation"
+  },
+  "avinor": {
+    "url": "https://asrv.avinor.no/XmlFeed/v1.0?TimeFrom=1&TimeTo=7&airport=OSL&direction=D",
+    "status": 200,
+    "bytes": 19743,
+    "sha256": "8fe0c9877e8212c9a805703271b02630e9df262a74aa2635e38bada5a5590d6e",
+    "content_type": "application/xml;charset=iso-8859-1",
+    "last_modified": null,
+    "flights": 71,
+    "schedule_min": "2026-10-16T04:00:00Z",
+    "schedule_max": "2026-10-16T07:00:00Z"
+  },
+  "united_pdf": {
+    "url": "https://media.united.com/assets/asset/c573947e-1f33-47cd-9656-c9d5131016b4/Cargo-Full-Network-Flight-Schedule.pdf",
+    "status": 200,
+    "bytes": 1014833,
+    "sha256": "e55640b4710b27a50bc91082d8dcffaaecf9cbdece490f2fda33bf2e6191100b",
+    "content_type": "application/pdf",
+    "last_modified": null
+  },
+  "mapper": {
+    "url": "https://info.flightmapper.net/flight/British_Airways_BA_117",
+    "status": 200,
+    "bytes": 69380,
+    "sha256": "5ce107056c85b770af6c5305772307ad27a05765c83091bd9a34d5d6236783d7",
+    "content_type": "text/html; charset=utf-8",
+    "last_modified": null
+  },
+  "attachment_sha256": "922063177d1cd7782def797dd76d392b5fb0a2663e2c428cad055e3e92ff7b1f",
+  "restrictions": {
+    "adsbdb": "Route-data copying/publication/database incorporation requires explicit upstream permission; MIT applies to code",
+    "hexdb": "Site requests no database scraping; not a bulk mirror source",
+    "united": "Download works; site terms restrict database/software reuse; not approved as an open ingestion feed",
+    "flightmapper": "Cirium supplied schedules; no open redistribution grant established",
+    "westcoast_sites": "Normal browser examples work; no free bulk export or open reuse rights established"
+  },
+  "additional_bulk_schedules": {
+    "finistair": {
+      "url": "https://www.korrigo.bzh/ftp/OPENDATA/FINISTAIR.gtfs.zip",
+      "status": 200,
+      "bytes": 2490,
+      "sha256": "d26fb92ef93bcad4e85eb2103bd5569e27601c46c4b5d9b95d05c1c24e244f31",
+      "members": [
+        "agency.txt",
+        "calendar.txt",
+        "calendar_dates.txt",
+        "routes.txt",
+        "shapes.txt",
+        "stops.txt",
+        "stop_times.txt",
+        "transfers.txt",
+        "trips.txt"
+      ]
+    },
+    "tui-s26": {
+      "url": "https://static.data.gouv.fr/resources/programme-de-vols-tui-fly-belgium-s25-ssim/20260506-140515/tb-s26-france.ssim",
+      "status": 200,
+      "bytes": 96960,
+      "sha256": "67a95f42ca545f1710dafb52d772d0f8aec7facb882250364a76471f05ee12f9",
+      "record_type_counts": {
+        "1": 1,
+        "0": 14,
+        "2": 1,
+        "3": 140,
+        "4": 323,
+        "5": 1
+      },
+      "type3_records": 140
+    },
+    "aircorsica-s26": {
+      "url": "https://static.data.gouv.fr/resources/programme-des-vols-air-corsica/20260303-100449/ssim-s2026.ssim",
+      "status": 200,
+      "bytes": 477528,
+      "sha256": "7d1c78de1218e8fed637fdd3b4eec28df15f64dc8d4e2c8cd6dfed783b06fbab",
+      "record_type_counts": {
+        "1": 1,
+        "0": 12,
+        "2": 1,
+        "3": 2349,
+        "5": 1
+      },
+      "type3_records": 2349
+    },
+    "avinor-osl-14d": {
+      "url": "https://asrv.avinor.no/XmlFeed/v1.0?TimeFrom=36&TimeTo=336&airport=OSL&direction=D",
+      "status": 200,
+      "bytes": 972128,
+      "sha256": "5fb33bf25127657dca6e634e40e90f99fd5dace187e5736853ec05f20bfddc57",
+      "flight_events": 4493,
+      "schedule_min": "2026-10-14T13:00:00Z",
+      "schedule_max": "2026-10-29T21:15:00Z"
+    }
+  },
+  "open_seasonal_shapes": {
+    "tui-s26": {
+      "bytes": 96960,
+      "type3_records": 140,
+      "first_effective": "2026-03-29",
+      "last_effective": "2026-10-24",
+      "future_templates": 50,
+      "scope": "Type3 date-range inspection only, not daily-flight counts or a production SSIM parser"
+    },
+    "aircorsica-s26": {
+      "bytes": 477528,
+      "type3_records": 2349,
+      "first_effective": "2026-03-29",
+      "last_effective": "2026-10-24",
+      "future_templates": 328,
+      "scope": "Type3 date-range inspection only, not daily-flight counts or a production SSIM parser"
+    },
+    "finistair": {
+      "bytes": 2490,
+      "trip_templates": 6,
+      "future_departures_with_calendar_exceptions": 195,
+      "first_future": "2026-10-15",
+      "last_future": "2026-12-31",
+      "agency_timezone": "Europe/Paris",
+      "aircraft_type_available": false,
+      "public_flight_number_available": false,
+      "scope": "Local-date GTFS service expansion, no UTC publication or production import"
+    }
+  },
+  "prior_research_sources": [
+    "2026-10-13 flight-ingestion research",
+    "2026-10-15 itinerary-native source report",
+    "2026-10-15 expanded free-source inventory"
+  ]
+}

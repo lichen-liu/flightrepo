@@ -37,7 +37,8 @@ schema.
 ## Inspect stored facts
 
 `storage quota 20GiB` changes the database-owned quota live, including from
-another shell. `storage quota` displays it; `storage quota off` disables the
+another shell for a serving file. Private ingestion quota changes use producer
+`init --quota-bytes N`; admin can only display it. `storage quota` displays it; `storage quota off` disables the
 ceiling. `storage status` shows database/WAL/SHM bytes and any excess. Raw archives
 and daily staging have a separate working-space budget. Ingestion rechecks policy
 on its next storage boundary; lowering it preserves completed facts and pauses
@@ -80,15 +81,28 @@ flyji> flight edit adsblol RECORD_ID
 flyji> flight approve adsblol RECORD_ID
 ```
 
-Airborne airport estimates, observation gaps over 120 seconds, and changing
-callsigns are retained with `review_reasons` for inspection/export. They cannot
-power route search, continuation planning or calendar dates until explicitly
-reviewed. Check the airports and time bounds against an independent flight source;
+Airport-estimate-only records can power search, continuation planning and calendar
+dates with visible estimate labels, even before manual verification. Gaps over
+30 minutes, implausible airport timing and other blocking `review_reasons` remain
+held unless explicitly reviewed. Callsign changes alone no longer block new
+extractions; legacy callsign review flags remain held. Check the airports and time
+bounds using the retained evidence;
 edit incorrect fields before approving. Approval previews the record and defaults
 to no; scripts can supply `--yes`. It preserves inference provenance and marks
 `itinerary_reviewed`, protecting the reviewed record from passive reingestion.
-An edit alone does not approve an unreviewed estimate. Website counts distinguish
-searchable legs from candidates awaiting review.
+Automatic admission never sets `itinerary_reviewed`. You may explicitly review an
+already searchable estimate with the same command. An edit alone does not approve
+a held record. Website counts distinguish searchable legs from held candidates.
+
+For a supporting manual route check, open the FlightRoutes airport-pair page,
+for example [YYZ → SEA](https://www.flightroutes.com/YYZ-SEA). Its
+[documented focus](https://www.flightroutes.com/about) is current/upcoming schedules.
+A route match can support plausibility but cannot verify a particular historical
+flight, its aircraft type or continuity through missing observations. A missing
+current route does not disprove historical, private or charter movements. Keep
+such references separate from source facts and manual approval. They do not
+change admission or trigger automated fetching; no public API, historical-query
+coverage or data-reuse agreement has been established for this integration.
 
 ## Create, edit, and delete flights
 
@@ -157,61 +171,38 @@ Keep working files under `var/`.
 
 ## Ingest in separate sessions
 
-`ingest sources` explains the three pipelines and shows configured state. Source
-names are explicit; flags for one source cannot be used with another. Bare
-`ingest` in the interactive shell starts guided ingestion. Every command also
-works through `python -m admin --db FILE` or the installed `flyji` command.
-
-| Command | Purpose |
-| --- | --- |
-| `ingest adsblol prepare` | Fetch preferred archive metadata and an immutable airport CSV; no raw flight downloads |
-| `ingest adsblol configure` | Save existing manifest, airport CSV, optional quality policy and working-directory paths |
-| `ingest adsblol run` | Extract historical observed legs one UTC day at a time |
-| `ingest adsblol status` | Completed periods, accepted legs, current batch and rejection diagnostics |
-| `ingest csv configure/run/status` | Import a licensed CSV with schedules and optional actual times/type |
-| `ingest aerodatabox configure/run/status` | Fetch airport schedules/status using configured API credentials |
-| `import-json FILE` | Import already normalized FlightRecord JSON |
-| `airports import FILE` | Import airport and directed-transfer metadata |
+Admin ingestion access is read-only. Select the private file with
+`python -m admin --db var/ingestion/ingestion.db`:
 
 ```text
+flyji> overview
+flyji> flights --needs-review --limit 20
 flyji> ingest sources
-flyji> ingest adsblol prepare --start 2023-07-01 --end 2023-12-31 --finish-year
-flyji> ingest adsblol run --start 2023-07-01 --end 2023-07-03
-flyji> ingest adsblol run --start 2023-08-10 --end 2023-08-12
 flyji> ingest adsblol status
-flyji> storage quota 20GiB
+flyji> inspect query "SELECT kind,count(*) FROM ingestion_documents GROUP BY kind"
 flyji> storage status
+flyji> maintenance clear-data --yes
 ```
 
-Preparation saves generated paths in the selected database and bundles the
-quality defaults in the installed package, without type/callsign whitelists. It reuses an existing airport CSV and
-optional `--policy` file unchanged. Missing archive periods fail without configuring the
-pipeline. `configure` is useful when you already have inputs. Output defaults to
-the selected admin database; `--output-db` is an explicit override. `--data-root`
-is working space, not a second serving database.
+`maintenance clear-data --yes` is an explicit lifecycle exception: it clears
+candidates, evidence, airports/transfers and extraction receipts/boundaries while
+preserving producer profiles, source notices and quota. `maintenance reset --yes`
+also clears configuration and resets quota to 20 GiB. Both reject active jobs and
+leave serving untouched. Inspecting/querying never opens a writable connection.
+Producer `adopt` and `audit --apply` also remain outside admin; audit journal
+tables are available through SELECT inspection. See [bulk review](ingestion.md#audit-review-and-publication).
 
-ADSB jobs may overlap, have gaps or run out of order. Every day commits separately;
-completed days skip downloads and stable keys deduplicate repeats. Default guided
-jobs suggest three days; explicit ranges can be longer, including a year. Ctrl-C
-preserves prior commits. `--offline` processes only verified local raw inputs.
-`--refresh-diagnostics` deliberately reprocesses selected days. `--departure-year`
-limits retained departures to that UTC year. For a range ending December 31,
-`--finish-year` processes January 1 arrival evidence and excludes next-year
-departures; prepare that boundary input first. `--boundary-manifest` also accepts
-an existing adjacent-year manifest. Keep the airport snapshot/quality policy unchanged
-for an existing dataset.
+Manual edits/imports, approvals, creation, admission-policy and quota updates are
+rejected for ingestion stores. SQL inspection remains SELECT-only.
 
-The live `storage quota` covers database/WAL/SHM only; `--budget-gib` independently
-limits raw/staging working space. JSON stderr events and saved receipts distinguish
-committed facts from provisional progress, rejected segments and invalid samples.
-These counts do not establish complete airline coverage. See the compact
-[ingestion reference](ingestion.md) for source licences, extraction and statistics.
-
-CSV/API jobs use explicit airport codes and an inclusive date range, limited to
-`FLIGHT_MAX_QUERY_DAYS` (31 by default). Both upsert source identities and protect
-local edits/deletes. AeroDataBox needs `FLIGHT_PROVIDER_API_KEY`; its adapter does
-not currently extract aircraft type. CSV can provide `aircraft_type_code`.
-There is no serving-side network ingestion.
+Source jobs run through separate `python -m ingestion` / `flyji-ingest`, or the
+Python `IngestionStore` / `IngestionService` APIs. The producer tool supports
+`adsblol prepare/workspace/configure/run/status`, `csv configure/run/status` and
+`aerodatabox configure/run/status`; it has no manual record editor. Serving changes only through explicit flight `publish --serving-db ... --start ... --end ...`
+or reference-only `references publish --serving-db ...`. VRS and shared reference
+imports/audits remain producer tools, not private admin writes. See the
+[producer workflow](ingestion.md#interactive-jobs-and-resume) for examples,
+resumability, source licences and publication semantics.
 
 ## Search journeys
 
@@ -242,6 +233,12 @@ flight facts.
 
 ## Secondary tools
 
+- `maintenance apply-admission` applies labeled-estimate admission to an existing
+  database, refreshes the search view and flags implausible ADSB airport/time
+  claims using retained fields. It is safe to rerun and protects concurrent admin
+  edits. It preserves IDs, ingestion receipts, quota and manual decisions; it
+  neither downloads raw archives nor marks human approvals. Use a compatible
+  backend/frontend with estimate labels before serving the updated database.
 - `maintenance clear-data --yes` deletes flights, airports, transfer rules, and
   any extracted observed facts/configuration/receipts/boundary state
   transactionally while preserving the SQLite file, schema and ingestion profiles. It only permits
@@ -284,15 +281,18 @@ Duplicate entry points have been removed. Update existing scripts as follows:
 
 Unlike the former dated `flights` command, the unified browser includes cancelled
 flights by default. Use `--status scheduled` when you want only scheduled records.
-HTTP API contracts and the website's routing engine remain unchanged.
+The local admin contract retains full provenance. Public HTTP responses use the
+[separate public contract](database-schema.md#public-api-boundary), including opaque
+flight IDs; the website and backend must be released together.
 
 ## Shared serving schema
 
 New files use the `flight-legs` contract. `overview --json` exposes the schema version;
 `overview` separates scheduled, actual and observed searchable counts and shows
-successful/failed/running ingestion attempts. ADSB ingestion defaults to the
-selected database. `--data-root` selects disposable working storage; an explicit
-`--output-db` overrides the serving target. The final job summary prints both paths.
+successful/failed/running ingestion attempts when inspecting the private ingestion
+file. Serving and ingestion share typed flight/airport fields, not pipeline state.
+The backend rejects ingestion-role files even if renamed. Publication copies only
+non-held facts and the airport catalog; source receipts stay private.
 
 `flight show`, `flights`, search, export, edit and delete operate on accepted
 observed legs too. Edits retain four time bounds, callsign and aircraft type;
