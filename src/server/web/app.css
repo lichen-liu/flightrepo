@@ -1431,3 +1431,10 @@ footer { opacity: .8; border-top: 1px solid #ffffff0b; margin-top: 24px; }
   .journey-workspace .journey-panel { grid-column: 2; grid-row: 1 / 3; }
   .journey-workspace .evidence-panel { grid-column: 1; }
 }
+
+/* Evidence badges wrap within the available card width, including small phones. */
+.option { min-width: 0; }
+.option .option-facts { flex-wrap: wrap; }
+@media (max-width: 430px) {
+  .options-panel #options { grid-template-columns: minmax(0, 1fr); }
+}
