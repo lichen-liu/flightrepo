@@ -107,3 +107,25 @@ def test_disk_mode_unchanged_but_unmanaged_symlink_rejected(tmp_path):
     (tmp_path / "raw").symlink_to(tmp_path / "missing")
     with pytest.raises(OSError, match="no RAM configuration"):
         scratch.raw_directory(tmp_path)
+
+
+def test_ram_binding_includes_disposable_day_staging(tmp_path, ram, monkeypatch):
+    from ingestion.adsblol import extraction
+
+    root = tmp_path / "durable"
+    scratch.bind_ram(root, ram)
+    real = extraction.TemporaryDirectory
+    locations = []
+
+    def temporary(*args, **kwargs):
+        locations.append(Path(kwargs["dir"]).resolve())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(extraction, "TemporaryDirectory", temporary)
+    run(root, date(2025, 1, 1), [leg_trace()])
+    assert locations and all(path.is_relative_to(ram) for path in locations)
+    assert not list(root.glob(".day-stage-*"))
+    assert not list(ram.rglob("day.db*"))
+    (Path(json.loads((root / scratch.CONFIG).read_text())["raw"]) / ".ram-session").unlink()
+    with pytest.raises(OSError, match="no disk fallback"):
+        scratch.staging_directory(root)

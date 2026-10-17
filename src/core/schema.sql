@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS data_sources (
 CREATE TABLE IF NOT EXISTS airports (
     iata TEXT PRIMARY KEY CHECK(iata GLOB '[A-Z][A-Z][A-Z]'),
     name TEXT,
+    icao TEXT,
+    municipality TEXT,
+    country_code TEXT,
+    region_code TEXT,
     city_id TEXT,
     timezone TEXT,
     latitude REAL CHECK(latitude BETWEEN -90 AND 90),
@@ -39,6 +43,27 @@ CREATE TABLE IF NOT EXISTS airports (
     CHECK((latitude IS NULL) = (longitude IS NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS airports_city ON airports(city_id, iata) WHERE city_id IS NOT NULL;
+
+-- Shared, compact operator reference. IATA identifiers are not unique.
+CREATE TABLE IF NOT EXISTS carriers (
+    code TEXT PRIMARY KEY CHECK(length(trim(code)) BETWEEN 1 AND 16),
+    name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+    icao TEXT UNIQUE CHECK(icao IS NULL OR icao GLOB '[A-Z][A-Z][A-Z]'),
+    iata TEXT CHECK(iata IS NULL OR iata GLOB '[A-Z0-9][A-Z0-9]'),
+    metadata_source_id INTEGER REFERENCES data_sources(id),
+    metadata_updated_us INTEGER
+) STRICT, WITHOUT ROWID;
+
+-- Reference provenance is public catalog metadata, not private flight evidence.
+CREATE TABLE IF NOT EXISTS reference_snapshots (
+    source_id INTEGER NOT NULL REFERENCES data_sources(id),
+    kind TEXT NOT NULL CHECK(kind IN ('airports','carriers')),
+    source_url TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+    fetched_us INTEGER NOT NULL,
+    row_count INTEGER NOT NULL CHECK(row_count>0),
+    PRIMARY KEY(source_id,kind)
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS airport_transfers (
     arrival_iata TEXT NOT NULL REFERENCES airports(iata),

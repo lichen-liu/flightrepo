@@ -14,6 +14,7 @@ from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.policy import ExtractionPolicy
+from ingestion.adsblol.scratch import raw_directory
 
 
 def inventory(path, boundary_manifest=None):
@@ -71,6 +72,10 @@ def extract_range(
     )
     database = Path(output_db).resolve() if output_db else Path(root).resolve() / "itineraries.db"
     ingestion_target(database)
+    from ingestion.references import import_catalog
+
+    raw_directory(root)
+    import_catalog(database, "airports", Path(airports_path).read_bytes())
     with file_mutex(Path(str(database) + ".job.lock")):
         for day in days:
             yield extract_day(

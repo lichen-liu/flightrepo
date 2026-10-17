@@ -137,6 +137,19 @@ def parser():
     vrs_report.add_argument("--end", type=date.fromisoformat)
     vrs_report.add_argument("--cohort-limit", type=int, default=50)
     vrs_report.add_argument("--report", type=Path)
+    references = commands.add_parser(
+        "references", help="shared airport and operator catalog, with provenance"
+    )
+    actions = references.add_subparsers(dest="reference_action", required=True)
+    refresh = actions.add_parser(
+        "refresh", help="download public reference CSVs in memory, or import local snapshots"
+    )
+    refresh.add_argument("--airports-csv", type=Path)
+    refresh.add_argument("--carriers-csv", type=Path)
+    publish_ref = actions.add_parser(
+        "publish", help="publish names/reference metadata without reprocessing flight facts"
+    )
+    publish_ref.add_argument("--serving-db", type=Path, required=True)
     review_tools.configure_commands(commands, writes=True)
     return root
 
@@ -256,6 +269,14 @@ def run(arguments, *, database_path=None, interactive=False):
         else:
             result = review_tools.read_command(path, args)
         save_report(destination, result)
+    elif args.source == "references":
+        from ingestion.references import publish_catalog, refresh
+
+        output(
+            refresh(path, airports_path=args.airports_csv, carriers_path=args.carriers_csv)
+            if args.reference_action == "refresh"
+            else publish_catalog(path, args.serving_db)
+        )
     elif args.source == "vrs":
         if args.vrs_action == "import":
             output(
@@ -282,6 +303,9 @@ def run(arguments, *, database_path=None, interactive=False):
             set_quota(path, args.quota_bytes)
         output(dict(initialized=str(path), role="ingestion"))
     elif args.source == "publish":
+        from ingestion.references import ensure_carriers
+
+        ensure_carriers(path)
         if args.vrs != "skip":
             ensure_snapshot(path, refresh=args.vrs == "refresh", fetch_missing=args.vrs == "auto")
         for result in publish_range(

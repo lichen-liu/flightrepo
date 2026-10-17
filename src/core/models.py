@@ -24,6 +24,8 @@ class RouteVerification(BaseModel):
     match_kind: Literal["exact", "adjacent", "different", "incomplete", "missing"]
     reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     callsign: str | None = Field(default=None, min_length=1)
+    operator_icao: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    operator_name: str | None = Field(default=None, min_length=1)
     reference_airports: list[str | None] | None = Field(default=None, max_length=64)
     origin_iata: str = Field(pattern=r"^[A-Z]{3}$")
     destination_iata: str = Field(pattern=r"^[A-Z]{3}$")
@@ -51,6 +53,8 @@ class FlightRecord(BaseModel):
     fetched_at: datetime
     aircraft_type_code: str | None = Field(default=None, pattern=r"^[A-Z0-9]{2,8}$")
     callsign: str | None = Field(default=None, min_length=1)
+    operator_icao: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    operator_name: str | None = Field(default=None, min_length=1)
     evidence_kind: Literal[
         "source_reported", "inferred_ground_brackets", "inferred_airport_proximity", "manual"
     ] = "source_reported"
@@ -64,6 +68,20 @@ class FlightRecord(BaseModel):
     ] = Field(default_factory=list)
     itinerary_reviewed: bool = False
     route_verification: RouteVerification | None = None
+
+    @model_validator(mode="after")
+    def current_operator_reference(self):
+        import re
+
+        callsign = (self.callsign or "").strip().upper()
+        if (
+            not self.operator_name
+            or not self.operator_icao
+            or not re.fullmatch(r"[A-Z]{3}[0-9][A-Z0-9]{0,4}", callsign)
+            or callsign[:3] != self.operator_icao
+        ):
+            self.operator_name = self.operator_icao = None
+        return self
 
     @property
     def current_route_reference(self):
@@ -185,6 +203,8 @@ class FlightRecord(BaseModel):
             data.pop("aircraft_type_code", None)
         for name in (
             "callsign",
+            "operator_icao",
+            "operator_name",
             "departure_observed_lower",
             "departure_observed_upper",
             "arrival_observed_lower",

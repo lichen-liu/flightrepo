@@ -152,20 +152,9 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
                         sid,
                     ),
                 )
-            for row in source.execute("SELECT * FROM airports"):
-                values = dict(row)
-                values["metadata_source_id"] = source_map.get(row["metadata_source_id"])
-                # Existing serving/admin metadata takes precedence as one coherent
-                # record (including coordinates and provenance), not mixed fields.
-                output.execute(
-                    """INSERT INTO airports(iata,name,city_id,timezone,latitude,longitude,metadata_source_id,metadata_updated_us)
-                    VALUES(:iata,:name,:city_id,:timezone,:latitude,:longitude,:metadata_source_id,:metadata_updated_us)
-                    ON CONFLICT(iata) DO UPDATE SET name=excluded.name,city_id=excluded.city_id,
-                    timezone=excluded.timezone,latitude=excluded.latitude,longitude=excluded.longitude,
-                    metadata_source_id=excluded.metadata_source_id,metadata_updated_us=excluded.metadata_updated_us
-                    WHERE airports.name IS NULL AND airports.city_id IS NULL AND airports.timezone IS NULL AND airports.latitude IS NULL""",
-                    values,
-                )
+            from ingestion.references import copy_catalog
+
+            copy_catalog(source, output)
             for key, record in records.items():
                 if record is None or not admitted(record):
                     counts["held"] += int(record is not None)

@@ -31,6 +31,10 @@ def archive(tmp_path):
     with sqlite3.connect(path) as c:
         # Keep the frozen v5 contract, not a hand-maintained list of today's
         # private extensions. Future private tables must not leak into this fixture.
+        from core.storage import _compatibility_schema
+
+        c.execute("DROP VIEW flights")
+        c.executescript(_compatibility_schema(operator_reference=False))
         tables = [row[0] for row in c.execute("SELECT name FROM sqlite_schema WHERE type='table'")]
         for name in tables:
             if name not in adoption.ARCHIVE_TABLES | {"ingestion_profiles"}:

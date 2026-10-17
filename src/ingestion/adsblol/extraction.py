@@ -32,7 +32,7 @@ from ingestion.adsblol.movements import (
     advance_boundary,
     reduce_movement,
 )
-from ingestion.adsblol.scratch import raw_directory
+from ingestion.adsblol.scratch import raw_directory, staging_directory
 from ingestion.store import IDENTITY_SCHEMA, STORE_SCHEMA
 
 PIPELINE_VERSION = "observed-itinerary-v5"
@@ -594,7 +594,7 @@ def _extract_day(
     database.parent.mkdir(parents=True, exist_ok=True)
     with (
         closing(sqlite3.connect(database, timeout=10)) as connection,
-        TemporaryDirectory(prefix=".day-stage-", dir=root) as scratch,
+        TemporaryDirectory(prefix=".day-stage-", dir=staging_directory(root)) as scratch,
         closing(sqlite3.connect(Path(scratch) / "day.db")) as staged,
     ):
         connection.execute("PRAGMA foreign_keys=ON")
@@ -665,6 +665,7 @@ def _extract_day(
                 "UPDATE ingestion_batches SET inputs_json=? WHERE id=?",
                 (canonical(inputs), batch_id),
             )
+        staged.execute("PRAGMA temp_store=MEMORY")
         staged.executescript(SCHEMA)
         with staged:
             record_sources(staged)

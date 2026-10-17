@@ -397,3 +397,47 @@ audits the cached reference automatically, fetching it once when absent by defau
 Current admission and smart review are specified in [itinerary quality](itinerary-quality.md).
 Earlier pilot/held counts above are historical measurements under their recorded policies;
 they must not be read as the current search admission rule.
+
+
+## Airport and operator names (shared catalog)
+
+Run the named producer stage on a fresh node; downloads are bounded to 64 MiB per
+CSV and held in memory. No manually prepared CSV or repo data artifact is required.
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db references refresh
+flyji-ingest --db var/ingestion/ingestion.db references publish --serving-db var/hosted/flights.db
+```
+
+`refresh --airports-csv PATH --carriers-csv PATH` imports pinned local snapshots
+instead. URLs, content hashes, fetch timestamps, ignored-row diagnostics and license
+metadata make the operation reproducible/observable. Source URLs:
+
+- OurAirports: <https://davidmegginson.github.io/ourairports-data/airports.csv>,
+  public domain; <https://ourairports.com/data/>.
+- VRS carriers: <https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv>,
+  CC0-1.0; <https://github.com/vradarserver/standing-data/tree/main/airlines/schema-01>.
+
+ADSB extraction imports its prepared airport snapshot before processing days.
+The producer `publish` command obtains the carrier reference once if absent;
+subsequent daily publications reuse/publish normalized reference tables.
+Use `references refresh` explicitly for later reference updates. The separate
+`references publish` changes only dimensions/provenance, so an existing archive
+needs no raw re-download, flight extraction or full flight republishing.
+
+Admin can inspect these tables with read-only SQL and search airports by IATA,
+ICAO, name or municipality. Private admin remains read/query/reset/clear only;
+reference writes are owned by producer tools. Serving airport import/export keeps
+all reference fields and manual metadata. Clear/reset removes catalog snapshots
+alongside data without unlinking a live SQLite family. Each database's persisted
+quota still covers only its own SQLite/WAL/SHM, excluding raw workspace.
+See [schema semantics](database-schema.md#shared-airport-and-operator-reference-catalog).
+
+
+When RAM storage is bound, both raw downloads and disposable per-day SQLite
+staging (including its journal) use that verified RAM session. SQLite temporary
+sort tables for extraction stay in process memory. Losing the bound mount/session
+fails before extraction; it never silently moves these writes onto SSD. Durable
+serving/ingestion SQLite, their WAL/SHM, receipts, logs and atomic receipt-update
+files remain on disk. Unbound general-purpose CLI roots retain explicit disk mode;
+configure RAM storage before archive ingestion on this host.

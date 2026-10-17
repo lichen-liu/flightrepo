@@ -159,11 +159,19 @@ class FlightReader(SQLiteConnection):
             for key, query in {
                 "routes": "SELECT COUNT(*) FROM (SELECT DISTINCT origin_iata, destination_iata FROM flights)",
                 "flight_airports": "SELECT COUNT(*) FROM (SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)",
+                "named_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL",
                 "catalog_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL",
                 "transfers": "SELECT COUNT(*) FROM airport_transfers",
                 "missing_airports": "SELECT COUNT(*) FROM (SELECT origin_iata AS iata FROM flights UNION SELECT destination_iata FROM flights) WHERE iata NOT IN (SELECT iata FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL)",
             }.items():
                 totals[key] = connection.execute(query).fetchone()[0]
+            totals["reference_carriers"] = (
+                connection.execute("SELECT COUNT(*) FROM carriers").fetchone()[0]
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE name='carriers'"
+                ).fetchone()
+                else 0
+            )
             for key, column in (("providers", "provider"), ("statuses", "status")):
                 totals[key] = dict(
                     connection.execute(
@@ -575,7 +583,7 @@ class FlightReader(SQLiteConnection):
             rows = list(
                 connection.execute("""WITH active_codes(iata) AS (
                 SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
-                SELECT a.iata, a.name, a.city_id, a.timezone, a.latitude, a.longitude
+                SELECT a.*
                 FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""")
             )
         return WebCatalog(
@@ -615,7 +623,7 @@ class FlightReader(SQLiteConnection):
             suggested = first.get(basis)
             rows = connection.execute("""WITH active_codes(iata) AS (
                 SELECT origin_iata FROM flight_legs UNION SELECT destination_iata FROM flight_legs)
-                SELECT a.iata,a.name,a.city_id,a.timezone,a.latitude,a.longitude
+                SELECT a.*
                 FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata
                 LIMIT 1001""").fetchall()
         return WebBootstrap(
@@ -854,11 +862,16 @@ class FlightReader(SQLiteConnection):
         if city_id:
             clauses.append("city_id = ?")
             params.append(city_id)
-        if query:
-            clauses.append("(iata = ? OR name LIKE ?)")
-            params.extend((query.upper(), "%" + query + "%"))
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connect() as connection:
+            if query:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(airports)")}
+                matches = ["iata = ?", "name LIKE ?"]
+                params.extend((query.upper(), "%" + query + "%"))
+                if "icao" in columns:
+                    matches.extend(["icao = ?", "municipality LIKE ?"])
+                    params.extend((query.upper(), "%" + query + "%"))
+                clauses.append("(" + " OR ".join(matches) + ")")
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
             rows = connection.execute(
                 "SELECT * FROM airports" + where + " ORDER BY city_id, iata LIMIT ?",
                 [*params, limit],

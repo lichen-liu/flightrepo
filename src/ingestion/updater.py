@@ -60,6 +60,8 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM ingestion_batches")
             connection.execute("DELETE FROM airport_transfers")
             connection.execute("DELETE FROM airports")
+            connection.execute("DELETE FROM carriers")
+            connection.execute("DELETE FROM reference_snapshots")
             # A hosted file may also hold observed itinerary facts and their resume state.
             tables = {
                 row[0]
@@ -79,7 +81,9 @@ class FlightUpdater(SQLiteConnection):
 
     def create_airport(self, airport: Airport) -> None:
         """Insert one validated airport without replacing existing metadata."""
-        airport = Airport.model_validate(airport.model_dump())
+        airport = Airport.model_validate(
+            {key: getattr(airport, key) for key in airport.model_fields_set}
+        )
         with self.connect() as connection:
             cursor = connection.execute(
                 """INSERT INTO airports (iata, name, city_id, timezone, latitude, longitude)
@@ -91,16 +95,34 @@ class FlightUpdater(SQLiteConnection):
                 OR airports.latitude IS NULL OR airports.longitude IS NULL""",
                 airport.model_dump(),
             )
+            self._update_airport_reference(connection, airport)
             if cursor.rowcount == 0:
                 raise ValueError(
                     f"Airport {airport.iata} already exists; use airports import to update it"
                 )
 
+    @staticmethod
+    def _update_airport_reference(connection, airport):
+        # Legacy admin imports do not erase new fields they never supplied.
+        fields = [
+            key
+            for key in ("icao", "municipality", "country_code", "region_code")
+            if key in airport.model_fields_set
+        ]
+        if fields:
+            connection.execute(
+                "UPDATE airports SET " + ",".join(key + "=?" for key in fields) + " WHERE iata=?",
+                [getattr(airport, key) for key in fields] + [airport.iata],
+            )
+
     def update_airports(
         self, airports: Iterable[Airport], transfers: Iterable[AirportTransfer]
     ) -> None:
         """Validate a complete metadata batch, then write it atomically."""
-        airports = [Airport.model_validate(a.model_dump()) for a in airports]
+        airports = [
+            Airport.model_validate({key: getattr(a, key) for key in a.model_fields_set})
+            for a in airports
+        ]
         transfers = [AirportTransfer.model_validate(t.model_dump()) for t in transfers]
         with self.connect() as connection:
             connection.executemany(
@@ -109,6 +131,8 @@ class FlightUpdater(SQLiteConnection):
                 timezone=excluded.timezone, latitude=excluded.latitude, longitude=excluded.longitude""",
                 [a.model_dump() for a in airports],
             )
+            for airport in airports:
+                self._update_airport_reference(connection, airport)
             invalid = connection.execute("""SELECT 1 FROM airport_transfers t
                 JOIN airports a ON a.iata=t.arrival_iata JOIN airports b ON b.iata=t.departure_iata
                 WHERE a.city_id IS NULL OR b.city_id IS NULL OR a.city_id != b.city_id LIMIT 1""").fetchone()

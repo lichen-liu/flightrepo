@@ -35,7 +35,7 @@ def _sql_timestamp(column):
     return f"strftime('%Y-%m-%dT%H:%M:%S',{seconds},'unixepoch')||printf('.%06d+00:00',{fraction})"
 
 
-def _compatibility_schema():
+def _compatibility_schema(*, operator_reference=True):
     fields = [
         "s.code AS provider",
         "f.source_record_key AS provider_id",
@@ -55,6 +55,19 @@ def _compatibility_schema():
         "NULLIF(f.departure_actual_kind,'unknown') AS departure_actual_kind",
         "NULLIF(f.arrival_actual_kind,'unknown') AS arrival_actual_kind",
     ]
+    if operator_reference:
+        # Scalar projections are evaluated only when a consumer requests them.
+        # Joining the dimension eagerly penalizes COUNT/GROUP BY over archives.
+        prefix = (
+            "CASE WHEN length(trim(f.callsign)) BETWEEN 4 AND 8"
+            " AND upper(trim(f.callsign)) GLOB '[A-Z][A-Z][A-Z][0-9]*'"
+            " AND upper(trim(f.callsign)) NOT GLOB '*[^A-Z0-9]*'"
+            " THEN substr(upper(trim(f.callsign)),1,3) END"
+        )
+        fields.extend(
+            f"(SELECT c.{column} FROM carriers c WHERE c.icao={prefix}) AS operator_{column}"
+            for column in ("icao", "name")
+        )
     for name in TIME_FIELDS:
         fields.extend([_sql_timestamp(f"f.{name}_us") + f" AS {name}", f"f.{name}_us"])
     lower = "CASE WHEN f.departure_scheduled_us IS NOT NULL AND f.arrival_scheduled_us IS NOT NULL THEN f.departure_scheduled_us ELSE COALESCE(f.departure_observed_lower_us,f.departure_actual_us,f.departure_scheduled_us) END"
@@ -154,10 +167,45 @@ def refresh_admission_view(connection):
         raise
 
 
+def upgrade_reference_catalog(connection):
+    columns = {r[1] for r in connection.execute("PRAGMA table_info(airports)")}
+    desired = _compatibility_schema().split("CREATE TRIGGER", 1)[0].strip()
+    current = connection.execute("SELECT sql FROM sqlite_schema WHERE name='flights'").fetchone()
+
+    def normalize(sql):
+        return sql.replace("IF NOT EXISTS ", "").strip().rstrip(";")
+
+    if (
+        {"icao", "municipality", "country_code", "region_code"} <= columns
+        and current
+        and normalize(current[0]) == normalize(desired)
+    ):
+        return
+    connection.execute("SAVEPOINT reference_catalog_upgrade")
+    try:
+        for name in ("icao", "municipality", "country_code", "region_code"):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE airports ADD COLUMN {name} TEXT")
+        connection.execute("DROP VIEW IF EXISTS flights")
+        connection.execute(desired)
+        statement = ""
+        for line in _compatibility_schema().splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                connection.execute(statement)
+                statement = ""
+        connection.execute("RELEASE reference_catalog_upgrade")
+    except BaseException:
+        connection.execute("ROLLBACK TO reference_catalog_upgrade")
+        connection.execute("RELEASE reference_catalog_upgrade")
+        raise
+
+
 def upgrade_route_verification(connection):
     """Explicit writer-only additive upgrade; read-only consumers never migrate."""
     columns = {r[1] for r in connection.execute("PRAGMA table_info(flight_legs)")}
     if "route_verification" in columns:
+        upgrade_reference_catalog(connection)
         refresh_admission_view(connection)
         return
     marker = "CREATE VIEW IF NOT EXISTS searchable_legs AS"
@@ -171,6 +219,7 @@ def upgrade_route_verification(connection):
         "DROP TRIGGER IF EXISTS flights_delete; DROP VIEW IF EXISTS flights;"
         "DROP VIEW IF EXISTS searchable_legs;" + _compatibility_schema() + view + "COMMIT;"
     )
+    upgrade_reference_catalog(connection)
 
 
 def source_id(connection, code):
@@ -254,10 +303,10 @@ def store_flight(connection, record, *, restore=True, local_edit=False, batch_id
             if current.get("route_verification") is not None:
                 current["route_verification"] = json.loads(current["route_verification"])
             if (
-                FlightRecord.model_validate(current).model_copy(
-                    update={"fetched_at": record.fetched_at}
-                )
-                == record
+                FlightRecord.model_validate(current)
+                .model_copy(update={"fetched_at": record.fetched_at})
+                .model_copy(update={"operator_icao": None, "operator_name": None})
+                == record.model_copy(update={"operator_icao": None, "operator_name": None})
                 and not local_edit
             ):
                 connection.execute(

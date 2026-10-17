@@ -3,6 +3,7 @@ import test from "node:test";
 import { calendarDays } from "../src/server/web/calendar.mjs";
 import {
   escapeHTML,
+  flightLabel,
   localDate,
   localInput,
   RequestLane,
@@ -177,4 +178,11 @@ test("a partly confirmed journey does not claim all routes match VRS", () => {
   const confirmed = { route_verified: true, quality: { labels: [ {code: "vrs_route_match", severity: "info", label: "VRS route match", detail: "Undated"} ] } };
   assert.equal(qualityLabels([confirmed, {}]).length, 0);
   assert.equal(qualityLabels([confirmed]).length, 1);
+});
+
+
+test("flight identity retains callsign and shows operator reference name", () => {
+  assert.equal(flightLabel({ callsign: "ACA541", operator_name: "Air Canada" }), "ACA541 (callsign) · Air Canada (operator)");
+  assert.equal(flightLabel({ callsign: "N5203D" }), "N5203D (callsign)");
+  assert.equal(escapeHTML(flightLabel({ callsign: "ACA541", operator_name: "<script>" })).includes("<script>"), false);
 });

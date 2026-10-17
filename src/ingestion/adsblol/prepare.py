@@ -157,11 +157,9 @@ def prepare_inputs(root, start, end, *, airport_path=None, policy_path=None, cli
         if shutil.disk_usage(root).free < len(content) + RESERVE_BYTES:
             raise OSError("Preparation must preserve 1 GiB free filesystem space")
         # Validate the candidate before replacing any existing artifact/profile.
-        with NamedTemporaryFile(dir=root) as handle:
-            handle.write(content)
-            handle.flush()
-            if not airport_points(Path(handle.name)):
-                raise ValueError("Airport snapshot contains no eligible airports")
+        from ingestion.references import parse_airports
+
+        parse_airports(content)
         _write(airports, content)
     elif not airport_points(airports):
         raise ValueError("Airport snapshot contains no eligible airports")

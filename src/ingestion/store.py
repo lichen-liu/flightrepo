@@ -147,6 +147,8 @@ class IngestionStore(FlightUpdater):
                     "ingestion_batches",
                     "airport_transfers",
                     "airports",
+                    "carriers",
+                    "reference_snapshots",
                 ):
                     if table in tables:
                         connection.execute(f'DELETE FROM "{table}"')

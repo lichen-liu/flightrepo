@@ -107,6 +107,11 @@ def test_fresh_producer_publish_recovers_bulk_reference_automatically(
         return (ROUTES if name == "routes" else AIRPORTS), dict(url=vrs.BASE_URL + name + ".csv")
 
     monkeypatch.setattr(vrs, "download", download)
+    from ingestion import references
+
+    monkeypatch.setattr(
+        references, "download", lambda url: b"Code,Name,ICAO,IATA\nONE,One Air,ONE,OA\n"
+    )
     target = tmp_path / "public.db"
     cli.run(
         [

@@ -256,3 +256,35 @@ remain blocking. See [VRS policy](vrs-verification.md#explicit-best-effort-route
 Review decisions/acknowledgements are private `ingestion_documents` of kind
 `validation`, source `review`; revision-bound fingerprints and before/after facts
 are journaled atomically. They never enter the serving database.
+
+
+## Shared airport and operator reference catalog
+
+The **main serving SQLite** owns `airports` and `carriers`; API requests need no
+CSV, private ingestion file or external lookup. Both dimensions also exist in the
+private store so producer imports can be validated before explicit publication.
+`reference_snapshots` stores the source URL, SHA-256, fetch time and accepted row
+count, with license/attribution in `data_sources`.
+
+Airports retain name, ICAO, municipality, ISO country/region and coordinates from
+OurAirports. Municipality is descriptive geography, **not** a transfer `city_id`.
+The source has no timezone column; imports leave unknown timezones NULL and keep
+existing IANA zones and explicit transfer groups. Duplicate IATA assignments are
+counted/skipped rather than chosen arbitrarily. Automated publication fills NULL
+fields even when coordinates already exist, preserving all populated admin fields.
+
+`carriers(code,name,icao,iata,metadata_source_id,metadata_updated_us)` stores VRS
+standing-data airlines (CC0). ICAO is unique; IATA is deliberately non-unique.
+Source-owned carrier snapshots refresh atomically and withdraw stale assignments.
+The `flights` view resolves a normalized 4–8 character callsign only when it begins
+with a known three-letter ICAO operator followed by a digit. It exposes
+`operator_icao` and `operator_name`; the API and frontend retain the callsign and
+label the name as **operator**. These are current undated reference matches,
+not historical operator verification, marketing-carrier claims, or route/timing
+approvals. Unknown/private/ambiguous callsigns stay unresolved. No guessed flight
+number or airline IATA is written to a flight, and no name is duplicated across
+millions of flight rows. Reference-only backfills never change flight revisions,
+manual approvals, tombstones, timing, aircraft types or search admission.
+
+Explicit writers add the optional reference extension and refresh the compatibility
+view transactionally. Read-only backend/admin processes never migrate a database.

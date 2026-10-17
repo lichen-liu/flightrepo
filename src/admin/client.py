@@ -175,6 +175,9 @@ def print_overview(summary):
     print(
         f"Searchable flights: {summary['searchable_flights']:,}   Review recommended: {summary['needs_review_count']:,}"
     )
+    print(
+        f"Named airports: {summary['named_airports']:,}   Operator references: {summary['reference_carriers']:,}"
+    )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
         ("Departures (UTC)", "first_departure", "last_departure"),

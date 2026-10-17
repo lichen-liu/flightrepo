@@ -34,9 +34,19 @@ def controls(connection):
         ("database_policy", "id"),
         ("data_sources", "id"),
         ("airports", "iata"),
+        ("carriers", "code"),
+        ("reference_snapshots", "source_id,kind"),
         ("airport_transfers", "arrival_iata,departure_iata"),
         ("flight_tombstones", "source_id,source_record_key"),
     ]:
+        if (
+            name in {"carriers", "reference_snapshots"}
+            and not connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name=?", (name,)
+            ).fetchone()
+        ):
+            tables[name] = []
+            continue
         tables[name] = [
             dict(row) for row in connection.execute(f"SELECT * FROM {name} ORDER BY {order}")
         ]
@@ -93,12 +103,27 @@ def prepare_serving(canonical, destination):
                             mapping[row["id"]],
                         ),
                     )
-                for row in snapshot["airports"]:
-                    data = {**row, "metadata_source_id": mapping.get(row["metadata_source_id"])}
+                from ingestion.references import AIRPORT_FIELDS, CARRIER_FIELDS
+
+                for table, fields in [("airports", AIRPORT_FIELDS), ("carriers", CARRIER_FIELDS)]:
+                    for row in snapshot[table]:
+                        data = {key: row.get(key) for key in fields}
+                        data["metadata_source_id"] = mapping.get(row["metadata_source_id"])
+                        output.execute(
+                            f"INSERT INTO {table}({','.join(fields)}) VALUES({','.join(':' + key for key in fields)})",
+                            data,
+                        )
+                for row in snapshot["reference_snapshots"]:
                     output.execute(
-                        """INSERT INTO airports(iata,name,city_id,timezone,latitude,longitude,metadata_source_id,metadata_updated_us)
-                        VALUES(:iata,:name,:city_id,:timezone,:latitude,:longitude,:metadata_source_id,:metadata_updated_us)""",
-                        data,
+                        "INSERT INTO reference_snapshots VALUES(?,?,?,?,?,?)",
+                        (
+                            mapping[row["source_id"]],
+                            row["kind"],
+                            row["source_url"],
+                            row["sha256"],
+                            row["fetched_us"],
+                            row["row_count"],
+                        ),
                     )
                 for row in snapshot["airport_transfers"]:
                     output.execute(

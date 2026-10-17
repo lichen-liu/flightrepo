@@ -74,6 +74,13 @@ def raw_directory(root):
     return raw
 
 
+def staging_directory(root):
+    """Disposable day SQLite/journals share a configured RAM session with raw data."""
+    root = Path(root)
+    raw = raw_directory(root)
+    return raw if (root / CONFIG).exists() else root
+
+
 def bind_ram(root, mount, *, output_db=None, wait=False):
     """Switch only between completed days; refuse to move any unfinished input."""
     root = Path(root).expanduser().resolve()
