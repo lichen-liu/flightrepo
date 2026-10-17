@@ -86,7 +86,11 @@ class SearchLimits(BaseModel):
         le=20_000,
         description="Full-record snapshot/replay limit. SQL-projected database routing does not use this limit.",
     )
-    max_candidates: int = Field(default=100_000, ge=1, le=200_000)
+    max_candidates: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional caller work budget. Null examines candidates without a count cutoff.",
+    )
     max_trace_events: int = Field(default=200, ge=0, le=500)
 
 

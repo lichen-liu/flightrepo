@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     provider_host: str = "aerodatabox.p.rapidapi.com"
     max_query_days: int = 31
     max_concurrent_reads: int = Field(default=2, ge=1, le=32)
-    read_query_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    read_query_timeout_seconds: float | None = Field(default=None, gt=0)
 
 
 @lru_cache

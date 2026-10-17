@@ -6,10 +6,27 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.responses import PlainTextResponse
 
+from core.config import Settings
 from ingestion.updater import FlightUpdater
 from server.api import app, get_store
 from server.capacity import ReadCapacity
 from server.reader import FlightReader, ReadQueryTimeout
+
+
+def test_serving_sql_deadline_is_opt_in_and_has_no_fixed_ceiling(tmp_path, monkeypatch):
+    monkeypatch.delenv("FLIGHT_READ_QUERY_TIMEOUT_SECONDS", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.read_query_timeout_seconds is None
+    assert (
+        Settings(_env_file=None, read_query_timeout_seconds=300).read_query_timeout_seconds == 300
+    )
+    monkeypatch.setattr("server.reader.get_settings", lambda: settings)
+    writer = FlightUpdater(tmp_path / "serving.db")
+    writer.initialize()
+    reader = FlightReader(writer.path, serving_only=True)
+    # No progress handler or timer should be installed unless an operator opts in.
+    monkeypatch.setattr("server.reader.monotonic", lambda: pytest.fail("Unexpected deadline"))
+    assert reader.readiness()["status"] == "ready"
 
 
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])

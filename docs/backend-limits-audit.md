@@ -1,10 +1,15 @@
 # Backend limits audit
 
-Audited on October 17, 2026 against PR #22 revision `3b7162e`. This is an inventory
-and evaluation, not a change to the limits. It covers the public search path,
-calendar and listing APIs, private snapshot/replay, ingestion and hosted serving.
-The new deadline/admission controls describe the unmerged PR, not a deployment
-performed by this audit.
+Audited on October 17, 2026, initially against PR #22 revision `3b7162e` and
+updated after its merge. This covers the public search path, calendar and listing
+APIs, private snapshot/replay, ingestion and hosted serving. It describes code
+behavior, not a deployment.
+
+Search and continuation now have no default candidate-count cutoff. An explicit
+`limits.max_candidates` remains available to callers and has no fixed maximum;
+`null` disables it. The serving SQL deadline is also opt-in, disabled by default.
+Concurrency admission still rejects excess requests explicitly without truncating
+the graph or ranking of accepted requests.
 
 ## What the 100,000-flight benchmark means
 
@@ -13,15 +18,16 @@ in disposable databases. It compares index/write costs. It neither configures no
 limits the server. The script itself accepts 1–1,000,000 fixture rows; that ceiling
 only prevents an accidental oversized local benchmark.
 
-There is, separately, a real **100,000 candidate-check search budget**. Calling the
-benchmark a fixture must not obscure that different restriction.
+The separate **100,000 candidate-check search budget** was a real restriction
+in the initial audit. It has been removed from the defaults; the benchmark size
+has never configured either SQL loading or routing.
 
 ## Restrictions that can omit or prevent valid results
 
 | Restriction | Actual behavior | Assessment |
 | --- | --- | --- |
-| Candidate checks: default 100,000, hard maximum 200,000 | `SearchLimits.max_candidates` interrupts search and continuation. Visits count repeated examination along different paths, not distinct SQL rows. `null` is rejected. Returned journeys remain feasible, but better or any matching journeys can remain unexamined; diagnostics report `candidate_limit`. | A real completeness restriction. The fixed count and hard maximum are not justified by an invariant of flight routing. It is not an accuracy-neutral optimization. |
-| Serving read deadline: default 15 seconds, configurable only up to 120 | PR #22 adds a monotonic deadline per read connection, checked every 1,000 SQLite VM instructions. An interrupt returns 503 `query_timeout`, not an empty result. Configuration currently has no disable value. | A real availability restriction added by this PR. It is a resource policy, not a SQL optimization. The timer also elapses during Python work while the connection is open; it is not 15 seconds of accumulated SQL execution. |
+| Candidate checks: unlimited by default; optional positive caller budget | `SearchLimits.max_candidates=null` has no count cutoff. An explicit budget interrupts search and continuation with `candidate_limit` and incomplete diagnostics. Visits count repeated examination along different paths, not distinct SQL rows. | The former 100,000 default and 200,000 maximum have been removed. Explicit budgets can still omit better or matching journeys and must not be presented as complete ranking. |
+| Serving read deadline: disabled by default; optional positive operator setting | A configured monotonic deadline applies per read connection, checked every 1,000 SQLite VM instructions. An interrupt returns 503 `query_timeout`, not an empty result. Unset `FLIGHT_READ_QUERY_TIMEOUT_SECONDS` to disable it. | Explicit execution policy, not a SQL optimization. The former 15-second default and 120-second maximum have been removed. When enabled, the timer also elapses during Python work while the connection is open; it is not accumulated SQL execution time. |
 | Departure span: at most 31 elapsed days | `RouteSearchRequest` rejects longer windows. Local requests allow 31 calendar dates, but the UTC validator can reject that range across a fall-back DST change. | A product/validation ceiling, not a correctness requirement. Calendar dates and elapsed durations are inconsistent at DST boundaries. |
 | Arrival horizon: at most 31 days after departure-window end | Longer explicit horizons receive validation errors. Continuation separately enforces at most 62 days from the first retained departure. | Another fixed product ceiling. Any change must keep full-search, continuation, calendar and local/UTC validation aligned. |
 | Calendar/browser horizon: seven days after departure-window end | Local search defaults to this horizon; UTC browser requests explicitly construct it. Calendar availability hardcodes the same horizon and has no configurable horizon argument. | This can hide dates whose only valid journey arrives later. It is explicit in the current UI scope but not an unrestricted search of the archive. |
@@ -70,7 +76,7 @@ The private `routing_snapshot` / `rebuild_snapshot` paths are different:
 - Full-record debug loading defaults to 10,000 records and allows at most 20,000,
   plus validation anchors. It can return a truncated snapshot.
 - Its preliminary reverse graph uses a cap of
-  `max(100000, max_records * 20, max_candidates)`; at defaults this is 200,000
+  `max(100000, max_records * 20, max_candidates or 0)`; at defaults this is 200,000
   edges. If exceeded, it discards that incomplete pruning result and falls back
   to the bounded loader; it does not prune live searches with an incomplete graph.
 - Replay document validation independently caps its flight list at 20,005. That
@@ -149,9 +155,10 @@ complete ranking. Thus neither the fixture size nor the default full-record debu
 budget capped its eligible SQL graph.
 
 A disposable 100,001-edge counterexample put the best direct flight last in the
-departure-ordered scan. At the default 100,000 candidate budget, the engine
-returned a worse flight with `exhaustive=false`. At 200,000 it found the correct
-flight after 100,001 checks. This proves a real default-budget completeness effect,
+departure-ordered scan. At the former default 100,000 candidate budget, the engine
+returned a worse flight with `exhaustive=false`. The regression test now verifies
+that default search finds the correct flight after 100,001 checks, while an
+explicit 100,000 budget still reports incomplete ranking. This proves the original effect,
 not just a hypothetical concern. It is not a claim that this synthetic route
 volume reflects a physical service.
 
@@ -160,18 +167,18 @@ departure. With no maximum layover, an explicit longer-horizon request found the
 route; the fixed calendar arrival window offered no date. Scope alone can explain
 missing results even when no compute budget is reached.
 
-Eight focused regression cases passed for candidate cutoffs, unrestricted stops,
-SQL deadlines and capacity cleanup. Validation rejects both
-`max_candidates=null` and `max_candidates=200001` today.
+Regression coverage includes the former cutoff, unrestricted stops, optional SQL
+deadlines, explicit budget diagnostics and capacity cleanup. Validation now accepts
+`max_candidates=null` and positive values above the former 200,000 ceiling.
 
-For the stated preference of no arbitrary query cutoffs, the priorities are:
+For the stated preference of no arbitrary query cutoffs, the decisions are:
 
-1. Remove mandatory candidate-count ceilings from authoritative search semantics;
-   retain optional caller/operator budgets only with explicit incomplete/cancelled
-   outcomes. Increasing the fixed number does not resolve the policy problem.
-2. Reconsider the newly added mandatory serving deadline. Make execution policy
-   configurable/disableable and cover the actual calculation lifecycle, not just
-   SQLite callbacks. Completion, cancellation and failure must remain distinct.
+1. Removed mandatory candidate-count ceilings; optional caller budgets retain
+   explicit incomplete outcomes. Increasing the fixed number would not resolve
+   the policy problem.
+2. Disabled the serving deadline by default and removed its fixed maximum. A
+   configured SQL deadline still does not cover the entire calculation lifecycle;
+   cancellation across Python routing remains follow-up work.
 3. Make departure/arrival scope caller-controlled and consistent across calendar,
    search and continuation. Remove arbitrary six-via/fifty-avoid ceilings and
    reconcile the differing connection validators.
