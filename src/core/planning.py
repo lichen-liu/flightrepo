@@ -1,12 +1,9 @@
 """Exact-prefix continuation planning using the shared schedule routing rules."""
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from core.connections import (
-    Airport,
-    AirportTransfer,
     ConnectionWindow,
     ContinuationOption,
     PlanConnection,
@@ -145,12 +142,19 @@ class PlanCalculation:
 
 
 def calculate_rebuild(
-    request: RebuildRequest, snapshot: RoutingSnapshot | ProjectedSnapshot
+    request: RebuildRequest,
+    snapshot: RoutingSnapshot | ProjectedSnapshot,
+    *,
+    include_replay_identity=True,
 ) -> PlanCalculation:
     snapshot = snapshot.with_time_basis(request.time_basis)
     prefix, connections, visited, policy = validate_prefix(request, snapshot)
     session = RoutingSession(
-        snapshot, request, policy, "next_departure_then_tail_arrival_legs_identity"
+        snapshot,
+        request,
+        policy,
+        "next_departure_then_tail_arrival_legs_identity",
+        include_replay_identity=include_replay_identity,
     )
     later_window = ConnectionWindow(minimum_minutes=request.window.minimum_minutes)
     prefix_via = session.via_progress(prefix)
@@ -408,18 +412,3 @@ def calculate_rebuild(
 
 def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) -> RebuiltPlan:
     return calculate_rebuild(request, snapshot).materialize()
-
-
-def rebuild_plan(
-    request: RebuildRequest,
-    records: Sequence[FlightRecord],
-    airports: Sequence[Airport],
-    transfers: Sequence[AirportTransfer],
-    *,
-    data_truncated: bool = False,
-) -> RebuiltPlan:
-    """Compatibility entry point for callers supplying an in-memory snapshot."""
-    return rebuild_from_snapshot(
-        request,
-        RoutingSnapshot(tuple(records), tuple(airports), tuple(transfers), data_truncated),
-    )
