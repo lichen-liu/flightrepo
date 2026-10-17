@@ -2,9 +2,12 @@
 
 import hashlib
 import json
+import os
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import get_ident
 
 from core.database_roles import ingestion_target, require_ingestion
 from core.disk_quota import database_bytes, file_bytes, policy
@@ -20,6 +23,31 @@ def instant(value):
 
 STORE_SCHEMA = Path(__file__).with_name("schema.sql").read_text()
 IDENTITY_SCHEMA = STORE_SCHEMA.split("CREATE TABLE IF NOT EXISTS ingestion_profiles", 1)[0]
+
+
+# One producer owns the store throughout extraction -> audit -> publication.
+# Nested pipeline stages reuse only this process/thread's actual OS lock; other
+# processes, inherited fork contexts and manual clear/reset still contend on it.
+_owned_jobs = ContextVar("ingestion_job_locks", default=frozenset())
+
+
+@contextmanager
+def job_lock(path, *, blocking=True):
+    path = Path(path).resolve()
+    key = (os.getpid(), get_ident(), str(path))
+    owned = _owned_jobs.get()
+    if key in owned:
+        yield True
+        return
+    with file_mutex(Path(str(path) + ".job.lock"), blocking=blocking) as acquired:
+        if not acquired:
+            yield False
+            return
+        token = _owned_jobs.set(owned | {key})
+        try:
+            yield True
+        finally:
+            _owned_jobs.reset(token)
 
 
 def check_quota(path, connection=None):

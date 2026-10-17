@@ -7,7 +7,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from core.database_roles import ingestion_target
-from core.file_lock import file_mutex
 from core.quality import review_recommended_sql
 from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
@@ -15,6 +14,7 @@ from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.policy import ExtractionPolicy
 from ingestion.adsblol.scratch import raw_directory
+from ingestion.store import job_lock
 
 
 def inventory(path, boundary_manifest=None):
@@ -76,7 +76,7 @@ def extract_range(
 
     raw_directory(root)
     import_catalog(database, "airports", Path(airports_path).read_bytes())
-    with file_mutex(Path(str(database) + ".job.lock")):
+    with job_lock(database):
         for day in days:
             yield extract_day(
                 root,

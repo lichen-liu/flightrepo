@@ -42,6 +42,15 @@ def parser():
         "--db", type=Path, help="ingestion SQLite; overrides FLIGHT_INGESTION_DATABASE_PATH"
     )
     commands = configure_parser(root)
+    daily = commands.add_parser(
+        "daily", help="ADSB: ingest, audit, VRS-check and publish each day before the next input"
+    )
+    daily.add_argument("--serving-db", type=Path, required=True)
+    daily.add_argument("--start", type=date.fromisoformat, required=True)
+    daily.add_argument("--end", type=date.fromisoformat, required=True)
+    daily.add_argument("--finish-year", action="store_true")
+    daily.add_argument("--data-root", type=Path)
+    daily.add_argument("--offline", action="store_true")
     init = commands.add_parser("init", help="initialize a NEW ingestion store")
     init.add_argument("--quota-bytes", type=int)
     publish = commands.add_parser(
@@ -226,7 +235,30 @@ def run(arguments, *, database_path=None, interactive=False):
     if args.source is None and not interactive:
         LocalShell(path).cmdloop()
         return
-    if args.source in {"adopt", "audit"}:
+    if args.source == "daily":
+        from ingestion.daily import daily_range
+
+        def ingest_day(day, departure_year):
+            command = ["adsblol", "run", "--start", str(day), "--end", str(day)]
+            if departure_year is not None:
+                command += ["--departure-year", str(departure_year)]
+            if args.data_root:
+                command += ["--data-root", str(args.data_root)]
+            if args.offline:
+                command += ["--offline"]
+            run(command, database_path=path)
+
+        for result in daily_range(
+            path,
+            args.serving_db,
+            args.start,
+            args.end,
+            ingest_day=ingest_day,
+            finish_year=args.finish_year,
+            progress=progress,
+        ):
+            output(result)
+    elif args.source in {"adopt", "audit"}:
         databases = [path] + ([args.from_db] if args.source == "adopt" else [])
         destination = report_destination(args.report, databases)
         if args.source == "adopt":

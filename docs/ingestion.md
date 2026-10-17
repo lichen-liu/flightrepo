@@ -65,6 +65,35 @@ Other supported producers are `csv configure/run/status` for licensed CSV and
 Their normal query limit is 31 days; AeroDataBox needs `FLIGHT_PROVIDER_API_KEY`.
 They do not turn ADSB observation windows into airline schedules.
 
+## Daily verification and live updates
+
+For a serving site, use the explicit daily workflow rather than collecting a
+whole range privately and publishing at the end:
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db daily \
+  --serving-db var/hosted/flights.db \
+  --start 2024-01-01 --end 2024-12-31 --finish-year
+```
+
+It uses the prepared ADSB profile and verified RAM workspace. Each input commits
+privately, passes the retained-fact/structural audit, applies supported flag
+corrections and the pinned VRS audit, then publishes eligible facts atomically.
+Only then does it advance to the next raw day. Complete local legs become visible
+immediately; processing day D also rechecks and republishes D-1 to include overnight
+joins. The extra January 1 input completes December 31 without publishing next-year
+departures. VRS matches are undated corroboration, not proof of historical timing.
+
+Existing committed inputs are reused without downloading them again, making the
+same command useful to catch up a private backlog. Per-input validation documents
+retain audit counts and publication receipts. Unchanged completed stages skip;
+interrupted audit/publication retries are idempotent. A failed check or quota stops
+the workflow before the next input while keeping committed facts and earlier live
+days. A producer lock spans all stages; another producer or admin reset cannot
+interleave. Manual serving edits/tombstones and each database's quota still apply.
+Raw/staging remain on RAM, private evidence stays private, and serving readers stay
+online. Existing browser pages may need a refresh to fetch the updated calendar.
+
 ## Storage placement and RAM-backed workspace
 
 **Raw archives and disposable per-day SQLite staging use RAM. Private ingestion
