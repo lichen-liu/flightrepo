@@ -98,7 +98,7 @@ sites:
         environment: production
         app_url: http://127.0.0.1:8014
         metrics_url: http://127.0.0.1:8714/metrics
-        tunnel_metrics_url: http://127.0.0.1:19314/metrics
+        connector: flyji-mac-01
         log_profile: flyji
   trip_dollar:
     title: Trip Split
@@ -110,11 +110,20 @@ sites:
         environment: production
         app_url: http://127.0.0.1:8000
         metrics_url: http://127.0.0.1:8700/metrics
-        tunnel_metrics_url: http://127.0.0.1:19300/metrics
+        connector: trip-split-mac-01
         log_profile: trip-split
+connectors:
+  flyji-mac-01:
+    site: flightrepo
+    host: mac-01
+    metrics_url: http://127.0.0.1:19314/metrics
+  trip-split-mac-01:
+    site: trip_dollar
+    host: mac-01
+    metrics_url: http://127.0.0.1:19300/metrics
 ```
 
-Ports are proposed reservations, subject to a collision check. They are not selected at random on restart. Resolve loopback targets on the owning host, never on the central server. Normalize log paths under each private runtime; do not put usernames, full paths or credentials into labels. Validate duplicate IDs, duplicate ports, unknown hosts and missing required fields before generating configuration.
+Ports are proposed reservations, subject to a collision check. They are not selected at random on restart. Resolve loopback targets on the owning host, never on the central server. Scrape each connector once, even if it fronts several replicas; replicas reference its ID rather than duplicating its metrics. Connector labels identify site/host/connector, without inventing per-replica tunnel measurements. Normalize log paths under each private runtime; do not put usernames, full paths or credentials into labels. Validate duplicate IDs, duplicate ports, unknown hosts and missing required fields before generating configuration.
 
 | Identity | Meaning | Where it appears |
 | --- | --- | --- |
@@ -178,7 +187,7 @@ Use rates, errors and duration for user-facing work, and resource use/saturation
 | Cloudflare connector | Active HA connections, origin proxy errors, request counts, connector restarts | Explain healthy local app with broken public access |
 | Monitoring itself | Collector freshness, scrape errors/duration, remote-write lag/failures, queue/WAL pressure, log drops, TSDB/Loki disk, rule errors, notification delivery | Detect a broken monitoring path before trusting a green tile |
 
-Metric names proposed for the common package: `boboji_http_requests_total`, `boboji_http_request_duration_seconds`, `boboji_http_in_flight`, `boboji_operation_duration_seconds`, `boboji_operation_results_total`, and `boboji_build_info`. Add only bounded operation/outcome names. A result marked `empty` is not an HTTP error. A result marked `incomplete` is visible even when its HTTP status is 200. Search correctness is not proven by monitoring.
+Metric names proposed for the common package: `boboji_http_requests_total`, `boboji_http_request_duration_seconds`, `boboji_http_in_flight`, `boboji_operation_duration_seconds`, `boboji_operation_results_total`, and `boboji_build_info`. Add only bounded operation/outcome names; normalize request methods to known methods plus `OTHER`, and status to a fixed class/outcome set. Path parameters and user-supplied labels never become metric dimensions. A result marked `empty` is not an HTTP error. A result marked `incomplete` is visible even when its HTTP status is 200. Search correctness is not proven by monitoring.
 
 Choose classic request histogram buckets covering 5 ms through 120 s, including meaningful service thresholds (e.g. 0.25, 1, 5, 10, 30 s); tune after baselining and keep bucket boundaries consistent across replicas. Health probes have their own latency series, so slow search tails do not distort liveness.
 
