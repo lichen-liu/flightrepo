@@ -115,3 +115,10 @@ if it discards those fixes. Build subsequent deployments from a revision that
 includes both the ingestion changes and the application fixes, then use the
 installer to produce a fresh receipt. A successful readiness probe alone does
 not establish that the intended routing version is running.
+
+Browser asset URLs include a content hash for the complete frontend release.
+They update automatically when files change; HTML is served with `no-store`.
+The current and previous release are held in memory so a page loading during a
+static-file update can finish using consistent files. A server restart clears
+that history; an older page that has not finished loading may need a refresh.
+No manual version bump is required.

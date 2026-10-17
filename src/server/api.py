@@ -65,7 +65,10 @@ async def browser_headers(request: Request, call_next):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         )
-        response.headers["Cache-Control"] = "no-store" if request.url.path == "/" else "no-cache"
+        if request.url.path == "/":
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            response.headers.setdefault("Cache-Control", "no-cache")
     elif request.url.path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Link"] = '</data-sources>; rel="license"'
