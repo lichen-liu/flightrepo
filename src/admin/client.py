@@ -542,10 +542,12 @@ def run(arguments, *, database_path=None, interactive=False):
         request = search_request(args)
         if request is None:
             return
-        snapshot = FlightReader(path).routing_snapshot(request)
-        result = search_routes(request, snapshot)
         if args.snapshot_out:
+            snapshot = FlightReader(path).routing_snapshot(request)
+            result = search_routes(request, snapshot)
             write_json(args.snapshot_out, replay_document("search", request, snapshot, result))
+        else:
+            result = FlightReader(path).search_itineraries(request)
         output(result)
     elif args.command == "routes":
         if args.end <= args.start:

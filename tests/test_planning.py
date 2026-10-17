@@ -194,12 +194,13 @@ def test_unreachable_flights_do_not_consume_the_snapshot_budget(demo):
     assert result.diagnostics.stats.rows_loaded < 20
 
 
-def test_snapshot_flight_cap_is_explicit(demo):
+def test_database_continuations_use_projection_instead_of_full_record_cap(demo):
     data, _, reader = demo
     result = reader.rebuild(request(data, limits={"max_records": 2}))
-    assert result.data_truncated
-    assert not result.diagnostics.exhaustive
-    assert "data_limit" in result.diagnostics.termination_reasons
+    assert not result.data_truncated
+    assert result.diagnostics.exhaustive
+    assert result.diagnostics.stats.rows_loaded > 2
+    assert result.complete
 
 
 def test_cancelled_prefix_and_chosen_next_are_rejected(demo):

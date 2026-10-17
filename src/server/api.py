@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
 from core.config import get_settings
@@ -34,6 +33,7 @@ from server.public import (
     to_public,
 )
 from server.reader import FlightReader
+from server.web_assets import WebAssets
 from server.web_models import (
     AirportCoverage,
     AvailableDates,
@@ -51,7 +51,8 @@ app = FastAPI(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 WEB_ROOT = Path(__file__).parent / "web"
-app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="web-assets")
+web_assets = WebAssets(WEB_ROOT)
+app.mount("/assets", web_assets, name="web-assets")
 
 
 @app.middleware("http")
@@ -63,7 +64,10 @@ async def browser_headers(request: Request, call_next):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         )
-        response.headers["Cache-Control"] = "no-cache"
+        if request.url.path == "/":
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            response.headers.setdefault("Cache-Control", "no-cache")
     elif request.url.path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Link"] = '</data-sources>; rel="license"'
@@ -72,7 +76,8 @@ async def browser_headers(request: Request, call_next):
 
 @app.get("/", include_in_schema=False)
 def webapp():
-    return FileResponse(WEB_ROOT / "index.html")
+    html, revision = web_assets.page()
+    return HTMLResponse(html, headers={"X-Flyji-Assets": revision})
 
 
 @app.exception_handler(sqlite3.Error)
@@ -106,8 +111,8 @@ def readiness(store: FlightReader = Depends(get_store)):
 
 
 @app.get("/v1/catalog", response_model=PublicCatalog)
-def catalog(store: FlightReader = Depends(get_store)):
-    return to_public(store, store.web_catalog())
+def catalog(include_airports: bool = True, store: FlightReader = Depends(get_store)):
+    return to_public(store, store.web_catalog(include_airports=include_airports))
 
 
 @app.get("/v1/bootstrap", response_model=WebBootstrap)

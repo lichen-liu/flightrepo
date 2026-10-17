@@ -1,7 +1,8 @@
 """Exact-prefix continuation planning using the shared schedule routing rules."""
 
 from collections.abc import Sequence
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from core.connections import (
     Airport,
@@ -18,9 +19,11 @@ from core.routing.models import (
     MAX_DEPARTURE_DAYS,
     MAX_ONWARD_DAYS,
     RoutingError,
+    SearchDiagnostics,
     required_via_airports,
 )
 from core.routing.policy import Assessment, ConnectionPolicy
+from core.routing.projection import ProjectedSnapshot, RoutingEdge
 from core.routing.session import RoutingSession, SearchBudgetReached
 from core.routing.snapshot import RoutingSnapshot, flight_key
 
@@ -94,7 +97,56 @@ def validate_prefix(
     return prefix, connections, seen, policy
 
 
-def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) -> RebuiltPlan:
+@dataclass
+class PlannedOption:
+    flight: FlightRecord | RoutingEdge
+    connection: PlanConnection
+    tail: list
+    tail_connections: list
+    complete: bool
+
+
+@dataclass
+class PlanCalculation:
+    legs: list
+    connections: list
+    complete: bool
+    options: list
+    airports: list
+    data_truncated: bool
+    search_truncated: bool
+    horizon_end: datetime
+    message: str
+    options_total: int | None
+    options_truncated: bool
+    diagnostics: SearchDiagnostics
+
+    @property
+    def flights(self):
+        return [*self.legs, *(f for item in self.options for f in (item.flight, *item.tail))]
+
+    def materialize(self, records=None):
+        def detail(flight):
+            return records[flight_key(flight)] if records is not None else flight
+
+        values = dict(vars(self))
+        values["legs"] = [detail(flight) for flight in self.legs]
+        values["options"] = [
+            ContinuationOption(
+                flight=detail(item.flight),
+                connection=item.connection,
+                tail=[detail(flight) for flight in item.tail],
+                tail_connections=item.tail_connections,
+                complete=item.complete,
+            )
+            for item in self.options
+        ]
+        return RebuiltPlan(**values)
+
+
+def calculate_rebuild(
+    request: RebuildRequest, snapshot: RoutingSnapshot | ProjectedSnapshot
+) -> PlanCalculation:
     snapshot = snapshot.with_time_basis(request.time_basis)
     prefix, connections, visited, policy = validate_prefix(request, snapshot)
     session = RoutingSession(
@@ -174,7 +226,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         return result
 
     def option(flight, assessment):
-        return ContinuationOption(
+        return PlannedOption(
             flight=flight,
             connection=assessment.connection,
             tail=[],
@@ -335,7 +387,7 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         request.destination,
         *(code for f in shown_flights for code in (f.origin_iata, f.destination_iata)),
     }
-    return RebuiltPlan(
+    return PlanCalculation(
         legs=legs,
         connections=links,
         complete=complete,
@@ -352,6 +404,10 @@ def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) ->
         options_truncated=total > len(options) or session.search_truncated,
         diagnostics=diagnostics,
     )
+
+
+def rebuild_from_snapshot(request: RebuildRequest, snapshot: RoutingSnapshot) -> RebuiltPlan:
+    return calculate_rebuild(request, snapshot).materialize()
 
 
 def rebuild_plan(

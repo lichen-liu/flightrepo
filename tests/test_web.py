@@ -16,7 +16,7 @@ from public_helpers import rebuild_payload
 
 from core.connections import Airport, AirportTransfer
 from core.models import FlightRecord, FlightStatus
-from core.routing.models import RoutingError
+from core.routing.models import RouteSearchRequest, RoutingError
 from core.timezones import resolve_local
 from ingestion.updater import FlightUpdater
 from server.api import WEB_ROOT, app, get_store
@@ -194,6 +194,53 @@ def test_catalog_counts_distinct_legs_across_bases_and_preserves_timestamp_preci
     assert demo[1].web_catalog().dataset.newest_fact_refresh == updated.fetched_at
 
 
+def test_catalog_summary_matches_full_catalog_without_repeating_airports(client):
+    full = client.get("/v1/catalog").json()
+    summary = client.get("/v1/catalog?include_airports=false").json()
+    assert summary["dataset"] == full["dataset"]
+    assert summary["suggested_route"] == full["suggested_route"]
+    assert summary["airports"] == [] and not summary["airports_truncated"]
+
+
+@pytest.mark.parametrize("include_airports", [True, False])
+def test_catalog_reuses_unchanged_database_and_returns_independent_objects(
+    demo, monkeypatch, include_airports
+):
+    reader = demo[1]
+    first = reader.web_catalog(include_airports=include_airports)
+
+    def fail(**kwargs):
+        raise AssertionError("Unchanged catalog must not rescan the archive")
+
+    monkeypatch.setattr(reader, "_read_web_catalog", fail)
+    first.dataset.flight_count = -1
+    second = reader.web_catalog(include_airports=include_airports)
+    assert second.dataset.flight_count == 12
+    if include_airports:
+        assert reader.web_catalog(include_airports=False).airports == []
+
+
+@pytest.mark.parametrize("use_symlink", [False, True])
+def test_catalog_cache_invalidates_on_uncheckpointed_wal_commits(demo, use_symlink):
+    reader = demo[1]
+    if use_symlink:
+        alias = reader.path.with_name("alias.db")
+        alias.symlink_to(reader.path)
+        reader = FlightReader(alias)
+    assert reader.web_catalog(include_airports=False).dataset.flight_count == 12
+    with demo[0].connect() as writer:
+        writer.execute("UPDATE flights SET status='cancelled' WHERE origin_iata='YYZ'")
+        writer.commit()
+        changed = reader.web_catalog(include_airports=False)
+        assert changed.dataset.flight_count == 11
+        assert changed.dataset.cancelled_count == 1
+        writer.execute("UPDATE flights SET status='scheduled' WHERE origin_iata='YYZ'")
+        writer.commit()
+        restored = reader.web_catalog(include_airports=False)
+        assert restored.dataset.flight_count == 12
+        assert restored.dataset.cancelled_count == 0
+
+
 def test_airport_coverage_counts_exact_airports_and_missing_directions(client, demo):
     response = client.get("/v1/airport-coverage?airport=yyz&airport=NRT&time_basis=scheduled")
     assert response.status_code == 200
@@ -363,6 +410,200 @@ def test_bootstrap_does_not_wait_for_archive_counts(client, demo, monkeypatch):
     assert result.json()["available_time_bases"] == ["scheduled"]
     assert result.json()["default_time_basis"] == "scheduled"
     assert len(result.json()["airports"]) == 8
+
+
+@pytest.mark.parametrize(
+    ("connected", "noisy_destination"), [(True, False), (False, False), (True, True)]
+)
+def test_destination_aware_loading_preserves_routes_under_a_small_record_budget(
+    demo, connected, noisy_destination
+):
+    updater, reader, data = demo
+    original = FlightRecord.model_validate(data["flights"][0])
+    for flight in data["flights"]:
+        updater.delete(flight["provider"], flight["provider_id"])
+
+    def leg(key, origin, destination, departure, arrival):
+        return original.model_copy(
+            update={
+                "provider_id": key,
+                "origin_iata": origin,
+                "destination_iata": destination,
+                "departure_scheduled": datetime.fromisoformat(f"2026-10-17T{departure}:00:00Z"),
+                "arrival_scheduled": datetime.fromisoformat(f"2026-10-17T{arrival}:00:00Z"),
+            }
+        )
+
+    updater.upsert(
+        [
+            leg("dead-start", "YYZ", "AAA", "18", "19"),
+            leg("good-start", "YYZ", "BBB", "18", "19"),
+            *(leg(f"noise-{index}", "AAA", "XXX", "20", "21") for index in range(20)),
+            leg("destination", "BBB" if connected else "HND", "NRT", "20", "21"),
+            *([leg("noisy-destination", "XXX", "NRT", "22", "23")] if noisy_destination else []),
+        ]
+    )
+    result = reader.search_itineraries(
+        RouteSearchRequest(
+            origin="YYZ",
+            destination="NRT",
+            departure_start="2026-10-17T00:00:00Z",
+            departure_end="2026-10-18T00:00:00Z",
+            horizon_end="2026-10-20T00:00:00Z",
+            limits={"max_records": 6 if noisy_destination else 2},
+            max_legs=None,
+        )
+    )
+    assert result.diagnostics.exhaustive
+    assert "data_limit" not in result.diagnostics.termination_reasons
+    if noisy_destination:
+        assert result.diagnostics.stats.rows_loaded > 6
+    assert bool(result.items) == connected
+    if connected:
+        assert [flight.provider_id for flight in result.items[0].legs] == [
+            "good-start",
+            "destination",
+        ]
+
+
+def test_large_sql_projection_hydrates_only_returned_flights(demo, monkeypatch):
+    updater, reader, data = demo
+    base = FlightRecord.model_validate(data["flights"][0])
+    start = datetime.fromisoformat("2026-10-17T18:00:00Z")
+    count = 12_050
+    flights = [
+        base.model_copy(
+            update={
+                "provider_id": f"projection-{i:05d}",
+                "destination_iata": "NRT",
+                "departure_scheduled": start + timedelta(microseconds=i),
+                "arrival_scheduled": start
+                + timedelta(minutes=60 if i == count - 1 else 120, microseconds=i),
+                "aircraft_type_code": "A321",
+                "codeshares": [f"SHARE{i}"],
+            }
+        )
+        for i in range(count)
+    ]
+    updater.upsert(flights)
+    decoded = []
+    decode = reader._record
+
+    def record(row):
+        decoded.append((row["provider"], row["provider_id"]))
+        return decode(row)
+
+    monkeypatch.setattr(reader, "_record", record)
+    result = reader.search_itineraries(
+        RouteSearchRequest(
+            origin="YYZ",
+            destination="NRT",
+            departure_start=start,
+            departure_end=start + timedelta(hours=1),
+            horizon_end=start + timedelta(days=1),
+            limits={"max_records": 1},
+            limit=2,
+        )
+    )
+    assert result.diagnostics.exhaustive
+    assert result.diagnostics.scope == "sql_projection"
+    assert result.diagnostics.stats.rows_loaded == count
+    assert result.diagnostics.stats.records_hydrated == len(decoded) == 2
+    assert result.items[0].legs == [flights[-1]]
+    returned = {(f.provider, f.provider_id) for item in result.items for f in item.legs}
+    assert set(decoded) == returned
+    assert all(
+        f.aircraft_type_code == "A321" and f.codeshares for item in result.items for f in item.legs
+    )
+
+
+def test_search_details_share_the_projection_read_snapshot(demo, monkeypatch):
+    updater, reader, data = demo
+    original = reader._hydrate_flights
+    changed = FlightRecord.model_validate(data["flights"][0]).model_copy(
+        update={
+            "status": FlightStatus.CANCELLED,
+            "aircraft_type_code": "A380",
+        }
+    )
+
+    def hydrate(connection, flights, basis):
+        updater.upsert([changed])
+        return original(connection, flights, basis)
+
+    monkeypatch.setattr(reader, "_hydrate_flights", hydrate)
+    result = reader.search_local(LocalRouteSearchRequest.model_validate(request()))
+    first = result.items[0].legs[0]
+    assert first.status != FlightStatus.CANCELLED
+    assert first.aircraft_type_code != "A380"
+    assert reader.flight(first.provider, first.provider_id).status == FlightStatus.CANCELLED
+
+
+@pytest.mark.parametrize("basis", ["scheduled", "actual", "observed"])
+@pytest.mark.parametrize("valid", [True, False])
+def test_sql_projection_preserves_connection_bounds_for_each_time_basis(demo, basis, valid):
+    updater, reader, data = demo
+    for flight in data["flights"]:
+        updater.delete(flight["provider"], flight["provider_id"])
+    base = FlightRecord.model_validate(data["flights"][0])
+    start = datetime.fromisoformat("2026-10-17T00:00:00Z")
+
+    def leg(key, origin, destination, departure, arrival):
+        return base.model_copy(
+            update={
+                "provider_id": key,
+                "origin_iata": origin,
+                "destination_iata": destination,
+                "departure_scheduled": start + timedelta(minutes=departure),
+                "arrival_scheduled": start + timedelta(minutes=arrival),
+                "departure_actual": start + timedelta(minutes=departure),
+                "arrival_actual": start + timedelta(minutes=arrival),
+                "departure_observed_lower": start + timedelta(minutes=departure),
+                "departure_observed_upper": start + timedelta(minutes=departure + 5),
+                "arrival_observed_lower": start + timedelta(minutes=arrival),
+                "arrival_observed_upper": start + timedelta(minutes=arrival + 5),
+            }
+        )
+
+    next_departure = (55 if basis == "observed" else 60) + (not valid)
+    updater.upsert(
+        [
+            leg("first", "YYZ", "BBB", 10, 40),
+            leg("last", "BBB", "NRT", next_departure, 90),
+        ]
+    )
+    result = reader.search_itineraries(
+        RouteSearchRequest(
+            origin="YYZ",
+            destination="NRT",
+            departure_start=start,
+            departure_end=start + timedelta(minutes=30),
+            horizon_end=start + timedelta(days=1),
+            minimum_connection_minutes=10,
+            maximum_connection_minutes=20,
+            time_basis=basis,
+            limits={"max_records": 1},
+        )
+    )
+    assert result.diagnostics.exhaustive
+    assert bool(result.items) == valid
+    assert result.diagnostics.stats.records_hydrated == (2 if valid else 0)
+    if valid:
+        assert [f.provider_id for f in result.items[0].legs] == ["first", "last"]
+        assert all(f.effective_time_basis == basis for f in result.items[0].legs)
+
+
+def test_sql_projection_keeps_candidate_work_limit_explicit(demo):
+    result = demo[1].search_local(
+        LocalRouteSearchRequest.model_validate(
+            request(
+                limits={"max_records": 1, "max_candidates": 1},
+            )
+        )
+    )
+    assert not result.diagnostics.exhaustive
+    assert result.diagnostics.termination_reasons == ["candidate_limit"]
+    assert result.diagnostics.stats.candidates_checked == 1
 
 
 def test_aircraft_type_survives_storage_edit_and_serving(client, demo):
@@ -624,14 +865,14 @@ def test_rebuild_preserves_avoided_airports(client, demo):
 
 def test_local_normalization_and_flight_loading_share_a_snapshot(demo, monkeypatch):
     updater, reader, data = demo
-    load = reader._routing_rows
+    load = reader._projected_search
 
     def change_zone(connection, query, airports, transfers, **kwargs):
         yyz = next(Airport.model_validate(a) for a in data["airports"] if a["iata"] == "YYZ")
         updater.update_airports([yyz.model_copy(update={"timezone": "Asia/Tokyo"})], [])
         return load(connection, query, airports, transfers, **kwargs)
 
-    monkeypatch.setattr(reader, "_routing_rows", change_zone)
+    monkeypatch.setattr(reader, "_projected_search", change_zone)
     result = reader.search_local(LocalRouteSearchRequest.model_validate(request()))
     assert result.departure_timezone == "America/Toronto"
     assert next(a.timezone for a in result.airports if a.iata == "YYZ") == "America/Toronto"
@@ -879,8 +1120,9 @@ def test_family_fonts_are_real_self_hosted_assets_with_retained_licenses(client)
 
 def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
     page = client.get("/")
-    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"' in page.text
-    response = client.get("/assets/favicon.svg")
+    favicon = re.search(r'href="(/assets/v-[a-f0-9]{16}/favicon.svg)"', page.text)
+    assert favicon
+    response = client.get(favicon[1])
     assert response.status_code == 200
     assert response.headers["content-type"].split(";")[0] == "image/svg+xml"
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -893,7 +1135,7 @@ def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
     assert "img-src 'self'" in response.headers["content-security-policy"]
 
 
-def test_family_shell_keeps_accessible_flight_workspace_and_system_theme(client):
+def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
     class Elements(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -932,16 +1174,13 @@ def test_family_shell_keeps_accessible_flight_workspace_and_system_theme(client)
         tag == "aside" and attrs.get("aria-label") == "boboji.fyi tools" for tag, attrs in nodes
     )
     assert any(
-        tag == "meta"
-        and attrs.get("name") == "color-scheme"
-        and attrs.get("content") == "light dark"
+        tag == "meta" and attrs.get("name") == "color-scheme" and attrs.get("content") == "dark"
         for tag, attrs in nodes
     )
     css = client.get("/assets/app.css").text
-    assert "@media (prefers-color-scheme: dark)" in css
-    assert "color-scheme: light dark" in css
-    # These source checks preserve the agreed system-theme contract. Browser
-    # QA still has to establish computed colors, contrast, layout and focus.
+    assert "color-scheme: dark" in css
+    # Native controls use the night palette too. Browser QA establishes
+    # computed colors, contrast, layout and focus.
     assert "@media (prefers-reduced-motion: reduce)" in css
 
 
@@ -1100,6 +1339,7 @@ def test_public_contract_strips_provenance_from_every_nested_result(client, demo
     demo[0].upsert([record])
     responses = [
         client.get("/v1/catalog"),
+        client.get("/v1/catalog?include_airports=false"),
         client.get("/v1/bootstrap"),
         client.get("/v1/flights?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
         client.get("/v1/routes?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
@@ -1266,3 +1506,17 @@ def test_public_dataset_mode_cannot_hide_mixed_demo_and_real_data(client, demo):
     result = client.get("/v1/catalog").json()
     assert result["dataset"]["data_mode"] == "mixed"
     assert_public(result)
+
+
+def test_actual_page_versions_all_entry_assets_and_their_relative_dependencies(client):
+    page = client.get("/")
+    revision = page.headers["x-flyji-assets"]
+    assert page.headers["cache-control"] == "no-store"
+    paths = re.findall(r'(?:href|src)="(/assets/[^"]+)"', page.text)
+    assert paths and all(path.startswith(f"/assets/v-{revision}/") for path in paths)
+    for path in paths:
+        assert client.get(path).status_code == 200
+    base = f"/assets/v-{revision}/app.mjs"
+    assert client.get(urljoin(base, "./map.mjs")).status_code == 200
+    css = f"/assets/v-{revision}/app.css"
+    assert client.get(urljoin(css, "fonts/manrope-variable.woff2")).content.startswith(b"wOF2")

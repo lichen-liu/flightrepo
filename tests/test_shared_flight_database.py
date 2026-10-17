@@ -136,7 +136,11 @@ def test_daily_commit_serves_counts_calendar_routes_lookup_export_and_admin(tmp_
     )
     assert reader.rebuild(request).complete
     snapshot = reader.routing_snapshot(query())
-    assert replay(replay_document("search", query(), snapshot, result))["matches_saved_result"]
+    # Replays reproduce the supplied full-record snapshot; database requests use
+    # a compact projection and report its separate counters and fact digest.
+    saved = search_routes(query(), snapshot)
+    assert saved.items == result.items
+    assert replay(replay_document("search", query(), snapshot, saved))["matches_saved_result"]
     with FlightReader(staging).connect() as connection:
         assert connection.execute(
             "SELECT state,inserted_count FROM ingestion_batches WHERE id=?", (receipt["batch_id"],)

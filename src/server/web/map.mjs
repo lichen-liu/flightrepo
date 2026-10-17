@@ -53,7 +53,7 @@ export class RouteMap {
   }
   async load() {
     if (!this.d3) throw Error("Map library unavailable.");
-    const response = await fetch("/assets/vendor/world-110m.geojson");
+    const response = await fetch(new URL("./vendor/world-110m.geojson", import.meta.url));
     if (!response.ok) throw Error("World geometry unavailable.");
     this.world = await response.json();
     this.draw();
@@ -99,10 +99,19 @@ export class RouteMap {
       ])
       .filter(Boolean);
     if (points.length && this.d3) {
-      const c = this.d3.geoCentroid({
-        type: "MultiPoint",
-        coordinates: points,
-      });
+      const center = this.d3.geoCentroid({ type: "MultiPoint", coordinates: points });
+      // A centroid overweights clustered stops and can hide a distant origin.
+      // Also consider the midpoint of the widest pair, then minimize the
+      // furthest angular distance from the camera to any journey airport.
+      let widest = 0, pair = [points[0], points[0]];
+      for (let i = 0; i < points.length; i++)
+        for (let j = i + 1; j < points.length; j++) {
+          const distance = this.d3.geoDistance(points[i], points[j]);
+          if (distance > widest) { widest = distance; pair = [points[i], points[j]]; }
+        }
+      const candidates = [center, this.d3.geoInterpolate(...pair)(0.5)];
+      const radius = (c) => Math.max(...points.map((point) => this.d3.geoDistance(c, point)));
+      const c = candidates.reduce((best, candidate) => radius(candidate) < radius(best) ? candidate : best);
       this.rotation = [-c[0], -c[1], 0];
     } else this.rotation = [35, -35, 0];
     this.zoom = 1;
@@ -190,6 +199,15 @@ export class RouteMap {
         ? `Flight route ${this.legs.map((f) => f.origin_iata).join(" → ")} → ${this.legs.at(-1).destination_iata}`
         : "World map",
     );
+    const defs = s.append("defs");
+    const ocean = defs.append("radialGradient").attr("id", "atlas-ocean").attr("cx", "35%").attr("cy", "25%").attr("r", "80%");
+    ocean.append("stop").attr("offset", "0%").attr("stop-color", "#153b49");
+    ocean.append("stop").attr("offset", "70%").attr("stop-color", "#0a2030");
+    ocean.append("stop").attr("offset", "100%").attr("stop-color", "#06111e");
+    if (this.mode === "globe") {
+      s.append("circle").attr("class", "map-atmosphere").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale());
+      s.append("circle").attr("class", "map-orbit").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale() * 1.09);
+    }
     s.append("path")
       .datum({ type: "Sphere" })
       .attr("class", "map-ocean")

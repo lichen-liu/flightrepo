@@ -9,21 +9,37 @@ export const escapeHTML = (value) =>
 export const ref = (flight) => ({
   flight_id: flight.flight_id,
 });
-export const departureTime = (f) => f.departure_lower ?? f.departure_scheduled ?? f.departure_observed_lower ?? f.departure_actual;
-export const arrivalTime = (f) => f.arrival_upper ?? f.arrival_scheduled ?? f.arrival_observed_upper ?? f.arrival_actual;
+export const departureTime = (f) =>
+  f.departure_lower ??
+  f.departure_scheduled ??
+  f.departure_observed_lower ??
+  f.departure_actual;
+export const arrivalTime = (f) =>
+  f.arrival_upper ??
+  f.arrival_scheduled ??
+  f.arrival_observed_upper ??
+  f.arrival_actual;
 export const flightLabel = (f) => {
-  const identity = f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : "Flight");
-  return f.operator_name ? `${identity} · ${f.operator_name} (operator)` : identity;
+  const identity =
+    f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : "Flight");
+  return f.operator_name
+    ? `${identity} · ${f.operator_name} (operator)`
+    : identity;
 };
 export function flightTimeLabel(f, event, zone = "UTC") {
   const point = event === "departure" ? departureTime(f) : arrivalTime(f);
-  const lower = f[`${event}_lower`] || point, upper = f[`${event}_upper`] || point;
-  const first = stamp(lower, zone), last = stamp(upper, zone);
+  const lower = f[`${event}_lower`] || point,
+    upper = f[`${event}_upper`] || point;
+  const first = stamp(lower, zone),
+    last = stamp(upper, zone);
   if (f.time_basis !== "observed") return first;
   return `${first === last ? "≈ " + first : first + " – " + last} · observed`;
 }
 export function airportList(value) {
-  const codes = value.toUpperCase().split(/[\s,]+/).filter(Boolean);
+  const codes = value
+    .toUpperCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
   for (const code of codes)
     if (!/^[A-Z]{3}$/.test(code))
       throw Error(
@@ -45,7 +61,11 @@ export function airportListSuggestions(value, position, codes) {
     otherCodes = new Set((before + " " + after).toUpperCase().split(/[\s,]+/));
   return codes
     .filter((code) => !otherCodes.has(code) && code.startsWith(token))
-    .map((code) => ({ code, value: before + code + after, caret: start + code.length }));
+    .map((code) => ({
+      code,
+      value: before + code + after,
+      caret: start + code.length,
+    }));
 }
 export function duration(minutes) {
   const m = Math.max(0, Math.floor(minutes)),
@@ -119,9 +139,14 @@ export function errorMessage(error) {
 
 // Latest response wins even when transport cancellation arrives too late.
 export class RequestLane {
+  constructor(onActivity = () => () => {}) {
+    this.onActivity = onActivity;
+  }
   generation = 0;
   controller = null;
   cancel() {
+    this.finishActivity?.();
+    this.finishActivity = null;
     this.generation++;
     this.controller?.abort();
     this.controller = null;
@@ -129,6 +154,14 @@ export class RequestLane {
   async run(url, body, receive, failed, finished = () => {}) {
     this.cancel();
     const generation = this.generation;
+    const stopActivity = this.onActivity(url);
+    let active = true;
+    const finishActivity = () => {
+      if (!active) return;
+      active = false;
+      stopActivity();
+    };
+    this.finishActivity = finishActivity;
     const controller = (this.controller = new AbortController());
     try {
       const response = await fetch(url, {
@@ -149,8 +182,10 @@ export class RequestLane {
       if (generation === this.generation && error?.name !== "AbortError")
         await failed(error);
     } finally {
+      finishActivity();
       if (generation === this.generation) {
         this.controller = null;
+        this.finishActivity = null;
         finished();
       }
     }

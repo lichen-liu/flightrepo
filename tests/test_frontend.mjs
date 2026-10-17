@@ -24,7 +24,10 @@ test("calendar disables gaps and handles leap years without using the browser ti
   const available = new Set(["2024-02-01", "2024-02-29"]),
     days = calendarDays("2024-02", available);
   assert.equal(days.length, 29);
-  assert.deepEqual(days.filter((day) => day.enabled).map((day) => day.date), [...available]);
+  assert.deepEqual(
+    days.filter((day) => day.enabled).map((day) => day.date),
+    [...available],
+  );
   assert.equal(calendarDays("2025-02", new Set()).length, 28);
   assert.equal(days[15].enabled, false);
 });
@@ -36,7 +39,10 @@ test("via lists preserve travel order across whitespace, commas and trailing sep
   assert.deepEqual(airportList("xyz"), ["XYZ"]);
   assert.throws(() => airportList("AMS ams"), /must not repeat/);
   assert.throws(() => airportList("AMS FRA1"), /Invalid airport code: FRA1/);
-  assert.throws(() => airportList("AAA BBB CCC DDD EEE FFF GGG"), /at most six/);
+  assert.throws(
+    () => airportList("AAA BBB CCC DDD EEE FFF GGG"),
+    /at most six/,
+  );
 });
 
 test("via suggestions replace the active token and retain the other airports", () => {
@@ -160,29 +166,97 @@ test("airport-local dates and inputs follow the specified zone across DST", () =
   );
 });
 
-
 import { qualityLabels, qualityBadges } from "../src/server/web/quality.mjs";
 
 test("quality badges prioritize conflicts, deduplicate labels and escape metadata", () => {
-  const flight = { quality: { labels: [
-    { code: "gap", severity: "caution", label: "Observation gap", detail: "A gap" },
-    { code: "timing", severity: "warning", label: "Timing conflict", detail: '<script>"' },
-    { code: "bad", severity: '\" onclick=\"bad', label: "Unsafe" },
-  ] } };
-  assert.deepEqual(qualityLabels([flight, flight]).map((x) => x.code), ["timing", "gap"]);
+  const flight = {
+    quality: {
+      labels: [
+        {
+          code: "gap",
+          severity: "caution",
+          label: "Observation gap",
+          detail: "A gap",
+        },
+        {
+          code: "timing",
+          severity: "warning",
+          label: "Timing conflict",
+          detail: '<script>"',
+        },
+        { code: "bad", severity: '\" onclick=\"bad', label: "Unsafe" },
+      ],
+    },
+  };
+  assert.deepEqual(
+    qualityLabels([flight, flight]).map((x) => x.code),
+    ["timing", "gap"],
+  );
   assert.ok(qualityBadges([flight]).includes("&lt;script&gt;&quot;"));
   assert.ok(!qualityBadges([flight]).includes("onclick"));
 });
 
 test("informational confidence notes are confined to leg details", () => {
-  const noted = { quality: { labels: [{code: "approximate_times", severity: "info", label: "Approximate times", detail: "Times are ranges"}] } };
+  const noted = {
+    quality: {
+      labels: [
+        {
+          code: "approximate_times",
+          severity: "info",
+          label: "Approximate times",
+          detail: "Times are ranges",
+        },
+      ],
+    },
+  };
   assert.equal(qualityLabels([noted]).length, 0);
-  assert.equal(qualityLabels([noted], {details: true}).length, 1);
+  assert.equal(qualityLabels([noted], { details: true }).length, 1);
 });
 
-
 test("flight identity retains callsign and shows operator reference name", () => {
-  assert.equal(flightLabel({ callsign: "ACA541", operator_name: "Air Canada" }), "ACA541 (callsign) · Air Canada (operator)");
+  assert.equal(
+    flightLabel({ callsign: "ACA541", operator_name: "Air Canada" }),
+    "ACA541 (callsign) · Air Canada (operator)",
+  );
   assert.equal(flightLabel({ callsign: "N5203D" }), "N5203D (callsign)");
-  assert.equal(escapeHTML(flightLabel({ callsign: "ACA541", operator_name: "<script>" })).includes("<script>"), false);
+  assert.equal(
+    escapeHTML(
+      flightLabel({ callsign: "ACA541", operator_name: "<script>" }),
+    ).includes("<script>"),
+    false,
+  );
+});
+
+test("request activity clears immediately on cancellation without hiding a newer request", async (t) => {
+  const requests = transport(t),
+    active = new Set(),
+    stopped = [];
+  const lane = new RequestLane((url) => {
+    active.add(url);
+    return () => {
+      active.delete(url);
+      stopped.push(url);
+    };
+  });
+  const first = lane.run(
+    "/first",
+    undefined,
+    () => {},
+    () => {},
+  );
+  assert.deepEqual([...active], ["/first"]);
+  const second = lane.run(
+    "/second",
+    undefined,
+    () => {},
+    () => {},
+  );
+  assert.deepEqual([...active], ["/second"]);
+  requests.get("/first").resolve({ ok: true, json: async () => ({}) });
+  await first;
+  assert.deepEqual([...active], ["/second"]);
+  requests.get("/second").resolve({ ok: true, json: async () => ({}) });
+  await second;
+  assert.equal(active.size, 0);
+  assert.deepEqual(stopped, ["/first", "/second"]);
 });

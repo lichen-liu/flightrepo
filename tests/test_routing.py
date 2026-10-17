@@ -178,8 +178,9 @@ def test_unbounded_search_preserves_cycle_prevention_and_budget_diagnostics(tmp_
         update={"limits": request.limits.model_copy(update={"max_records": 3})}
     )
     loaded = FlightReader(updater.path).search_itineraries(data_limited)
-    assert not loaded.diagnostics.exhaustive
-    assert loaded.diagnostics.termination_reasons == ["data_limit"]
+    assert loaded.diagnostics.exhaustive
+    assert loaded.diagnostics.stats.rows_loaded == len(records)
+    assert loaded.diagnostics.stats.records_hydrated == len(records)
 
 
 def airport(code, city):
@@ -383,6 +384,13 @@ def test_search_matches_oracle_and_input_permutations(seed, via, tmp_path):
         )
         assert [identity(r.legs) for r in original.items] == [identity(p) for p in expected]
         assert original.diagnostics.exhaustive
+        prioritized = search_routes(
+            request,
+            RoutingSnapshot(tuple(records), tuple(airports), tuple(transfers)),
+            best_first=True,
+        )
+        assert [identity(r.legs) for r in prioritized.items] == [identity(p) for p in expected]
+        assert prioritized.diagnostics.exhaustive
         stored = reader.search_itineraries(request)
         assert [identity(r.legs) for r in stored.items] == [identity(p) for p in expected]
         assert stored.diagnostics.exhaustive
@@ -740,10 +748,10 @@ def test_index_api_partial_results_and_naive_times(tmp_path):
                 "/v1/itineraries/search",
                 json=query(limits={"max_records": 1}, trace=True).model_dump(mode="json"),
             )
-            assert response.status_code == 200 and response.json()["diagnostics"][
-                "termination_reasons"
-            ] == ["data_limit"]
-            assert not response.json()["diagnostics"]["exhaustive"]
+            assert response.status_code == 200
+            assert response.json()["diagnostics"]["termination_reasons"] == []
+            assert response.json()["diagnostics"]["exhaustive"]
+            assert len(response.json()["items"]) == 5
             for endpoint in ("flights", "routes", "itineraries"):
                 response = client.get(
                     "/v1/" + endpoint,

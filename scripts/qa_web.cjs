@@ -226,13 +226,43 @@ check("counts follow the departure date and zero inbound disables every calendar
 check("slow dataset statistics do not block initial search", async (page) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  await page.route("**/v1/catalog", async (route) => { await gate; await route.continue(); });
+  await page.route("**/v1/catalog*", async (route) => {
+    assert.equal(new URL(route.request().url()).searchParams.get("include_airports"), "false");
+    await gate;
+    await route.continue();
+  });
   try {
     await open(page);
     await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
     await expect(page.locator("#search-button")).toBeEnabled();
   } finally { release(); }
   await expect(page.locator("#dataset-tag")).toContainText("Published schedules");
+});
+
+check("statistics loaded before defaults follow the final flight-time selection", async (page) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/v1/bootstrap", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    await gate;
+    await route.fulfill({ response, json: {
+      ...data, default_time_basis: "observed", available_time_bases: ["scheduled", "observed"],
+    } });
+  });
+  await page.route("**/v1/catalog*", async (route) => {
+    const response = await route.fetch(), data = await response.json();
+    data.dataset.time_bases = { scheduled: 0, observed: 3, actual: 0 };
+    await route.fulfill({ response, json: data });
+  });
+  await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
+    dates: ["2026-10-17"], timezone: "America/Toronto",
+  }));
+  try {
+    await page.goto(base);
+    await expect(page.locator("#dataset-tag")).toContainText("Published schedules · 0");
+  } finally { release(); }
+  await expect(page.getByLabel("Flight times")).toHaveValue("observed");
+  await expect(page.locator("#dataset-tag")).toContainText("Observed historical legs · 3");
 });
 
 check("changing departure date refreshes both directional counts", async (page) => {
@@ -283,39 +313,51 @@ check("date availability failures remain disabled until a retry succeeds", async
 });
 
 check("calendar month controls stay open across sparse months and years", async (page) => {
+  const searches = [];
+  page.on("request", (request) => {
+    if (searchPath.test(new URL(request.url()).pathname)) searches.push(request.url());
+  });
   await page.route("**/v1/search-availability?*", (route) => fulfillAvailability(route, {
     origin: "YYZ", timezone: "America/Toronto",
     dates: ["2026-10-17", "2026-11-18", "2027-02-19"],
   }));
   await open(page);
   const calendar = page.locator("#date-calendar"),
-    month = calendar.getByRole("combobox", { name: "Month with departure data" }),
+    month = calendar.getByRole("button", { name: "Month with departure data" }),
     next = calendar.getByRole("button", { name: "Next month with data" }),
     previous = calendar.getByRole("button", { name: "Previous month with data" });
   await page.locator("#date").click();
   await expect(previous).toBeDisabled();
   await next.click();
   await expect(calendar).toBeVisible();
-  await expect(month).toHaveValue("2026-11");
+  await expect(month).toHaveAttribute("data-value", "2026-11");
   await next.click();
   await expect(calendar).toBeVisible();
-  await expect(month).toHaveValue("2027-02");
+  await expect(month).toHaveAttribute("data-value", "2027-02");
   await expect(next).toBeDisabled();
   await previous.click();
-  await expect(month).toHaveValue("2026-11");
+  await expect(month).toHaveAttribute("data-value", "2026-11");
   await previous.click();
   await expect(calendar).toBeVisible();
   await expect(previous).toBeDisabled();
-  await expect(month).toHaveValue("2026-10");
-  await month.selectOption("2026-10");
+  await expect(month).toHaveAttribute("data-value", "2026-10");
+  await month.click();
+  await calendar.getByRole("button", { name: "October 2026", exact: true }).click();
   await expect(calendar).toBeVisible();
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
   await expect(page.locator("#status")).not.toContainText("Inputs changed");
-  await month.focus();
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
-  await expect(month).toHaveValue("2026-11");
+  // Actual clicks must reveal the chooser and change the displayed month.
+  await month.click();
+  await expect(calendar.getByRole("group", { name: "Available departure months" })).toBeVisible();
+  await calendar.getByRole("button", { name: "November 2026", exact: true }).click();
+  await expect(month).toHaveAttribute("data-value", "2026-11");
   await expect(calendar).toBeVisible();
+  await month.press("ArrowUp");
+  await expect(month).toHaveAttribute("data-value", "2026-10");
+  await expect(calendar).toBeVisible();
+  assert.equal(searches.length, 1, "browsing months must not submit the search form");
+  await month.click();
+  await calendar.getByRole("button", { name: "November 2026", exact: true }).click();
   await calendar.locator('[data-date="2026-11-18"]').click();
   await expect(calendar).toBeHidden();
   await expect(page.locator("#date")).toHaveValue("2026-11-18");
@@ -332,14 +374,16 @@ check("last departure calendar navigates months within the selected range", asyn
   await page.locator("#search-details > summary").click();
   const input = page.locator('[name="last-date"]'),
     calendar = page.locator("#last-date-calendar"),
-    month = calendar.getByRole("combobox", { name: "Month with departure data" });
+    month = calendar.getByRole("button", { name: "Month with departure data" });
   await input.click();
   await calendar.getByRole("button", { name: "Next month with data" }).click();
   await expect(calendar).toBeVisible();
-  await expect(month).toHaveValue("2026-11");
+  await expect(month).toHaveAttribute("data-value", "2026-11");
   await expect(calendar.locator('[data-date="2026-11-01"]')).toBeEnabled();
   await expect(calendar.locator('[data-date="2026-11-17"]')).toBeDisabled();
-  await expect(month.locator('option[value="2026-12"]')).toHaveCount(0);
+  await month.click();
+  await expect(calendar.getByRole('button', { name: 'December 2026', exact: true })).toHaveCount(0);
+  await month.press('Escape');
   await calendar.locator('[data-date="2026-11-01"]').click();
   await expect(input).toHaveValue("2026-11-01");
   await chooseDate(page, "date", "2026-10-17");
@@ -374,7 +418,7 @@ check("date refresh does not steal focus when the traveler moves to another inpu
 });
 
 check("availability and counts follow the selected flight times without duplicate requests", async (page) => {
-  await page.route("**/v1/catalog", async (route) => {
+  await page.route("**/v1/catalog*", async (route) => {
     const response = await route.fetch(), data = await response.json();
     data.dataset.time_bases = { scheduled: 12, observed: 3, actual: 1 };
     await route.fulfill({ response, json: data });
@@ -467,9 +511,10 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await open(page);
   const calendar = page.locator("#date-calendar");
   await page.locator("#date").tap();
-  await calendar.getByRole("button", { name: "Next month with data" }).tap();
+  await calendar.getByRole("button", { name: "Month with departure data" }).tap();
+  await calendar.getByRole("button", { name: "November 2026", exact: true }).tap();
   await expect(calendar).toBeVisible();
-  await expect(calendar.getByRole("combobox")).toHaveValue("2026-11");
+  await expect(calendar.getByRole("button", { name: "Month with departure data" })).toHaveAttribute("data-value", "2026-11");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   const bounds = await calendar.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 320);
@@ -481,7 +526,7 @@ check("phone calendar can switch months by touch without overflowing", async (pa
 check("linked search disables calendar before statistics load when destination has no arrivals", async (page) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; }), searches = [];
-  await page.route("**/v1/catalog", async (route) => { await gate; await route.continue(); });
+  await page.route("**/v1/catalog*", async (route) => { await gate; await route.continue(); });
   page.on("request", (r) => { if (searchPath.test(new URL(r.url()).pathname)) searches.push(r.url()); });
   try {
     await page.goto(`${base}?origin=YYZ&destination=XYZ&date=2026-10-17&stops=any&input-clock=UTC&time-basis=scheduled`);
@@ -894,7 +939,8 @@ check("partial searches differ from exhaustive empty results", async (page) => {
   await expect(page.locator("#partial")).toBeHidden();
   await expect(page.locator("[data-option]")).toHaveCount(0);
   await expect(page.locator("#export")).toBeDisabled();
-  await expect(page.locator(".map-panel")).toBeHidden();
+  await expect(page.locator(".map-panel")).toBeVisible();
+  await expect(page.locator("#route-map .map-route")).toHaveCount(0);
 });
 
 check("storage failure can be retried", async (page) => {
@@ -1176,7 +1222,7 @@ check("timezone changes after loading dates are corrected before retry", async (
 check(
   "map failure leaves flight inspection and editing available",
   async (page) => {
-    await page.route("**/assets/vendor/world-110m.geojson", (route) =>
+    await page.route("**/world-110m.geojson", (route) =>
       route.fulfill({ status: 503, body: "Geometry unavailable" }),
     );
     await viaSearch(page);
@@ -1187,3 +1233,60 @@ check(
     assert.ok(plan.options.length);
   },
 );
+
+check("slow searches show indeterminate activity, elapsed time and a map overlay", async (page) => {
+  await open(page);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route("**/v1/itineraries/search/local", async route => { await gate; await route.continue(); });
+  const pending = page.waitForResponse(r => searchPath.test(new URL(r.url()).pathname) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Search flights", exact: true }).click();
+  await expect(page.locator("#request-progress")).toBeVisible();
+  await expect(page.locator("#request-label")).toHaveText("Finding flight routes");
+  await expect(page.locator("#request-progress progress")).not.toHaveAttribute("value");
+  await expect(page.locator("#map-loading")).toBeVisible();
+  await expect(page.locator("#request-elapsed")).not.toHaveText("0s");
+  await expect(page.locator("[data-option]").first()).toBeVisible();
+  release(); await pending;
+  await expect(page.locator("#map-loading")).toBeHidden();
+  await expect(page.locator("#request-progress")).toBeHidden();
+});
+
+check("failed searches clear loading activity and retain the previous journey", async (page) => {
+  await open(page);
+  const before = identity((await exported(page)).selection.legs);
+  await page.route("**/v1/itineraries/search/local", route => route.fulfill({status:503,json:{detail:{message:"Search temporarily unavailable"}}}));
+  await page.getByRole("button", { name: "Search flights", exact: true }).click();
+  await expect(page.locator("#error")).toBeVisible();
+  await expect(page.locator("#map-loading")).toBeHidden();
+  await expect(page.locator("#request-progress")).toBeHidden();
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+});
+
+check("route map leads the desktop page and options visualize flights and connections", async (page) => {
+  await open(page);
+  const map = await page.locator(".map-panel").boundingBox(), form = await page.locator(".search-section").boundingBox();
+  assert.ok(Math.abs(map.y - form.y) < 2);
+  assert.ok(map.x >= form.x + form.width);
+  await expect(page.locator(".option-timeline").first()).toBeVisible();
+  await expect(page.locator(".route-node.endpoint").first()).toBeVisible();
+  await expect(page.locator("#journey-summary")).toContainText("Total journey");
+  await page.emulateMedia({reducedMotion:"reduce",colorScheme:"dark"});
+  await expect(page.locator("#route-map")).toBeVisible();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth), false);
+});
+
+check("globe fit keeps a distant origin visible beside clustered connection airports", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async route => {
+    const response = await route.fetch(), data = await response.json();
+    const coordinates = {YYZ:[-75,43],LHR:[120,25],CDG:[100,14]};
+    data.airports = data.airports.map(airport => coordinates[airport.iata]
+      ? {...airport,longitude:coordinates[airport.iata][0],latitude:coordinates[airport.iata][1]} : airport);
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  for (const code of ["YYZ", "LHR", "CDG"])
+    await expect(page.locator("#route-map .map-airport-label", {hasText:code})).toBeVisible();
+  await page.getByRole("button", {name:"Fit journey",exact:true}).click();
+  await expect(page.locator("#route-map .map-airport-label", {hasText:"YYZ"})).toBeVisible();
+});
