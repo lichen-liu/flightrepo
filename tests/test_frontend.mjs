@@ -197,10 +197,20 @@ test("quality badges prioritize conflicts, deduplicate labels and escape metadat
 });
 
 test("informational confidence notes are confined to leg details", () => {
-  const noted = { quality: { labels: [{code: "approximate_times", severity: "info", label: "Approximate times", detail: "Times are ranges"}] } };
+  const noted = {
+    quality: {
+      labels: [
+        {
+          code: "approximate_times",
+          severity: "info",
+          label: "Approximate times",
+          detail: "Times are ranges",
+        },
+      ],
+    },
+  };
   assert.equal(qualityLabels([noted]).length, 0);
-  assert.equal(qualityLabels([noted], {details: true}).length, 1);
-
+  assert.equal(qualityLabels([noted], { details: true }).length, 1);
 });
 
 test("flight identity retains callsign and shows operator reference name", () => {

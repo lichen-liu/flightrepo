@@ -687,9 +687,8 @@ function renderDatasetInfo() {
     ["Flights with accuracy warnings", String(data.needs_review_count || 0)],
     ["Coverage", "May be incomplete"],
   ];
-  $("dataset-content").innerHTML = `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>`;
-
-
+  $("dataset-content").innerHTML =
+    `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>`;
 }
 function closeEditor() {
   editLane.cancel();
@@ -748,8 +747,10 @@ function editorRequest(notBefore = null) {
     next_airport: airportCode(editField("next-airport").value) || null,
     avoid_airports: state.result.query.avoid_airports,
     trace: false,
-    time_basis: state.result.query.time_basis || state.selection.legs[0]?.time_basis || "scheduled",
-
+    time_basis:
+      state.result.query.time_basis ||
+      state.selection.legs[0]?.time_basis ||
+      "scheduled",
   };
 }
 async function findNext() {
@@ -1116,12 +1117,19 @@ $("export").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 async function loadCatalog() {
-  await catalogLane.run("/v1/catalog?include_airports=false", undefined, (catalog) => {
-    state.catalog = catalog;
-    updateDatasetTag();
-    renderDatasetInfo();
-  }, () => { $("dataset-tag").textContent = "Dataset statistics unavailable; search remains available."; });
-
+  await catalogLane.run(
+    "/v1/catalog?include_airports=false",
+    undefined,
+    (catalog) => {
+      state.catalog = catalog;
+      updateDatasetTag();
+      renderDatasetInfo();
+    },
+    () => {
+      $("dataset-tag").textContent =
+        "Dataset statistics unavailable; search remains available.";
+    },
+  );
 }
 async function loadBootstrap() {
   $("retry-catalog").hidden = true;

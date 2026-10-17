@@ -1339,6 +1339,7 @@ def test_public_contract_strips_provenance_from_every_nested_result(client, demo
     demo[0].upsert([record])
     responses = [
         client.get("/v1/catalog"),
+        client.get("/v1/catalog?include_airports=false"),
         client.get("/v1/bootstrap"),
         client.get("/v1/flights?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
         client.get("/v1/routes?start=2026-10-17T00:00:00Z&end=2026-10-18T00:00:00Z"),
@@ -1519,4 +1520,3 @@ def test_actual_page_versions_all_entry_assets_and_their_relative_dependencies(c
     assert client.get(urljoin(base, "./map.mjs")).status_code == 200
     css = f"/assets/v-{revision}/app.css"
     assert client.get(urljoin(css, "fonts/manrope-variable.woff2")).content.startswith(b"wOF2")
-

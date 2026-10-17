@@ -20,9 +20,11 @@ export const arrivalTime = (f) =>
   f.arrival_observed_upper ??
   f.arrival_actual;
 export const flightLabel = (f) => {
-  const identity = f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : "Flight");
-  return f.operator_name ? `${identity} · ${f.operator_name} (operator)` : identity;
-
+  const identity =
+    f.flight_number || (f.callsign ? `${f.callsign} (callsign)` : "Flight");
+  return f.operator_name
+    ? `${identity} · ${f.operator_name} (operator)`
+    : identity;
 };
 export function flightTimeLabel(f, event, zone = "UTC") {
   const point = event === "departure" ? departureTime(f) : arrivalTime(f);

@@ -7,7 +7,6 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-
 from starlette.middleware.gzip import GZipMiddleware
 
 from core.config import get_settings
