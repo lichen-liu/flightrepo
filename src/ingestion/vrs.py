@@ -14,11 +14,10 @@ import httpx
 
 from core.admission import blocked_for_search, route_verified_sql, search_blocked_sql
 from core.database_roles import ingestion_target, require_ingestion
-from core.file_lock import file_mutex
 from core.models import RouteVerification
 from core.storage import SQLiteConnection, utc_us
 from ingestion.audit import scope_sql
-from ingestion.store import IngestionStore, check_quota
+from ingestion.store import IngestionStore, check_quota, job_lock
 
 BASE_URL = "https://vrs-standing-data.adsb.lol/"
 MAX_BYTES = 64 * 1024**2
@@ -78,7 +77,7 @@ def import_snapshot(store, routes, airports, *, metadata=None, fetched_at=None):
             for name, data in [("routes", routes), ("airports", airports)]
         },
     )
-    with file_mutex(Path(str(store.path) + ".job.lock"), blocking=False) as acquired:
+    with job_lock(store.path, blocking=False) as acquired:
         if not acquired:
             raise ValueError("Stop the active ingestion job before refreshing VRS")
         store.initialize()
@@ -248,7 +247,7 @@ def admit(path, *, start, end, apply=False, progress=None):
         raise ValueError("VRS admission end must follow start")
     path = Path(path).resolve()
     ingestion_target(path)
-    with file_mutex(Path(str(path) + ".job.lock"), blocking=False) as acquired:
+    with job_lock(path, blocking=False) as acquired:
         if not acquired:
             raise ValueError("Stop the active ingestion job before VRS admission")
         store = IngestionStore(path)
