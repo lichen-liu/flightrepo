@@ -10,4 +10,4 @@
 - [Routing engine](engine/routing.md): ranking, constraints, computation limits and internal replay.
 - [Development checks](../README.md#development-checks): Python, frontend, installed-package and browser verification.
 
-- [Shared monitoring proposal](design/shared-monitoring.md): researched design for one internal stack serving Flyji, Trip Split and future projects; includes a dashboard layout study.
+- [Standalone monitoring proposal](design/shared-monitoring.md): generic single-process stack, SQL storage, Git submodule adapters and a dashboard layout study.

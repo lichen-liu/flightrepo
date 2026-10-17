@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>boboji Operations — design preview</title>
+    <title>Small Monitor — standalone design preview</title>
     <style>
       :root {
         color-scheme: dark;
@@ -508,7 +508,7 @@
   <body>
     <header>
       <div class="brand">
-        <b>b/</b><strong>boboji</strong><span class="muted">/ Operations</span>
+        <b>m/</b><strong>Small Monitor</strong><span class="muted">/ All projects</span>
       </div>
       <span class="preview">DESIGN PREVIEW · FICTIONAL DATA</span>
     </header>
@@ -516,7 +516,7 @@
       <div class="heading">
         <div>
           <h1>Service overview</h1>
-          <p>Public availability, application performance and shared hosts.</p>
+          <p>One process · SQL history · multiple projects. Example placement: separate monitoring host.</p>
         </div>
         <div class="controls">
           <label
@@ -532,18 +532,26 @@
             <select id="scenario" aria-label="Scenario">
               <option value="normal">Normal</option>
               <option value="replica">One replica fails</option>
-              <option value="collector">Collector stops</option>
+              <option value="collector">Host agent stops</option>
               <option value="host">Serving host offline</option>
+              <option value="restart">Core restarted · history retained</option>
             </select></label
           >
         </div>
       </div>
       <div class="controls">
+        <label>Project
+          <select id="project" aria-label="Project">
+            <option value="all">All projects</option>
+            <option value="travel">Travel</option>
+            <option value="household">Household</option>
+          </select>
+        </label>
         <div class="group" aria-label="Filter by site">
           <button data-site="all" aria-pressed="true">All sites</button
-          ><button data-site="flightrepo" aria-pressed="false">Flyji</button
+          ><button data-site="flightrepo" aria-pressed="false">Flight site</button
           ><button data-site="trip_dollar" aria-pressed="false">
-            Trip Split
+            Budget site
           </button>
         </div>
         <span class="divider"></span>
@@ -592,7 +600,7 @@
                 <th>CPU</th>
                 <th>Memory available</th>
                 <th>Disk available</th>
-                <th>Collector</th>
+                <th>Host sampler</th>
               </tr>
             </thead>
             <tbody id="hosts"></tbody>
@@ -635,8 +643,9 @@
       const sites = [
         {
           id: "flightrepo",
-          title: "Flyji",
-          stack: "FastAPI · SQLite",
+          project: "travel",
+          title: "Flight site",
+          stack: "Travel project · FastAPI",
           color: "#a9baff",
           rps: 8.2,
           p95: 1.34,
@@ -646,8 +655,9 @@
         },
         {
           id: "trip_dollar",
-          title: "Trip Split",
-          stack: "Flask · Waitress",
+          project: "household",
+          title: "Budget site",
+          stack: "Household project · Flask",
           color: "#86d7c8",
           rps: 1.6,
           p95: 0.082,
@@ -678,6 +688,14 @@
         )
           return "down";
         return "up";
+      }
+      // Probe fixtures are independent of heartbeat/host telemetry fixtures.
+      function publicAvailable(site) {
+        if ($("scenario").value === "host")
+          return $("topology").value === "distributed";
+        if ($("scenario").value === "replica" && site.id === "flightrepo")
+          return $("topology").value !== "single";
+        return true;
       }
       function badge(value, text) {
         const cls =
@@ -720,7 +738,7 @@
         const label =
           (state.metric === "latency" ? "Request p95" : "Requests / second") +
           (partial ? " · partial visibility" : " · synthetic series");
-        return `<div class="chart"><div class="chart-label"><span>${label}</span><span>${gap ? "No recent data" : outage ? "Unavailable" : state.metric === "latency" ? (site.id === "flightrepo" ? "0–2 s" : "0–150 ms") : site.id === "flightrepo" ? "0–12 req/s" : "0–3 req/s"}</span></div><svg viewBox="0 0 580 125" role="img" aria-label="${site.title}: fictional ${state.metric} trend${gap ? " with a data gap" : ""}"><g stroke="#273343" stroke-dasharray="2 5"><path d="M12 25H564 M12 62H564 M12 100H564"/></g>${gap ? '<rect x="12" y="14" width="552" height="92" fill="#202a38"/><text x="288" y="65" fill="#acb7c8" text-anchor="middle" font-size="12">No samples · collector last seen 2m 38s ago</text>' : outage ? '<path d="M12 100H564" stroke="#ff969f" stroke-width="2"/><text x="288" y="62" fill="#ff969f" text-anchor="middle" font-size="12">Origin unreachable</text>' : `${showReplicas ? lines : ""}<path d="${path(aggregateOffset, reporting.length === 1 ? 0.8 : 1)}" fill="none" stroke="${site.color}" stroke-width="2.5"/><path d="M359 12V104" stroke="#7f90af" stroke-dasharray="3 5"/><text x="366" y="19" fill="#94a4bb" font-size="9">deploy</text>`}</svg><div class="axis"><span>−${$("window").value}m</span><span>−${Number($("window").value) / 2}m</span><span>Now</span></div></div><div class="legend"><span><i class="swatch" style="background:${site.color}"></i>Site aggregate</span>${showReplicas ? rows.map((r, i) => `<span><i class="swatch" style="background:${site.color};opacity:${0.5 + i * 0.15}"></i>${r.host}/${r.id}${status(r) === "unknown" ? " · no data" : status(r) === "down" ? " · down" : ""}</span>`).join("") : ""}</div>`;
+        return `<div class="chart"><div class="chart-label"><span>${label}</span><span>${gap ? "No recent data" : outage ? "Unavailable" : state.metric === "latency" ? (site.id === "flightrepo" ? "0–2 s" : "0–150 ms") : site.id === "flightrepo" ? "0–12 req/s" : "0–3 req/s"}</span></div><svg viewBox="0 0 580 125" role="img" aria-label="${site.title}: fictional ${state.metric} trend${gap ? " with a data gap" : ""}"><g stroke="#273343" stroke-dasharray="2 5"><path d="M12 25H564 M12 62H564 M12 100H564"/></g>${gap ? '<rect x="12" y="14" width="552" height="92" fill="#202a38"/><text x="288" y="65" fill="#acb7c8" text-anchor="middle" font-size="12">No samples · agent last seen 2m 38s ago</text>' : outage ? '<path d="M12 100H564" stroke="#ff969f" stroke-width="2"/><text x="288" y="62" fill="#ff969f" text-anchor="middle" font-size="12">Origin unreachable</text>' : `${showReplicas ? lines : ""}<path d="${path(aggregateOffset, reporting.length === 1 ? 0.8 : 1)}" fill="none" stroke="${site.color}" stroke-width="2.5"/><path d="M359 12V104" stroke="#7f90af" stroke-dasharray="3 5"/><text x="366" y="19" fill="#94a4bb" font-size="9">deploy</text>`}${$("scenario").value === "restart" ? '<rect x="380" y="12" width="38" height="94" fill="#202a38"/><text x="399" y="119" fill="#acb7c8" text-anchor="middle" font-size="9">gap</text>' : ""}</svg><div class="axis"><span>−${$("window").value}m</span><span>−${Number($("window").value) / 2}m</span><span>Now</span></div></div><div class="legend"><span><i class="swatch" style="background:${site.color}"></i>Site aggregate</span>${showReplicas ? rows.map((r, i) => `<span><i class="swatch" style="background:${site.color};opacity:${0.5 + i * 0.15}"></i>${r.host}/${r.id}${status(r) === "unknown" ? " · no data" : status(r) === "down" ? " · down" : ""}</span>`).join("") : ""}</div>`;
       }
       function renderSite(site) {
         const all = replicas(site),
@@ -730,11 +748,11 @@
         if (!rows.length) return "";
         const healthy = all.filter((r) => status(r) === "up").length,
           unknown = all.some((r) => status(r) === "unknown");
-        const unavailable = !healthy && !unknown,
+        const unavailable = !publicAvailable(site),
           tag = unavailable
             ? badge("down", "Public unavailable")
             : unknown
-              ? badge("warn", "Visibility degraded")
+              ? badge("warn", "Public up · telemetry stale")
               : healthy < all.length
                 ? badge("warn", "Public up · replica degraded")
                 : badge("up", "Public available");
@@ -752,7 +770,7 @@
           })
           .join(
             "",
-          )}</tbody></table></div><div class="deployment">Public probes: independent monitoring host · revision <span class="mono">${site.revision}</span> · ${fresh ? "sampled 8s ago" : "last sample 2m 38s ago"}</div></article>`;
+          )}</tbody></table></div><div class="deployment">Public probes: monitoring core · revision <span class="mono">${site.revision}</span> · ${fresh ? "sampled 8s ago" : "last sample 2m 38s ago"}</div></article>`;
       }
       function render() {
         const distributed = $("topology").value === "distributed";
@@ -760,16 +778,15 @@
         if (!distributed && $("host").value === "linux-01")
           $("host").value = "all";
         const chosen = sites.filter(
-          (s) => state.site === "all" || state.site === s.id,
+          (s) => (state.site === "all" || state.site === s.id) &&
+            ($("project").value === "all" || s.project === $("project").value),
         );
         const shown = chosen
           .flatMap(replicas)
           .filter(
             (r) => $("host").value === "all" || r.host === $("host").value,
           );
-        const publicUp = chosen.filter((s) =>
-          replicas(s).some((r) => status(r) !== "down"),
-        ).length;
+        const publicUp = chosen.filter(publicAvailable).length;
         const up = shown.filter((r) => status(r) === "up").length,
           unknown = shown.filter((r) => status(r) === "unknown").length;
         const hostNames = [...new Set(shown.map((r) => r.host))];
@@ -777,18 +794,19 @@
           hostNames.includes("mac-01") &&
           ($("scenario").value === "replica"
             ? chosen.some((s) => s.id === "flightrepo")
-            : $("scenario").value !== "normal");
+            : ["collector", "host"].includes($("scenario").value));
         $("summary").innerHTML =
           `<div><small>Public sites</small><strong>${publicUp} / ${chosen.length}</strong><span>reachable</span></div><div><small>Observed replicas</small><strong>${up} / ${shown.length}</strong><span>${unknown ? unknown + " without data" : "ready"}</span></div><div><small>Active incidents</small><strong class="${incident ? "warn" : ""}">${incident ? "1" : "0"}</strong><span>${incident ? "grouped by cause" : "in this example"}</span></div><div><small>Reporting hosts</small><strong>${hostNames.filter((h) => !(["collector", "host"].includes($("scenario").value) && h === "mac-01")).length} / ${hostNames.length}</strong><span>fresh telemetry</span></div>`;
         const notes = {
           normal: "",
+          restart: "Core recovered: committed SQL history, replica identities and incident state remain. The unobserved interval stays a visible gap; application requests continued during the restart.",
           replica:
-            "Example incident: a Flyji replica is down. With other healthy replicas, the site remains reachable; inspect the affected row without leaving its site group.",
+            "Example incident: a flight-site replica is down. With other healthy replicas, the site remains reachable; inspect the affected row without leaving its site group.",
           collector:
             "Example incident: mac-01 stopped reporting. Public probes remain independent. Missing telemetry is unknown, not zero traffic or a healthy origin.",
-          host: "Example incident: mac-01 is offline. One grouped host incident replaces repeated alerts for every dependent app. Remote replicas remain visible.",
+          host: "Example scenario assumes mac-01 is confirmed offline. One grouped host incident replaces repeated alerts for every dependent app. Remote replicas remain visible.",
         };
-        $("notice").hidden = !incident;
+        $("notice").hidden = !incident && $("scenario").value !== "restart";
         $("notice").textContent = notes[$("scenario").value];
         $("sites").innerHTML = chosen.map(renderSite).join("");
         $("sites").style.gridTemplateColumns =
@@ -802,13 +820,13 @@
               .filter((s) => replicas(s).some((r) => r.host === host))
               .map((s) => s.title)
               .join(" · ");
-            return `<tr><td><div class="host-name"><strong class="mono">${host}</strong><small>${host === "mac-01" ? "macOS" : "Linux"}</small></div><small>${labels}</small></td><td>${badge(missing ? "unknown" : "up", missing ? "Stale · 2m 38s" : "Fresh · 8s")}</td><td>${missing ? "—" : '<span class="bar"><i style="width:32%"></i></span>32%'}</td><td>${missing ? "—" : "8.4 GiB"}</td><td>${missing ? "—" : "184 GiB"}</td><td>${missing ? "No recent data" : "One shared Alloy"}</td></tr>`;
+            return `<tr><td><div class="host-name"><strong class="mono">${host}</strong><small>${host === "mac-01" ? "macOS" : "Linux"}</small></div><small>${labels}</small></td><td>${badge(missing ? "unknown" : "up", missing ? "Stale · 2m 38s" : "Fresh · 8s")}</td><td>${missing ? "—" : '<span class="bar"><i style="width:32%"></i></span>32%'}</td><td>${missing ? "—" : "8.4 GiB"}</td><td>${missing ? "—" : "184 GiB"}</td><td>${missing ? "No recent data" : "One host sampler"}</td></tr>`;
           })
           .join("");
         renderLogs(chosen);
         const degraded = ["collector", "host"].includes($("scenario").value);
         $("pipeline").innerHTML =
-          `<div><span>Central public probes</span>${badge("up", "Running")}</div><div><span>Host collection</span>${badge(degraded ? "unknown" : "up", degraded ? "mac-01 missing" : "Reporting")}</div><div><span>Metric storage</span>${badge("up", "Prometheus")}</div><div><span>Log storage</span>${badge("up", "Loki")}</div><div><span>Notification path</span>${badge("up", "Heartbeat received")}</div><p>Persistent history lives outside app releases. Collector status is separate from public site availability.</p>`;
+          `<div><span>Central public probes</span>${badge("up", "Running")}</div><div><span>Host collection</span>${badge(degraded ? "unknown" : "up", degraded ? "mac-01 missing" : "Reporting")}</div><div><span>Metrics, events and alert state</span>${badge("up", "One SQLite database")}</div><div><span>Monitoring core</span>${badge("up", $("scenario").value === "restart" ? "Recovered · history retained" : "One Python process")}</div><div><span>Notifications</span>${badge("unknown", "Not configured")}</div><p>SQL history lives outside app releases. In the simplest pilot the core also samples its local host; a remote host uses the optional agent. Host heartbeat is separate from public site availability.</p>`;
         document
           .querySelectorAll("[data-site]")
           .forEach((b) =>
@@ -860,7 +878,7 @@
             ? chosen.some((s) => s.id === "flightrepo") &&
               (!selected ||
                 (selected[0] === "flightrepo" && selected[2] === "r01"))
-            : $("scenario").value !== "normal");
+            : ["collector", "host"].includes($("scenario").value));
         if (incidentInView)
           entries.unshift({
             time: "14:29:12",
@@ -883,6 +901,8 @@
           replica = event.target.closest("[data-replica]");
         if (site) {
           state.site = site.dataset.site;
+          if (state.site !== "all") $("project").value = sites.find((s) => s.id === state.site).project;
+          else $("project").value = "all";
           state.selected = null;
           render();
         }
@@ -900,10 +920,11 @@
           });
         }
       });
-      ["topology", "scenario", "host", "window", "replica-lines"].forEach(
+      ["topology", "scenario", "host", "window", "replica-lines", "project"].forEach(
         (id) =>
           $(id).addEventListener("change", () => {
             state.selected = null;
+            if (id === "project") state.site = "all";
             render();
           }),
       );
