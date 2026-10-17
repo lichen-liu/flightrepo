@@ -204,6 +204,7 @@ def test_multiple_app_instances_keep_database_bindings_and_original_app(
     from server.api import get_store
 
     overrides = dict(original.dependency_overrides)
+    settings = get_settings()
     caches = get_store.cache_info(), get_settings.cache_info()
     first, _ = scripts.serve.create_server(installed)
     second_root = runtime(tmp_path / "second", tmp_path / "second-data/flights.db")
@@ -222,7 +223,9 @@ def test_multiple_app_instances_keep_database_bindings_and_original_app(
         assert b.get("/v1/catalog").json()["dataset"]["flight_count"] == 11
         assert a.get("/v1/catalog").json()["dataset"]["flight_count"] == 12
     assert original.dependency_overrides == overrides
-    assert (get_store.cache_info(), get_settings.cache_info()) == caches
+    assert get_store.cache_info() == caches[0]
+    assert get_settings() is settings
+    assert get_settings.cache_info().misses == caches[1].misses
 
 
 @pytest.mark.parametrize(

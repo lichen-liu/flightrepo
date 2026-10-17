@@ -54,6 +54,12 @@ def merge_airport(connection, values):
         "ON CONFLICT(iata) DO UPDATE SET "
         + ",".join(
             f"{key}=COALESCE(airports.{key},excluded.{key})" for key in fields if key != "iata"
+        )
+        + " WHERE "
+        + " OR ".join(
+            f"(airports.{key} IS NULL AND excluded.{key} IS NOT NULL)"
+            for key in fields
+            if key != "iata"
         ),
         values,
     )
@@ -66,6 +72,12 @@ def merge_carrier(connection, values):
         "ON CONFLICT(code) DO UPDATE SET "
         + ",".join(
             f"{key}=COALESCE(carriers.{key},excluded.{key})" for key in fields if key != "code"
+        )
+        + " WHERE "
+        + " OR ".join(
+            f"(carriers.{key} IS NULL AND excluded.{key} IS NOT NULL)"
+            for key in fields
+            if key != "code"
         ),
         values,
     )
@@ -228,6 +240,23 @@ def ensure_carriers(path):
     refresh(path, carriers_only=True)
 
 
+def copy_source(row, output):
+    """Copy attribution without dirtying an unchanged source row."""
+    fields = ("name", "source_url", "license_expression", "license_url", "attribution")
+    sid = source_id(output, row["code"])
+    output.execute(
+        "UPDATE data_sources SET "
+        + ",".join(f"{key}=:{key}" for key in fields)
+        + " WHERE id=:id AND ("
+        + ",".join(fields)
+        + ") IS NOT ("
+        + ",".join(f":{key}" for key in fields)
+        + ")",
+        {key: row[key] for key in fields} | {"id": sid},
+    )
+    return sid
+
+
 def copy_catalog(source, output):
     """Publish reference dimensions independently of millions of flight facts."""
     sources = {
@@ -241,29 +270,42 @@ def copy_catalog(source, output):
     for row in source.execute("SELECT * FROM data_sources"):
         if row["id"] not in sources:
             continue
-        sid = source_id(output, row["code"])
+        sid = copy_source(row, output)
         mapping[row["id"]] = sid
-        output.execute(
-            "UPDATE data_sources SET name=?,source_url=?,license_expression=?,license_url=?,attribution=? WHERE id=?",
-            tuple(
-                row[k]
-                for k in ("name", "source_url", "license_expression", "license_url", "attribution")
-            )
-            + (sid,),
-        )
     for row in source.execute("SELECT * FROM airports"):
         merge_airport(
             output, dict(row) | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
         )
+    carriers = [
+        dict(row) | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
+        for row in source.execute("SELECT * FROM carriers")
+    ]
+    # Compare source-owned dimensions before replacing them. Daily publication
+    # usually has the same reference snapshot; avoid deleting/reinserting it.
+    changed = set()
     for sid in mapping.values():
+        incoming = [row for row in carriers if row["metadata_source_id"] == sid]
+        existing = [
+            dict(row)
+            for row in output.execute("SELECT * FROM carriers WHERE metadata_source_id=?", (sid,))
+        ]
+        if sorted(incoming, key=lambda row: row["code"]) == sorted(
+            existing, key=lambda row: row["code"]
+        ):
+            continue
+        changed.add(sid)
+    # Delete changed owners first so reassigned ICAO codes do not collide with
+    # the previous snapshot while its replacement is being inserted.
+    for sid in changed:
         output.execute("DELETE FROM carriers WHERE metadata_source_id=?", (sid,))
-    for row in source.execute("SELECT * FROM carriers"):
-        merge_carrier(
-            output, dict(row) | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
-        )
+    for row in carriers:
+        if row["metadata_source_id"] is None or row["metadata_source_id"] in changed:
+            merge_carrier(output, row)
     for row in source.execute("SELECT * FROM reference_snapshots"):
         output.execute(
-            "INSERT INTO reference_snapshots VALUES(?,?,?,?,?,?) ON CONFLICT(source_id,kind) DO UPDATE SET source_url=excluded.source_url,sha256=excluded.sha256,fetched_us=excluded.fetched_us,row_count=excluded.row_count",
+            "INSERT INTO reference_snapshots VALUES(?,?,?,?,?,?) ON CONFLICT(source_id,kind) DO UPDATE SET source_url=excluded.source_url,sha256=excluded.sha256,fetched_us=excluded.fetched_us,row_count=excluded.row_count "
+            "WHERE (reference_snapshots.source_url,reference_snapshots.sha256,reference_snapshots.fetched_us,reference_snapshots.row_count) "
+            "IS NOT (excluded.source_url,excluded.sha256,excluded.fetched_us,excluded.row_count)",
             (
                 mapping[row["source_id"]],
                 row["kind"],

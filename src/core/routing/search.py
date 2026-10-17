@@ -81,7 +81,11 @@ class RouteCalculation:
 
 
 def calculate_routes(
-    request: RouteSearchRequest, snapshot: RoutingSnapshot | ProjectedSnapshot, *, best_first=False
+    request: RouteSearchRequest,
+    snapshot: RoutingSnapshot | ProjectedSnapshot,
+    *,
+    best_first=False,
+    include_replay_identity=True,
 ) -> RouteCalculation:
     snapshot = snapshot.with_time_basis(request.time_basis)
     policy = ConnectionPolicy(
@@ -90,7 +94,13 @@ def calculate_routes(
         allow_airport_change=request.allow_airport_change,
         avoid_airports=request.avoid_airports,
     )
-    session = RoutingSession(snapshot, request, policy, request.ranking)
+    session = RoutingSession(
+        snapshot,
+        request,
+        policy,
+        request.ranking,
+        include_replay_identity=include_replay_identity,
+    )
     window = ConnectionWindow(
         minimum_minutes=request.minimum_connection_minutes,
         maximum_minutes=request.maximum_connection_minutes,

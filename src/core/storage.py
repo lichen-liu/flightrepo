@@ -140,7 +140,9 @@ def _compatibility_schema(*, operator_reference=True):
     )
 
 
-SCHEMA = Path(__file__).with_name("schema.sql").read_text() + _compatibility_schema()
+BASE_SCHEMA = Path(__file__).with_name("schema.sql").read_text() + _compatibility_schema()
+QUERY_INDEXES = Path(__file__).with_name("query_indexes.sql").read_text()
+SCHEMA = BASE_SCHEMA + QUERY_INDEXES
 
 
 def refresh_admission_view(connection):

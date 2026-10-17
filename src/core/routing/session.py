@@ -27,6 +27,8 @@ class RoutingSession:
         request: RouteSearchRequest | RebuildRequest,
         policy: ConnectionPolicy,
         ranking: str,
+        *,
+        include_replay_identity=True,
     ):
         self.snapshot, self.request, self.policy, self.ranking = (
             snapshot,
@@ -35,6 +37,7 @@ class RoutingSession:
             ranking,
         )
         self.records = snapshot.records()
+        self.include_replay_identity = include_replay_identity or request.trace
         # Simple paths cannot revisit airports. This is a graph-derived bound,
         # not a user-facing stop ceiling, and keeps unbounded searches finite.
         airports = {
@@ -125,7 +128,9 @@ class RoutingSession:
             reasons.append("data_limit")
         if self.search_truncated:
             reasons.append("candidate_limit")
-        snapshot_id = self.snapshot.snapshot_id
+        # Public responses omit replay identities. Avoid hashing a large graph
+        # for values that will immediately be discarded at that boundary.
+        snapshot_id = self.snapshot.snapshot_id if self.include_replay_identity else ""
         return SearchDiagnostics(
             scope="sql_projection"
             if isinstance(self.snapshot, ProjectedSnapshot)
@@ -137,7 +142,9 @@ class RoutingSession:
                     "snapshot": snapshot_id,
                     "query": self.request.model_dump(mode="json"),
                 }
-            ),
+            )
+            if self.include_replay_identity
+            else "",
             ranking=self.ranking,
             exhaustive=not reasons,
             termination_reasons=reasons,

@@ -288,3 +288,22 @@ def test_aggregate_queries_never_resolve_operator_names(store):
         assert calls == []
         assert c.execute("SELECT operator_name FROM flights").fetchone()[0] == "Air Canada"
         assert calls
+
+
+def test_unchanged_reference_publication_does_not_rewrite_dimensions(store, tmp_path):
+    load(store)
+    target = FlightUpdater(tmp_path / "serving.db")
+    target.initialize()
+    with store.connect() as source, target.connect() as output:
+        references.copy_catalog(source, output)
+        before = output.total_changes
+        references.copy_catalog(source, output)
+        assert output.total_changes == before
+        # An unchanged receipt must not hide a missing or damaged dimension.
+        output.execute("DELETE FROM carriers WHERE icao='ACA'")
+        references.copy_catalog(source, output)
+        assert (
+            output.execute("SELECT name FROM carriers WHERE icao='ACA'").fetchone()[0]
+            == "Air Canada"
+        )
+        assert not output.execute("PRAGMA foreign_key_check").fetchall()

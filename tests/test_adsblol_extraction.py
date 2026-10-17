@@ -45,6 +45,18 @@ def daily_input(day, traces):
     return item, content
 
 
+def test_disposable_stage_keeps_constraints_without_serving_query_indexes():
+    from contextlib import closing
+
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.executescript(extraction.STAGING_SCHEMA)
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(flight_legs)")}
+        assert not any(name.startswith("flight_legs_") for name in indexes)
+        assert "ingestion_publication_time" in indexes
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA table_list('flight_legs')").fetchone()[-1] == 1
+
+
 def run(root, day, traces, **options):
     item, content = daily_input(day, traces)
     with httpx.Client(

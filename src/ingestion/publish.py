@@ -6,6 +6,7 @@ from pathlib import Path
 from core.database_roles import require_ingestion
 from core.file_lock import file_mutex
 from core.storage import SQLiteConnection, flight_record, source_id, store_flight, utc_us
+from ingestion.references import copy_catalog, copy_source
 from ingestion.store import check_quota
 from ingestion.updater import FlightUpdater
 
@@ -125,35 +126,14 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
                 for record in records.values()
                 if record is not None and admitted(record)
             }
-            # Airport reference attribution is part of the published catalog.
-            # Reference-only route/schedule documents never enter serving.
-            for row in source.execute(
-                "SELECT * FROM data_sources WHERE code IN (SELECT code FROM data_sources WHERE id IN (SELECT metadata_source_id FROM airports))"
-            ):
-                providers.add(row["code"])
             if any(
                 record is not None and record.current_route_reference for record in records.values()
             ):
                 providers.add("vrs")
-            source_map = {}
             for row in source.execute("SELECT * FROM data_sources"):
                 if row["code"] not in providers:
                     continue
-                sid = source_id(output, row["code"])
-                source_map[row["id"]] = sid
-                output.execute(
-                    """UPDATE data_sources SET name=?,source_url=?,license_expression=?,license_url=?,attribution=? WHERE id=?""",
-                    (
-                        row["name"],
-                        row["source_url"],
-                        row["license_expression"],
-                        row["license_url"],
-                        row["attribution"],
-                        sid,
-                    ),
-                )
-            from ingestion.references import copy_catalog
-
+                copy_source(row, output)
             copy_catalog(source, output)
             for key, record in records.items():
                 if record is None or not admitted(record):
@@ -188,7 +168,8 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
                     )
                 output.execute(
                     """INSERT INTO publication_membership VALUES(?,?,?,?)
-                    ON CONFLICT(store_id,source_code,source_record_key) DO UPDATE SET departure_us=excluded.departure_us""",
+                    ON CONFLICT(store_id,source_code,source_record_key) DO UPDATE SET departure_us=excluded.departure_us
+                    WHERE publication_membership.departure_us<>excluded.departure_us""",
                     (store_id, *key, event_us(record)),
                 )
             for row in source.execute("SELECT * FROM airport_transfers"):

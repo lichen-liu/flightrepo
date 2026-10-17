@@ -8,9 +8,11 @@ from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from threading import Lock
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 from core.admission import ADMITTED_SQL
+from core.config import get_settings
 from core.connections import Airport, AirportTransfer, ConnectionWindow, RebuildRequest, RebuiltPlan
 from core.database_roles import require_serving
 from core.models import FlightRecord, RouteSummary
@@ -42,19 +44,42 @@ from server.web_models import (
 )
 
 
+class ReadQueryTimeout(sqlite3.OperationalError):
+    """The serving read exceeded its configured SQLite work deadline."""
+
+
 class FlightReader(SQLiteConnection):
-    def __init__(self, path: Path, *, serving_only=False):
+    def __init__(self, path: Path, *, serving_only=False, query_timeout_seconds=None):
         super().__init__(path, read_only=True)
         self._catalog_lock = Lock()
         self._catalog_cache = {}
+        self._bootstrap_lock = Lock()
+        self._bootstrap_cache = None
         self.serving_only = serving_only
+        self.query_timeout_seconds = (
+            get_settings().read_query_timeout_seconds
+            if serving_only and query_timeout_seconds is None
+            else query_timeout_seconds
+        )
 
     @contextmanager
     def connect(self):
         with super().connect() as connection:
             if self.serving_only:
                 require_serving(connection)
-            yield connection
+            if self.query_timeout_seconds is None:
+                yield connection
+                return
+            deadline = monotonic() + self.query_timeout_seconds
+            connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
+            try:
+                yield connection
+            except sqlite3.OperationalError as error:
+                if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+                    raise ReadQueryTimeout("Database read exceeded its time limit") from error
+                raise
+            finally:
+                connection.set_progress_handler(None, 0)
 
     def _catalog_revision(self):
         revision = []
@@ -572,7 +597,9 @@ class FlightReader(SQLiteConnection):
                 if f.has_time_basis(basis)
             }
 
-            calculation = calculate_rebuild(request, snapshot)
+            calculation = calculate_rebuild(
+                request, snapshot, include_replay_identity=not self.serving_only
+            )
             missing = [f for f in calculation.flights if flight_key(f) not in hydrated]
             hydrated.update(self._hydrate_flights(connection, missing, basis))
             result = calculation.materialize(hydrated)
@@ -672,7 +699,9 @@ class FlightReader(SQLiteConnection):
     def _projected_search(self, connection, request, airports, transfers):
         basis = request.time_basis or self._default_basis(connection)
         snapshot = project_routes(connection, request, airports, transfers, basis)
-        calculation = calculate_routes(request, snapshot, best_first=True)
+        calculation = calculate_routes(
+            request, snapshot, best_first=True, include_replay_identity=not self.serving_only
+        )
         hydrated = self._hydrate_flights(connection, calculation.flights, basis)
         result = calculation.materialize(hydrated)
         result.diagnostics.stats.records_hydrated = len(hydrated)
@@ -731,7 +760,7 @@ class FlightReader(SQLiteConnection):
         }
 
     def readiness(self):
-        """Check serving storage/counts without building confidence or airport catalogs."""
+        """Check readable storage and the serving contract without scanning flight facts."""
         with self.connect() as connection:
             connection.execute("BEGIN")
             require_serving(connection)
@@ -740,26 +769,13 @@ class FlightReader(SQLiteConnection):
             ).fetchone()
             if tuple(contract or ()) != ("flight-legs", 1):
                 raise sqlite3.DatabaseError("Unsupported flight schema contract")
-            complete = " OR ".join(
-                [
-                    "(departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL)",
-                    "departure_observed_lower_us IS NOT NULL",
-                    "(departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL)",
-                ]
-            )
-            count = connection.execute(
-                f"SELECT COUNT(*) FROM flight_legs f WHERE status <> 'cancelled' "
-                f"AND ({complete}) AND {ADMITTED_SQL} AND NOT EXISTS "
-                "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
-                "AND t.source_record_key=f.source_record_key)"
-            ).fetchone()[0]
-            basis = self._default_basis(connection)
+            # Preparing the public read view verifies its tables and columns.
+            # Dataset counts and default time basis belong to the catalog API.
+            connection.execute("SELECT leg_id,time_basis FROM searchable_legs LIMIT 0")
         return dict(
             status="ready",
-            flight_count=count,
             schema_contract="flight-legs",
             schema_version=1,
-            time_basis=basis,
         )
 
     def web_catalog(self, *, include_airports=True) -> WebCatalog:
@@ -876,6 +892,16 @@ class FlightReader(SQLiteConnection):
 
     def web_bootstrap(self) -> WebBootstrap:
         """Load search defaults and suggestions without archive-wide statistics."""
+        with self._bootstrap_lock:
+            revision = self._catalog_revision()
+            if self._bootstrap_cache and self._bootstrap_cache[0] == revision:
+                return self._bootstrap_cache[1].model_copy(deep=True)
+            result = self._read_web_bootstrap()
+            if revision == self._catalog_revision():
+                self._bootstrap_cache = (revision, result.model_copy(deep=True))
+            return result
+
+    def _read_web_bootstrap(self) -> WebBootstrap:
         with self.connect() as connection:
             connection.execute("BEGIN")
             first = {}
@@ -976,17 +1002,18 @@ class FlightReader(SQLiteConnection):
                     "invalid_local_dates", "Departure date is outside the supported range."
                 ) from error
 
-        def inbound_count(start, end):
+        def inbound_count(start, end, *, first_only=False):
             lower, upper = utc_us(start), utc_us(end)
             index = bisect_left(arrivals, (lower, -1))
             count = 0
-            for earliest, latest in arrivals[index:]:
-                if earliest > upper:
-                    break
+            for offset in range(index, bisect_left(arrivals, (upper + 1, -1))):
+                _, latest = arrivals[offset]
                 count += latest <= upper
+                if first_only and count:
+                    return count
             return count
 
-        dates = [day for day in sorted(outbound) if inbound_count(*bounds(day))]
+        dates = [day for day in sorted(outbound) if inbound_count(*bounds(day), first_only=True)]
         selected = departure_date if departure_date in dates else next(iter(dates), departure_date)
         last = (
             departure_last_date

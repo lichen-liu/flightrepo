@@ -20,6 +20,7 @@ from core.routing.models import (
     TimeBasis,
     utc_instant,
 )
+from server.capacity import ReadCapacity
 from server.public import (
     PublicCatalog,
     PublicFlight,
@@ -32,7 +33,7 @@ from server.public import (
     resolve_request,
     to_public,
 )
-from server.reader import FlightReader
+from server.reader import FlightReader, ReadQueryTimeout
 from server.web_assets import WebAssets
 from server.web_models import (
     AirportCoverage,
@@ -50,6 +51,7 @@ app = FastAPI(
     description="Commercial flight facts and route exploration; no fares or inventory.",
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
+app.add_middleware(ReadCapacity)
 WEB_ROOT = Path(__file__).parent / "web"
 web_assets = WebAssets(WEB_ROOT)
 app.mount("/assets", web_assets, name="web-assets")
@@ -89,6 +91,20 @@ async def storage_error(request: Request, error: sqlite3.Error):
             "detail": {
                 "code": "storage_unavailable",
                 "message": "Flight data is unavailable. Initialize or check the local database, then retry.",
+            }
+        },
+    )
+
+
+@app.exception_handler(ReadQueryTimeout)
+async def read_timeout(request: Request, error: ReadQueryTimeout):
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "1"},
+        content={
+            "detail": {
+                "code": "query_timeout",
+                "message": "This query took too long. Try a smaller date range.",
             }
         },
     )

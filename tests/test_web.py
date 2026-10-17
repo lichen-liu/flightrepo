@@ -202,6 +202,45 @@ def test_catalog_summary_matches_full_catalog_without_repeating_airports(client)
     assert summary["airports"] == [] and not summary["airports_truncated"]
 
 
+def test_bootstrap_shares_one_read_for_concurrent_calls_and_returns_independent_objects(
+    demo, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    reader = demo[1]
+    read, calls = reader._read_web_bootstrap, []
+
+    def counted():
+        calls.append(1)
+        return read()
+
+    monkeypatch.setattr(reader, "_read_web_bootstrap", counted)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: reader.web_bootstrap(), range(8)))
+    assert len(calls) == 1
+    results[0].airports.clear()
+    assert reader.web_bootstrap().airports and results[1].airports
+
+
+def test_bootstrap_invalidates_after_wal_commit_and_database_replacement(demo, tmp_path):
+    reader = demo[1]
+    reader.web_bootstrap()
+    with demo[0].connect() as writer:
+        writer.execute("UPDATE airports SET name='Updated Toronto' WHERE iata='YYZ'")
+        writer.commit()
+        refreshed = reader.web_bootstrap()
+        assert (
+            next(airport for airport in refreshed.airports if airport.iata == "YYZ").name
+            == "Updated Toronto"
+        )
+    from ingestion.updater import FlightUpdater
+
+    replacement = FlightUpdater(tmp_path / "replacement.db")
+    replacement.initialize()
+    replacement.path.replace(reader.path)
+    assert reader.web_bootstrap().airports == []
+
+
 @pytest.mark.parametrize("include_airports", [True, False])
 def test_catalog_reuses_unchanged_database_and_returns_independent_objects(
     demo, monkeypatch, include_airports
@@ -1203,7 +1242,7 @@ def test_readiness_checks_storage_without_creating_it(tmp_path):
 def test_ready_can_be_empty(client, demo):
     demo[0].reset()
     ready = client.get("/health/ready").json()
-    assert ready["status"] == "ready" and ready["flight_count"] == 0
+    assert ready["status"] == "ready"
     assert client.get("/v1/catalog").json()["airports"] == []
 
 
@@ -1268,15 +1307,40 @@ def test_readiness_does_not_build_catalog_or_quality_statistics(client, demo, mo
         raise AssertionError("Readiness must not build the full web catalog")
 
     monkeypatch.setattr(FlightReader, "web_catalog", forbidden)
+    monkeypatch.setattr(FlightReader, "_default_basis", forbidden)
     result = client.get("/health/ready")
     assert result.status_code == 200
-    assert result.json()["flight_count"] == len(demo[2]["flights"])
+    assert result.json() == {
+        "status": "ready",
+        "schema_contract": "flight-legs",
+        "schema_version": 1,
+    }
 
 
 def test_readiness_rejects_wrong_schema_contract(client, demo):
     with demo[0].connect() as c:
         c.execute("UPDATE schema_metadata SET version=999")
     assert client.get("/health/ready").status_code == 503
+
+
+def test_public_search_and_rebuild_skip_unused_replay_graph_hashes(client, demo, monkeypatch):
+    from core.routing.projection import ProjectedSnapshot
+
+    def forbidden(_):
+        raise AssertionError("Public responses must not hash the entire routing graph")
+
+    monkeypatch.setattr(ProjectedSnapshot, "snapshot_id", property(forbidden))
+    reader = FlightReader(demo[1].path, serving_only=True)
+    app.dependency_overrides[get_store] = lambda: reader
+    search = client.post("/v1/itineraries/search/local", json=request(trace=True))
+    assert search.status_code == 200, search.text
+    assert search.json()["items"]
+    rebuilt = client.post("/v1/plans/rebuild", json=demo[2]["request"] | {"trace": True})
+    assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["complete"]
+    # Internal callers retain the normal replay behavior by default.
+    with pytest.raises(AssertionError, match="Public responses"):
+        demo[1].search_local(LocalRouteSearchRequest.model_validate(request()))
 
 
 PUBLIC_PRIVATE_KEYS = {

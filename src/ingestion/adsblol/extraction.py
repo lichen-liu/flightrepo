@@ -14,8 +14,8 @@ from core.database_roles import ingestion_target
 from core.disk_quota import database_bytes, file_bytes, policy
 from core.file_lock import file_mutex
 from core.models import FlightRecord
+from core.storage import BASE_SCHEMA, store_flight, utc_us
 from core.storage import SCHEMA as SERVING_SCHEMA
-from core.storage import store_flight, utc_us
 from ingestion.adsblol.archive import (
     MAX_BUDGET_BYTES,
     archive_traces,
@@ -64,11 +64,8 @@ CREATE TABLE IF NOT EXISTS extraction_sources (
 );
 """
 
-SCHEMA = (
-    IDENTITY_SCHEMA
-    + SERVING_SCHEMA
-    + STORE_SCHEMA
-    + SOURCE_SCHEMA
+EXTRACTION_SCHEMA = (
+    SOURCE_SCHEMA
     + """
 CREATE VIEW IF NOT EXISTS itinerary_legs AS
 SELECT provider_id AS key, substr(departure_observed_lower,1,10) AS departure_date,
@@ -107,6 +104,9 @@ CREATE TABLE IF NOT EXISTS extraction_boundaries (
 );
 """
 )
+
+SCHEMA = IDENTITY_SCHEMA + SERVING_SCHEMA + STORE_SCHEMA + EXTRACTION_SCHEMA
+STAGING_SCHEMA = IDENTITY_SCHEMA + BASE_SCHEMA + STORE_SCHEMA + EXTRACTION_SCHEMA
 
 
 def record_sources(connection):
@@ -666,7 +666,7 @@ def _extract_day(
                 (canonical(inputs), batch_id),
             )
         staged.execute("PRAGMA temp_store=MEMORY")
-        staged.executescript(SCHEMA)
+        staged.executescript(STAGING_SCHEMA)
         with staged:
             record_sources(staged)
             affected, current_tails = scan_day(

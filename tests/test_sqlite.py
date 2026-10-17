@@ -1,10 +1,30 @@
 import subprocess
 import sys
 
+import pytest
 from test_engine import flight
 
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
+
+
+@pytest.mark.parametrize("basis", ["scheduled", "actual", "observed"])
+def test_arrival_windows_use_destination_index_on_existing_initialized_database(tmp_path, basis):
+    writer = FlightUpdater(tmp_path / "flights.db")
+    writer.initialize()
+    # Reproduce a database initialized before the additive index upgrade.
+    with writer.connect() as connection:
+        for name in ("scheduled", "actual", "observed"):
+            connection.execute(f"DROP INDEX flight_legs_{name}_destination")
+    writer.initialize()
+    with FlightReader(writer.path).connect() as connection:
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT arrival_lower_us,arrival_upper_us FROM searchable_legs "
+            "WHERE destination_iata=? AND time_basis=? AND arrival_lower_us>=?",
+            ("YYZ", basis, 0),
+        ).fetchall()
+        assert any(f"flight_legs_{basis}_destination" in row[3] for row in plan)
+        assert not connection.execute("PRAGMA foreign_key_check").fetchall()
 
 
 def test_wal_reader_snapshot_during_separate_process_write(tmp_path):
