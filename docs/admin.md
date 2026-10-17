@@ -190,7 +190,7 @@ preserving producer profiles, source notices and quota. `maintenance reset --yes
 also clears configuration and resets quota to 20 GiB. Both reject active jobs and
 leave serving untouched. Inspecting/querying never opens a writable connection.
 Producer `adopt` and `audit --apply` also remain outside admin; audit journal
-tables are available through SELECT inspection. See [bulk review](ingestion-review.md).
+tables are available through SELECT inspection. See [bulk review](ingestion.md#audit-review-and-publication).
 
 Manual edits/imports, approvals, creation, admission-policy and quota updates are
 rejected for ingestion stores. SQL inspection remains SELECT-only.
@@ -281,7 +281,9 @@ Duplicate entry points have been removed. Update existing scripts as follows:
 
 Unlike the former dated `flights` command, the unified browser includes cancelled
 flights by default. Use `--status scheduled` when you want only scheduled records.
-HTTP API contracts and the website's routing engine remain unchanged.
+The local admin contract retains full provenance. Public HTTP responses use the
+[separate public contract](database-schema.md#public-api-boundary), including opaque
+flight IDs; the website and backend must be released together.
 
 ## Shared serving schema
 

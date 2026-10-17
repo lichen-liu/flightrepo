@@ -29,7 +29,7 @@ To host the installed preview at **fly.boboji.fyi**, follow [installation](insta
 | Explore | Linked route list, globe/flat map, leg details, local clocks and a schedule cursor |
 | Edit | Keep a selected prefix, type the next airport, choose a later flight, rebuild subsequent legs, show dead ends and undo |
 | Airport changes | Opt-in, same-city changes with an explicit directed allowance in SQLite |
-| Inspect | Coverage/refresh evidence, bounded search diagnostics, exact exports and offline routing replay |
+| Inspect | Coverage and accuracy summaries, journey exports; full diagnostics/replay through local admin |
 | Manage data | Serving admin, separate producer CLI/API, explicit publication and guarded reset |
 
 Search defaults to **Any number** of stops. UTC/local search and connection-edit
@@ -54,7 +54,7 @@ Boundary tests enforce package and database roles.
 
 The [ingestion pipeline reference](docs/ingestion.md) covers sources/licences,
 one-day extraction and measurements. Both databases use the same typed flight
-model, including aircraft type, while [publication](docs/database-schema.md#publication)
+model, including aircraft type, while [publication](docs/database-schema.md#initialization-admin-and-publication)
 keeps held candidates, reference documents and pipeline state out of serving.
 The [producer workflow](docs/ingestion.md#interactive-jobs-and-resume) supports
 noncontiguous, overlapping jobs. Completed days skip downloads and stable source
@@ -71,7 +71,7 @@ python -m admin maintenance init
 uvicorn server.api:app --reload --host 127.0.0.1 --port 8001
 ```
 
-The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the OpenAPI schema at `/openapi.json`. The API exposes queries and calculations; data changes go through the internal client. Use an absolute `FLIGHT_DATABASE_PATH` when running outside an editable checkout.
+The app is at `http://127.0.0.1:8001/`, interactive API docs at `/docs`, and the OpenAPI schema at `/openapi.json`. The API exposes queries and calculations; data changes go through the internal client. Public contracts use opaque flight IDs and exclude source/audit provenance; [the boundary](docs/database-schema.md#public-api-boundary) covers continuation requests and exports. Data credits are available at `/data-sources`. Use an absolute `FLIGHT_DATABASE_PATH` when running outside an editable checkout.
 
 Start the shell with `python -m admin` or `flyji`. Commands also work directly:
 

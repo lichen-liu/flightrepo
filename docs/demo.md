@@ -24,7 +24,7 @@ To steer a selected connection, choose **Change connection**, type `AMS` in **Ne
 3. Scrub **Schedule time**. The map position illustrates scheduled flight progress; the schedule shows both flying and connection time. Switch **Leg times** between airport local and UTC.
 4. Clear the optional via field and search again before this airport-change example. At LHR, choose **Change connection**. Select **Any time in the search window**, allow an airport change, then **Find next flights**. Dead-end flights remain visible with an explanation.
 5. Apply the **LGW → AMS** flight departing **19 October, 03:00 GMT+1**. The first flight stays selected and the final AMS → CDG leg moves to 19 October. LHR → LGW is shown as a ground change with a demo allowance. Scrubbing that interval shows no invented traveler location.
-6. Use **Undo edit** to restore the exact previous flights. Try a not-before date, avoided airport or departure date range. Export JSON to inspect the query, selected records and snapshot evidence; copy the search link to rerun its constraints.
+6. Use **Undo edit** to restore the exact previous flights. Try a not-before date, avoided airport or departure date range. Export JSON to inspect the query, public flight records and licence-notice link; copy the search link to rerun its constraints.
 
 On a phone, **Options**, **Journey** and **Map** switch between tasks. Camera buttons provide an alternative to dragging and scrolling. Flight details and connection editing remain available if the map cannot load.
 

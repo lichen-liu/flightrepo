@@ -1,156 +1,30 @@
 # Ingestion pipeline
 
-Process one archive day at a time, save compact observed itinerary candidates
-into a private ingestion SQLite file, then delete verified raw inputs. Explicit
-publication copies eligible flight facts and airport metadata into serving. There is no itinerary catalogue, serving downloader or flight chunk cache.
-ADSB.lol supplies historical observations, not future airline schedules.
+Collect compact historical itinerary candidates in **private ingestion SQLite**,
+audit them, then explicitly publish flight facts into **serving SQLite**. Process
+one raw day at a time; retain aircraft types, airport/operator metadata and time
+bounds, not aircraft traces. There is no itinerary download catalogue or serving
+fetch-on-demand cache. Future schedules and Flight.info/Flightradar24 timing
+imports are not enabled.
+
+See [source research](flight-data-sources.md) for evaluated alternatives and measured
+results, [schema/API contracts](database-schema.md) for data semantics, and
+[admin](admin.md) for local inspection and serving edits.
 
 ## Sources and licences
 
-For researched alternatives and measured free bulk access, see the
-[flight data source reference](flight-data-sources.md). It distinguishes installed
-pipelines from proposed reference/schedule adapters.
-
-| Source | Retained information | Data licence |
+| Source | Purpose | Licence |
 | --- | --- | --- |
-| [ADSB.lol historical releases](https://www.adsb.lol/docs/open-data/historical/), including [2023](https://github.com/adsblol/globe_history_2023/releases) | Airport pair, callsign, ICAO aircraft type and inferred time bounds | [ODbL 1.0](https://github.com/adsblol/globe_history_2023/blob/main/LICENSE-ODbL.txt) |
-| [OurAirports](https://ourairports.com/data/) [airport CSV](https://davidmegginson.github.io/ourairports-data/airports.csv) | IATA/ICAO, names, municipality/country/region, coordinates and extraction elevation | Public domain |
-| [VRS standing data](https://github.com/vradarserver/standing-data), [ADSB.lol mirror](https://github.com/adsblol/vrs-standing-data) | Private [routes CSV](https://vrs-standing-data.adsb.lol/routes.csv) and [airport mapping CSV](https://vrs-standing-data.adsb.lol/airports.csv); compact per-leg audit result published | CC0-1.0 |
-| [VRS airline/operator CSV](https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv) | Shared carrier names and ICAO/IATA references; original callsign preserved | CC0-1.0 |
+| [ADSB.lol historical releases](https://www.adsb.lol/docs/open-data/historical/) | Daily observations → itinerary bounds, callsign and observed ICAO aircraft type | [ODbL 1.0](https://github.com/adsblol/globe_history_2023/blob/main/LICENSE-ODbL.txt) |
+| [OurAirports CSV](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport identity, names, geography, coordinates and extraction elevation | [Public domain](https://ourairports.com/data/) |
+| [VRS routes](https://vrs-standing-data.adsb.lol/routes.csv) and [airport mappings](https://vrs-standing-data.adsb.lol/airports.csv) | Undated directed route plausibility | [CC0-1.0](https://github.com/vradarserver/standing-data/blob/main/LICENSE) |
+| [VRS airlines CSV](https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv) | ICAO operator names and IATA references | CC0-1.0 |
 
-Treat extracted ADSB records as a derivative database. Retain ADSB.lol attribution
-and licence links; distribution must follow ODbL notice/share-alike and database
-access conditions. Source notices are stored once in `data_sources` and shown by
-the frontend. Code has its own licence. CSV/AeroDataBox imports retain their feed
-or account's licence; these paths can supply schedules without turning observed
-ADSB times into schedules.
-
-## Raw inputs
-
-An **archive manifest** lists preferred daily raw archive parts: UTC date, URL,
-filename, byte length and optional SHA-256. It is an ingestion input, not a
-searchable itinerary catalogue. Keep generated manifests under ignored `var/`;
-there is no checked-in annual inventory. `adsblol prepare` in the producer CLI
-builds it from preferred-release URLs and GitHub release metadata. Adjacent
-year repositories can host year-end days. Download one preferred copy, not replicas.
-
-Tar members `traces/xx/trace_full_<icao>.json` contain gzip-compressed JSON:
-
-```json
-{
-  "icao": "a5ea5c", "t": "A320", "dbFlags": 0, "timestamp": 1688169600,
-  "trace": [[0, 40, -70, "ground", 0, 0, 0, 0, {"flight": "UAL123"}]]
-}
-```
-
-In the [readsb format](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons),
-`timestamp` is Unix seconds and each row starts with its time offset, latitude,
-longitude and altitude/ground marker. Row flag `1` marks a newly accepted position after a reception gap;
-row `[8].flight` supplies the callsign. Top-level `t` is the aircraft type;
-`dbFlags & 1` marks military metadata. Callsigns are not verified marketing numbers.
-
-The [2023 readsb implementation](https://github.com/wiedehopf/readsb/blob/54c0272f584f7841b9befb8c10690d81aa01158c/track.c#L1168)
-sets the flag before replacing the reliable coordinates with the newly decoded
-position. It describes the preceding reception interval, not unusable coordinates.
-
-## Daily extraction
-
-```text
-manifest → download/verify one day → stream aircraft members → filter/reconstruct
-         → disposable staging → atomic ingestion-database commit → delete raw day
-```
-
-- Resume partial downloads and verify lengths/checksums. Stream tar members;
-  do not extract arbitrary archive paths or retain position files.
-- Exclude military metadata and explicitly non-fixed-wing/ground emitter
-  categories. There are no aircraft-type or callsign whitelists. Missing type and
-  callsign remain unknown; the feed does not reliably certify commercial service.
-- Use all eligible IATA airports, including those without scheduled service.
-  Match the nearest airport within 25 km; reject near ties within 1 km.
-- Prefer observed ground endpoints. When ground data is absent, allow low-altitude
-  airport-proximity estimates (up to 3,500 ft above airport elevation), with a
-  confirmed climb for an origin, a descending destination observation, and a
-  30-minute estimated event window. When track is available, airborne matching
-  rejects airports more than 45 degrees off the approach/departure heading
-  (outside 3 km, where airport-center/runway offsets matter).
-  A later climb/exit from the airport area cancels an arrival hint. Such records
-  have separate evidence labels and can appear in search without manual approval
-  under the approved labeled admission policy. Route options and leg
-  details explicitly identify estimated airports and whether they were manually verified.
-  Ground candidates with sample gaps over 30 minutes carry a review recommendation:
-  hidden intermediate stops can otherwise resemble one flight. Shorter reception
-  gaps and changing callsigns no longer require review on their own. Keep the
-  dominant callsign and log variations; source leg markers still split movements.
-  Candidates whose airport distance requires more than 1,500 km/h even across
-  their widest retained time window also require review (`implausible_airport_timing`).
-  This is a generous best-effort plausibility bound, independent of aircraft type;
-  it retains the record and does not certify slower candidates as correct.
-  These checks retain candidates rather than rejecting them; the six-hour parsing
-  limit is independent of the serving review gate.
-- Allow internal observation gaps up to six hours; terminal brackets up to 30
-  minutes; require 60 seconds between first and last airborne observations.
-  Source new-leg markers separate movements. Reception-gap flags do not invalidate
-  newly received positions. Skip missing/invalid samples without erasing valid
-  evidence or allowing skipped rows to bridge gaps.
-- Retain the most frequent airborne callsign, if present, without requiring a
-  known operator or rejecting variations. Log missing metadata and variations.
-- Save source identity, airport pair, available callsign/type, four time windows
-  and evidence provenance. Compact overnight summaries connect adjacent-day
-  backfills; raw positions/speeds/tracks are discarded.
-- Commit legs, boundaries, successful receipt and batch diagnostics together.
-  Ingestion readers see completed days throughout parsing. Serving changes only on publication. Failed days apply zero legs
-  and keep raw inputs for retry; successful days remove their verified inputs.
-
-The common [typed schema](database-schema.md) preserves flight evidence across
-publication and powers serving calendar, routing, lookup, export and admin. Source keys anchor an aircraft's final airborne arrival
-observation, so backfilling departure evidence refines the same record rather than
-creating another flight. More complete context replaces an earlier estimate;
-weaker reconstructions cannot overwrite it. Updated/duplicate counts are separate.
-Manual edits, explicit review approvals
-and deletion tombstones survive passive reingestion. Inferred event windows are
-not airline schedules or certified actual times. Missing commercial flight
-numbers and timezones stay unknown. Removing whitelists also admits private
-fixed-wing movements; commercial-only coverage cannot be established from these
-fields alone.
-
-### Default inference limits
-
-| Check | Requirement |
-| --- | --- |
-| Identity/military | Six lowercase hexadecimal ICAO characters; exclude `dbFlags & 1` |
-| Type/callsign | Optional metadata, no whitelists; retain a dominant callsign if it varies |
-| Airports | IATA-coded, neither closed, heliport nor seaplane base; scheduled service not required |
-| Matching | Nearest airport within 25 km; reject alternatives within 1 km of its distance |
-| Airborne endpoint fallback | Within 3,500 ft of airport elevation; origin needs a 100-ft observed climb or 300 ft/min upward rate; destination descending/nonascending; available heading within 45 degrees beyond 3 km; estimated window 30 minutes |
-| Ground endpoints | Preferred, but no longer required at both ends |
-| Continuity | Maximum six-hour gap between usable samples, including overnight joins |
-| Search review | All four known uncertainty categories are searchable with unified labels; unknown reasons fail closed. VRS matches change confidence, not original facts or human approval |
-| Terminal bounds/duration | Maximum 30-minute endpoint bracket; minimum 60-second airborne span |
-| Bad samples | Skip without advancing evidence; report the reason |
-| Reception-gap flag | Keep the newly received position; log flag `1` rather than discarding it |
-| Emitter category | Explicit `A7`, `B1`, `B2`, `B3`, `B4`, `B6`, `B7`, `C1`, `C2`, `C3` exclude the aircraft-day, including metadata on reception-gap-marked positions |
-| Day/year | Current UTC-day samples; optional departure-year restriction requires both departure bounds within that year |
-
-Optional `--policy FILE` contains fields from
-[ExtractionPolicy](../src/ingestion/adsblol/policy.py), for example
-`{"max_gap_seconds":21600,"airport_radius_km":25}`. It cannot contain aircraft
-or callsign lists. `{"allow_airborne_endpoints":false}` requires ground evidence
-at both ends without adding any aircraft/operator whitelist. Defaults need no
-configuration file. Policy and algorithm
-`observed-itinerary-v5` are recorded in batch/configuration provenance; changed
-rules require a fresh output database so old receipts cannot silently skip work.
-`review_gap_seconds` adjusts the 1,800-second review threshold independently of
-the six-hour parsing limit. The source identity namespace remains stable across
-algorithm versions, so changing quality rules does not invent new flight IDs.
-Malformed/unordered archive records, checksum failures and quota violations fail
-an entire day without applying partial flight facts. Endpoint estimates still
-need empirical validation; higher retained counts do not prove flight coverage.
-Admin `flights --needs-review` inspects records recommended for review, including
-searchable uncertainty. Use [cohort review](itinerary-quality.md) for grouped evidence. Producer APIs
-may record explicit validation decisions; admin cannot approve or edit private
-candidates. Serving admin can still approve/edit published records. Automatic
-estimate admission never sets `itinerary_reviewed`. External route-reference
-documents do not approve or publish anything by themselves.
+Extracted ADSB records are treated as a derivative database. Preserve attribution,
+ODbL notices/share-alike and applicable database-access requirements. Public source
+credits appear on **Data sources & licences**, `/data-sources`; per-flight source
+and audit evidence stay on the backend. CSV/AeroDataBox adapters retain their
+feed/account-specific rights; account access is not a permanent-redistribution grant.
 
 ## Interactive jobs and resume
 
@@ -158,6 +32,8 @@ documents do not approve or publish anything by themselves.
 python -m ingestion --db var/ingestion/ingestion.db init
 python -m ingestion --db var/ingestion/ingestion.db
 ```
+
+In the producer shell, after mounting RAM as described below:
 
 ```text
 ingest> sources
@@ -169,113 +45,45 @@ ingest> adsblol status
 ingest> publish --serving-db var/hosted/flights.db --start 2023-07-01 --end 2023-07-03
 ```
 
-Installed `flyji-ingest` is the same producer CLI. `FLIGHT_INGESTION_DATABASE_PATH`
-sets its default; `FLIGHT_DATABASE_PATH` selects serving/admin and is independent.
-Preparation saves metadata/input paths, not raw flight archives. Existing CSV
-snapshots and explicit policies remain immutable. `adsblol configure` accepts
-existing inputs. `--db` is the sole writable destination; a different
-`--output-db` is rejected. `--data-root` selects disposable working space.
+Installed `flyji-ingest` is the same producer. `FLIGHT_INGESTION_DATABASE_PATH`
+selects private ingestion; `FLIGHT_DATABASE_PATH` independently selects serving/admin.
+`--db` is the only pipeline output; a conflicting `--output-db` is rejected.
+`--data-root` holds working inputs/metadata; `prepare` discovers releases and pins
+manifest/airport inputs without downloading flight archives. `configure` accepts
+existing inputs. Generated manifests and data belong under ignored `var/`.
 
-Every UTC day commits independently. Separate, overlapping and out-of-order
-ranges remain supported. Guided jobs suggest three days; explicit ADSB ranges
-can span a year. CSV/API jobs retain the configured 31-day default limit.
-Ctrl-C preserves successful days. `--offline` restricts processing to verified
-local raw inputs. `--departure-year` filters UTC departures. For December 31,
-`--finish-year` adds January 1 arrival evidence, excluding next-year departures;
-prepare the extra day first. `--boundary-manifest` supplies existing adjacent inputs.
+Separate, overlapping and out-of-order ranges are supported. Successful UTC days
+commit independently and skip on retry; stable source keys deduplicate flights.
+Ctrl-C preserves completed work. Guided batches suggest three days; explicit ADSB
+ranges may span a year. `--offline` uses verified local raw inputs only.
+`--departure-year` restricts departures. `--finish-year` adds January 1 arrival
+context while excluding next-year departures; prepare that extra input first.
+`--boundary-manifest` supplies existing adjacent inputs.
 
-```sh
-python -m ingestion --db var/ingestion/ingestion.db csv run \
-  --csv var/licensed.csv --airports YYZ YUL --start 2023-07-01 --end 2023-07-03
-python -m admin --db var/ingestion/ingestion.db ingest adsblol status
-python -m admin --db var/ingestion/ingestion.db inspect query \
-  "SELECT kind,count(*) FROM ingestion_documents GROUP BY kind"
-python -m admin --db var/ingestion/ingestion.db maintenance clear-data --yes
-```
-
-Admin cannot launch producer jobs or edit/import/approve private facts, change
-private quota or modify SQL. `clear-data` clears candidates, airports/transfers,
-evidence, receipts and boundary/config state, retaining source profiles and quota.
-`maintenance reset --yes` also clears source profiles/notices and restores the
-20 GiB default quota. Both retain file/schema/store identity, increment generation,
-refuse an active producer/extractor and leave serving untouched. Re-running jobs
-starts fresh because completed-day receipts were cleared. Neither unlinks a live
-SQLite file. Cleared pages remain available for SQLite reuse.
-
-### Tool/API evidence
-
-Python producers use `IngestionStore` and `IngestionService`. The latter refuses
-a serving writer. `document FILE.json` (or `IngestionStore.document`) stores one
-compact normalized route, schedule, airport, aircraft or validation document:
-
-```json
-{"source":"licensed-provider","kind":"route","key":"AAA-BBB:2024-01",
- "source_url":"https://provider.example/authorized-feed","source_group":"provider-family",
- "license_expression":"account-specific","valid_from":"2024-01-01T00:00:00Z",
- "valid_to":"2024-02-01T00:00:00Z","payload":{"origin":"AAA","destination":"BBB"}}
-```
-
-A stable `(source,kind,key)` deduplicates evidence; content hashes and revisions
-track changed payloads. Fetched time and validity remain distinct; timestamps
-require offsets. Each normalized payload is limited to 64 KiB. Do not store raw
-trace archives here. Flight facts still use validated `FlightRecord` columns;
-JSON reference documents never masquerade as flown legs. References require an
-authorized provider/tool adapter: no FlightRoutes/FlightsFrom scraper, public
-reference API or automatic validation policy is implemented. The Python API is
-local/internal; no ingestion HTTP endpoint is exposed by the public backend.
-
-### Publication
-
-For legacy adoption, bulk audit/cohort review and preserving canonical admin state,
-see the [adoption and audit workflow](ingestion-review.md). Producer `adopt` and
-`audit` are separate from admin; audit writes require `--apply` and a private store.
-
-
-Publish an explicit inclusive UTC range, one atomic transaction per day. It
-copies non-held flight facts (including partial/cancelled records for lookup),
-the airport/transfer and operator catalogs, their snapshot provenance and relevant source attribution. Search keeps its
-usual complete-time/cancellation filters. Airport estimates retain visible
-labels and unverified status. Unknown-reason exclusions and unrelated reference documents
-stay private. Receipts, raw inputs, boundary state and profiles never copy.
-
-Publication is repeatable: source keys deduplicate, upstream corrections update,
-and previously published records that become held/missing retract. Serving admin
-edits and deletion tombstones win; explicit prior human approvals remain protected.
-A serving file has one publishing store identity to prevent conflicting owners.
-Clearing ingestion alone does not change serving; a later explicit publication
-reconciles only its requested dates. Never swap or rename an ingestion database
-into the serving path: the backend rejects its stored role.
+Other supported producers are `csv configure/run/status` for licensed CSV and
+`aerodatabox configure/run/status` for account-authorized airport collections.
+Their normal query limit is 31 days; AeroDataBox needs `FLIGHT_PROVIDER_API_KEY`.
+They do not turn ADSB observation windows into airline schedules.
 
 ## Storage placement and RAM-backed workspace
 
-The **temporary per-day extraction database belongs on RAM**, alongside its raw
-archive. The **private ingestion database is durable and belongs on disk**, as
-does serving; neither is a disposable temporary database.
+**Raw archives and disposable per-day SQLite staging use RAM. Private ingestion
+and serving databases stay on durable disk.**
 
-| Artifact | Placement | Lifetime |
-| --- | --- | --- |
-| Raw archives / partial downloads | Verified RAM filesystem | Current day; verified raw removed after successful commit |
-| `.day-stage-*/day.db` and its journal | Same verified RAM session | Disposable staging; removed on success/failure, recreated on retry |
-| Extraction SQL sort/temp tables | Process memory (`temp_store=MEMORY`) | Current extraction connection |
-| VRS/operator reference downloads | Bounded process-memory buffers | Parsed into SQLite, no temporary raw CSV copy |
-| Prepared manifest / pinned airport CSV | Durable working root on disk | Reproducible input metadata, reused across batches |
-| Private `ingestion.db`, serving DB and WAL/SHM | Durable disk, outside the RAM mount | Committed facts, evidence, boundaries, admin state and DB-only quota |
-| Receipts, logs, reports and atomic report/receipt update files | Durable disk | Observable progress/recovery evidence |
-| Adoption / serving replacement staging copies | Destination's durable disk | SQLite backup and atomic publication handoff; not disposable day staging |
-| Bulk audit correction-plan spool | OS temporary storage on disk | Maintenance scratch; never raw traces or the day extraction DB |
+| Artifact | Placement |
+| --- | --- |
+| Current archive, partial downloads, `.day-stage-*/day.db` and journal | Verified RAM mount; disposable |
+| Extraction SQL temporary sorts | Process memory (`temp_store=MEMORY`) |
+| VRS/operator CSV downloads | Bounded process-memory buffers; no temporary CSV file |
+| Private/serving DB, WAL/SHM, committed boundaries and evidence | Durable disk outside RAM |
+| Manifest, pinned airport CSV, receipts, logs and reports | Durable working directory |
+| Adoption/serving replacement copies | Destination disk for safe SQLite handoff |
+| Bulk audit correction-plan spool | OS temporary storage; not raw/day staging |
 
-The completed host run used a **4 GiB RAM disk**; no RAM mount is kept active
-after ingestion finishes. Mount it before a new run. Only one raw day is held;
-verified inputs are removed after commit. The largest selected 2023 daily copy is
-about 1.81 GiB, leaving room for the downloader's mandatory 1 GiB free-space reserve.
-Larger future daily selections fail the free-space check rather than overflow.
-RAM filesystems may be swapped by the OS; this reduces archive writes but cannot
-promise zero SSD writes. Do not disable system swap to run ingestion.
-
-Mount a bounded RAM filesystem before starting: macOS `hdiutil attach -nomount
-ram://8388608` creates a 4 GiB device. Format **only that newly returned empty
-RAM device** with `diskutil eraseVolume HFS+ FlightIngestRaw <returned-device>`.
-On Linux, use an explicitly size-limited `tmpfs` mount. Then bind a working root:
+On macOS, `hdiutil attach -nomount ram://8388608` creates a 4 GiB device. Format
+**only that newly returned empty RAM device** using
+`diskutil eraseVolume HFS+ FlightIngestRaw <returned-device>`. On Linux, mount a
+size-limited `tmpfs`. Then bind it:
 
 ```sh
 flyji-ingest --db var/ingestion/ingestion.db adsblol workspace \
@@ -283,138 +91,216 @@ flyji-ingest --db var/ingestion/ingestion.db adsblol workspace \
   --ram-mount /Volumes/FlightIngestRaw --wait
 ```
 
-Use that same `--data-root` for preparation and ingestion. This named producer
-command persists the workspace choice in the private source profile; it can
-initialize the private store but does not write flight facts. The underlying
-`python -m ingestion.adsblol.scratch` binding helper remains available for frozen
-legacy workers, without initializing/changing database rows.
+Use that working root for preparation and runs. Binding verifies macOS `ram://`
+or Linux `tmpfs`, takes daily/output locks and persists the profile. `--wait`
+lets an active day commit/clean up before binding; unfinished inputs are not moved.
+A durable DB under the RAM mount is rejected. Status reports mode and paths.
 
-Producer runs require verified RAM unless disk workspace was **explicitly** chosen
-with `adsblol workspace --disk-workspace` (or `--disk-workspace` on configure/run).
-That opt-in supports CI and hosts where RAM scratch is inappropriate; it is not
-a fallback after mount loss. `--ram-mount` is also accepted on configure/run.
-A RAM-bound root cannot switch to disk; use a separate root for an explicit disk
-workflow. Status reports raw/staging paths, storage mode and unavailable mount
-errors read-only. Binding rejects a durable database under the RAM mount.
-It verifies the mount is a macOS `ram://` device or Linux `tmpfs`, obtains the
-extractor's daily/output locks, and links `raw` into a dedicated RAM directory.
-`--wait` lets a running day finish, commit and clean its input before switching;
-unfinished archives/partial downloads are never moved or discarded. A small
-`raw.disk-before-ram` directory retains old selection/lock metadata only.
+RAM is required unless `--disk-workspace` is explicitly selected on workspace,
+configure or run. A RAM-bound root never falls back to disk: mount, device, link
+and session checks stop IO after mount loss. The durable `.raw-storage.json`
+configuration and volatile marker identify the session. A bound root cannot be
+changed to disk; choose another root for an explicit disk workflow.
 
-The durable `.raw-storage.json` and a volatile session marker identify the mount.
-New producers recheck mount/device/link/session during working-space IO and stop
-if it disappears; they never silently download to the old disk directory. The
-working-space budget includes RAM raw/partial files and day staging independently of DB quota.
-A frozen legacy worker can use this same link without changing
-its code; it retains its existing filesystem free-space guard. Keep its volume
-mounted until the entire job stops. Before resuming any frozen worker, explicitly
-check the recorded mount/session: it does not have the new per-IO mount checks.
+After reboot, remount RAM, bind a **fresh working root**, and resume the same
+range/DB. Committed receipts/boundaries survive; only unfinished inputs need
+redownloading. Do not reset successful work. Never detach RAM while a worker runs;
+release only its recorded device after workers stop and raw files are gone. The
+low-level `python -m ingestion.adsblol.scratch` helper remains for frozen legacy
+workers, whose mount must be checked manually before resuming.
 
-RAM inputs are disposable and vanish on reboot. To recover, create/remount RAM,
-bind a **fresh working root**, and resume the same date range/output database with
-that root. Completed days and cross-day boundaries are in SQLite and are reused;
-only an uncommitted day is downloaded again. Do not reset the database or remove
-its receipts. Never unmount while a worker is running. After all workers stop and
-raw archives are gone, detach the recorded RAM device to release its memory.
+A 4 GiB workspace accommodated the measured 1.81 GiB largest selected 2023 archive
+plus staging and the downloader's 1 GiB free-space reserve. Larger inputs can
+require more RAM. OS swapping means RAM scratch reduces archive writes without
+guaranteeing zero SSD writes.
 
-## Quota and observability
+## Raw shape and extraction
 
-`database_policy.quota_bytes` stores the live database limit (default 20 GiB).
-Producer `init --quota-bytes N` updates it on the selected ingestion file, including
-from another producer process. Admin can inspect it with `storage quota`. It counts SQLite and
-WAL/SHM only; raw/partial archives and daily staging are excluded. `--budget-gib`
-independently limits working space (default/max 20 GiB). Downloads preserve 1 GiB
-of free filesystem space. Provision database space **plus** one raw day and staging.
+The manifest records UTC day, preferred release URL, filename, byte length and
+optional SHA-256. Adjacent-year repositories can host year-end inputs; download
+one preferred copy rather than replicas. Tar members
+`traces/xx/trace_full_<icao>.json` contain gzip-compressed JSON:
 
-Ingestion rechecks quota during IO and before commit, including pending page
-growth. An oversized day rolls back. Lowering quota preserves completed facts,
-keeps reads available and pauses new ingestion when over limit. There is no LRU
-retirement: accepted legs are the sole retained copy. WAL/checkpointing or active
-readers can cause temporary physical overage, rechecked on later ingestion IO.
+```json
+{"icao":"a5ea5c","t":"A320","dbFlags":0,"timestamp":1688169600,
+ "trace":[[0,40,-70,"ground",0,0,0,0,{"flight":"UAL123"}]]}
+```
 
-JSON stderr events report `day_started`, provisional `day_progress`, `day_finished`
-and `day_failed`. Receipts and producer `adsblol status` report aircraft/type exclusions,
-invalid/ignored samples, reception-gap markers, gaps grouped by duration,
-per-record review reasons, endpoint/callsign/duration
-rejections, midnight deferrals and boundary joins. Failed batches retain diagnostics
-without advancing coverage. `--refresh-diagnostics` explicitly reprocesses selected
-days; retained inputs or redownloads are required. These counters describe aircraft,
-sample rows and movement fragments, **not missing-flight percentages**. Compare
-accepted legs against a trusted flight list before claiming completeness.
+The [readsb trace format](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons)
+uses Unix-second base time, row offset/latitude/longitude/altitude or ground marker,
+and row `[8].flight` callsign. `t` is the type; `dbFlags & 1` marks military metadata.
+Flag `1` describes the preceding reception gap, not an invalid newly received position.
 
-## Completed July–December 2023 extraction
+```text
+verify one raw day → stream members → reconstruct legs → disposable RAM staging
+→ atomic private DB commit (legs + boundaries + receipt + diagnostics) → delete raw
+```
 
-Measured on October 16, 2026: 185 input/context days transferred about **283.93 GiB**
-one day at a time; the largest preferred daily archive was **1.81 GiB**. The private
-store retained **5,539,724 legs**. Publication retained **5,539,206** July–December
-UTC departure records across **158,474 directed airport pairs** and **2,312 airports**;
-518 June 30 boundary records stayed private. All published records are searchable
-under the approved labeled policy, not certified complete or accurate schedules.
+Downloads resume and verify sizes/checksums. Tar paths are never extracted to disk.
+Failure applies zero legs and retains inputs for retry; successful days remove
+their raw copies. Readers can access completed days throughout processing.
 
-The populated shared catalog has **8,801 named/geolocated airports** and **5,965
-carrier/operator references**; 4,374,105 serving records resolve an undated ICAO
-operator name. **5,520,456 records** retain aircraft type codes. The serving SQLite
-family is about **3.85 GiB**, and private ingestion about **5.99 GiB**, each under its
-own persisted 20 GiB quota. Sizes include indexes/reference data and vary with WAL,
-checkpoints and later edits. Do not extrapolate fact-only byte estimates as full
-archive capacity. [Earlier pilots and storage estimates](research/ingestion-pilots.md)
-are historical comparisons, not the current admission policy.
+| Default check | Rule |
+| --- | --- |
+| Identity/military | Six hexadecimal ICAO characters; exclude military metadata |
+| Type/callsign | Optional; no whitelists; retain dominant airborne callsign and log variations |
+| Airport eligibility | IATA-coded; not closed, heliport or seaplane base; scheduled service not required |
+| Endpoint matching | Nearest within 25 km; reject alternatives within 1 km of its distance |
+| Ground endpoints | Preferred; not mandatory at both ends |
+| Airborne fallback | Within 3,500 ft above airport elevation; origin needs 100-ft climb or 300 ft/min upward rate; destination nonascending; 30-minute event window |
+| Heading | When available beyond 3 km, within 45 degrees of approach/departure; later climb/exit cancels arrival hint |
+| Continuity | At most six hours between usable samples, including overnight joins |
+| Duration/terminal bounds | At least 60 seconds airborne; endpoint brackets at most 30 minutes |
+| Invalid samples | Skip without advancing evidence or bridging gaps; log reason |
+| Emitter categories | Exclude `A7`, `B1`, `B2`, `B3`, `B4`, `B6`, `B7`, `C1`, `C2`, `C3` |
+| Review concerns | Airport estimate; gap over 30 minutes; retained callsign variation; timing requiring over 1,500 km/h even across the widest window |
 
-## Selected verification and timing scope
+Review concerns retain candidates. All four known categories are searchable with
+accuracy warnings; unknown reasons and unusable/cancelled/deleted facts remain
+excluded. This does not certify commercial service: relaxed rules also retain
+private fixed-wing movements. Aircraft-days are not individual flights.
 
-ADSB.lol remains the main source. Use the producer-only [VRS bulk reference and
-cohort report](vrs-verification.md) after private-store adoption. Import/report alone
-never clear holds or change flight facts. Explicit `vrs admit --apply` confirms
-directed pairs under the approved best-effort reference policy. All four known
-uncertainty categories now qualify for labeled search. Flight.info/Flightradar24 are requested
-historical timing references, but automatic extraction is not enabled because
-historical coverage and persistent-use access are unresolved. Keep scheduled,
-gate and airborne timing separate. Future scheduled-flight ingestion is deferred.
-See [the current source decision](flight-data-sources.md#current-selection-historical-operated-flights-only).
+`--policy FILE` accepts [ExtractionPolicy](../src/ingestion/adsblol/policy.py) fields,
+e.g. `{"max_gap_seconds":21600,"airport_radius_km":25}`; it cannot add whitelists.
+`allow_airborne_endpoints:false` requires ground endpoints. Algorithm
+`observed-itinerary-v5` and policy are recorded; changed extraction rules require
+a fresh output so old receipts cannot silently skip reprocessing. Raw positions,
+speed and tracks are discarded; improved inference later requires redownloading.
 
-The explicit [VRS admission command](vrs-verification.md#explicit-best-effort-route-admission)
-can now confirm directed airport pairs, replace the estimated-airport badge and
-update reference confidence labels. Source reasons and inferred timing are retained;
-import/report alone never applies this policy. Daily producer publication now
-audits the cached reference automatically, fetching it once when absent by default
-(`--vrs auto`); serving reads never download or audit.
-
-Current admission and smart review are specified in [itinerary quality](itinerary-quality.md).
-The linked historical pilot/held counts describe their recorded policies, not
-the current search admission rule.
-
-
-## Airport and operator names (shared catalog)
-
-Run the named producer stage on a fresh node; downloads are bounded to 64 MiB per
-CSV and held in memory. No manually prepared CSV or repo data artifact is required.
+## Reference catalogs and VRS audit
 
 ```sh
 flyji-ingest --db var/ingestion/ingestion.db references refresh
-flyji-ingest --db var/ingestion/ingestion.db references publish --serving-db var/hosted/flights.db
+flyji-ingest --db var/ingestion/ingestion.db vrs import
+flyji-ingest --db var/ingestion/ingestion.db vrs report \
+  --start 2023-07-01 --end 2023-12-31 --report var/ingestion/vrs-review.json
+flyji-ingest --db var/ingestion/ingestion.db vrs audit --apply \
+  --start 2023-07-01 --end 2023-12-31
 ```
 
-`refresh --airports-csv PATH --carriers-csv PATH` imports pinned local snapshots
-instead. URLs, content hashes, fetch timestamps, ignored-row diagnostics and license
-metadata make the operation reproducible/observable. Source URLs:
+A fresh node downloads published CSVs; no hand-prepared repo artifact is required.
+Each is capped at 64 MiB in memory. Pinned alternatives are
+`references refresh --airports-csv PATH --carriers-csv PATH` and
+`vrs import --routes-csv PATH --airports-csv PATH`. Receipts retain URLs, hashes,
+retrieval times, licences, accepted/ignored counts and Last-Modified when supplied.
+Whole-snapshot replacements are atomic; malformed input or failed refresh leaves
+the old snapshot usable. Reference rows count against the private DB quota.
 
-- OurAirports: <https://davidmegginson.github.io/ourairports-data/airports.csv>,
-  public domain; <https://ourairports.com/data/>.
-- VRS carriers: <https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv>,
-  CC0-1.0; <https://github.com/vradarserver/standing-data/tree/main/airlines/schema-01>.
+VRS normalizes exact callsigns by trimming/uppercasing and uses explicit airport
+mappings. A–B–C supports directed A–B and B–C, never nonstop A–C. Outcomes are exact,
+adjacent, different, incomplete or missing. Matches affect confidence, not original
+endpoints/times/types, historical validity or human approval. Changed identities
+invalidate old matches. Missing/disagreeing current routes cannot disprove an old
+flight. `import`/`report` do not change facts; `audit --apply` is explicit (`admit`
+is an alias). No fuzzy matching, scraper or per-flight external lookup is used.
 
-ADSB extraction imports its prepared airport snapshot before processing days.
-The producer `publish` command obtains the carrier reference once if absent;
-subsequent daily publications reuse/publish normalized reference tables.
-Use `references refresh` explicitly for later reference updates. The separate
-`references publish` changes only dimensions/provenance, so an existing archive
-needs no raw re-download, flight extraction or full flight republishing.
+Publication audits each day with `--vrs auto`: reuse a pinned snapshot or fetch
+once if absent. `cached` forbids fetching, `refresh` explicitly replaces it, and
+`skip` preserves existing results. Fetch failure stops auto/refresh publication.
+Serving requests never download or audit. Public records show only general
+accuracy warnings; reference evidence stays inside backend/admin.
 
-Admin can inspect these tables with read-only SQL and search airports by IATA,
-ICAO, name or municipality. Private admin remains read/query/reset/clear only;
-reference writes are owned by producer tools. Serving airport import/export keeps
-all reference fields and manual metadata. Clear/reset removes catalog snapshots
-alongside data without unlinking a live SQLite family. Each database's persisted
-quota still covers only its own SQLite/WAL/SHM, excluding raw workspace.
-See [schema semantics](database-schema.md#shared-airport-and-operator-reference-catalog).
+ADSB preparation imports its pinned airport snapshot; publication obtains carrier
+metadata once if absent. For a reference-only backfill without raw reprocessing:
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db references publish \
+  --serving-db var/hosted/flights.db
+```
+
+Airport imports fill missing fields while preserving manual metadata. Carrier
+snapshots withdraw stale source-owned mappings. Neither changes flight revisions,
+manual decisions, timing or aircraft types. Timezone population is tracked in
+[#21](https://github.com/lichen-liu/flightrepo/issues/21).
+
+## Audit, review and publication
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db audit --report var/ingestion/audit-before.json
+flyji-ingest --db var/ingestion/ingestion.db audit --apply --report var/ingestion/audit-applied.json
+flyji-ingest --db var/ingestion/ingestion.db audit --report var/ingestion/audit-after.json
+flyji-ingest --db var/ingestion/ingestion.db review queue --start 2023-07-01 --end 2023-12-31
+flyji-ingest --db var/ingestion/ingestion.db review show \
+  --start 2023-07-01 --end 2023-07-31 --origin YYZ --destination SEA \
+  --reason observation_gap --samples 5 --report var/ingestion/review-case.json
+```
+
+Audit reports integrity/FKs, duplicate identities/signatures, coverage, type/metadata
+availability and ranked reason/airport-pair cohorts. Corrections only align supported
+derived timing/estimate flags; they never guess airports/times/types or merge flights.
+Human edits/approvals are protected. Before/after revisions and evidence are journaled
+atomically; quota rolls back failures. Investigate structural errors or skipped
+concurrent changes and rerun the audit after applying corrections.
+
+Review conflicts and large repeated cohorts using diverse samples. `review decide
+--case FILE --action acknowledge --note TEXT` acknowledges only that unchanged
+cohort; changed/new evidence reopens it. It does not approve flights or erase warnings.
+For a single record, `review show --provider PROVIDER --record-id ID` creates a case;
+`approve`, `reject` or `correct --replacement FILE` requires a note and current
+revision. Corrections require a validated complete `FlightRecord` with the same
+source identity; rejection preserves private evidence/tombstone. Bulk human approval
+is not supported. Selective raw reprocessing needs adjacent-day context, not a reset.
+
+Publish an inclusive UTC **departure** range explicitly, one atomic day at a time:
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db publish \
+  --serving-db var/hosted/flights-published.db \
+  --preserve-serving var/hosted/flights.db --start 2023-07-01 --end 2023-12-31
+```
+
+For normal incremental publication, use the existing serving target and omit
+`--preserve-serving`. Publication copies eligible facts, airport/transfers/operators
+and necessary provenance into backend serving storage. Partial/cancelled facts can
+remain available for lookup while routing filters apply. Source keys deduplicate;
+missing/newly excluded owned records retract. Serving edits, approvals and tombstones
+win. Profiles, receipts, boundaries, private reference tables and review journals
+never copy. One serving target has one owning publisher. Clearing ingestion alone
+does not change serving; later publication reconciles only requested dates.
+
+For a clean replacement, preserve canonical quota/manual routes/edits/approvals,
+tombstones, airports/transfers and configuration. Canonical administrative drift
+requires a new replacement. Stop canonical writers and recheck
+`ingestion.serving_controls.verify_serving_controls(canonical,replacement)` before
+cutover. Follow [deployment](../deployment/README.md) and SQLite stop/checkpoint/
+replacement procedures, retain rollback, and release compatible backend/frontend
+contracts together. Verify readiness, actual search, calendar and aircraft types.
+**Never copy or rename a private ingestion DB into serving.**
+
+`adopt` is only for a completed legacy unmarked v5 archive, not normal new jobs.
+It requires a new destination, free producer/extractor locks, completed receipts
+including context days, and verifies original-table fingerprints, integrity/FKs
+and quota through a consistent backup. Example options: `--from-db LEGACY.db
+--source-root ROOT --policy-db SERVING.db --profiles-db SERVING.db --start DATE
+--end DATE`. Keep the source/rollback; never reset an adopted destination on retry.
+
+## Quota, diagnostics and admin access
+
+`database_policy.quota_bytes` defaults to 20 GiB and covers each DB's own SQLite,
+WAL and SHM, excluding raw/day staging. Producer `init --quota-bytes N` changes
+private policy live; serving admin `storage quota` changes serving policy.
+`--budget-gib` separately bounds working space (default/max 20 GiB), with a 1 GiB
+filesystem reserve. Quota is rechecked during IO and before commit, including
+pending growth. Lowering below usage preserves facts/reads and pauses ingestion;
+there is no LRU deletion of the sole retained copy. Active readers/WAL can cause
+transient physical overage rechecked on later IO.
+
+JSON stderr events are `day_started`, `day_progress`, `day_finished`, `day_failed`.
+Durable receipts and `adsblol status` count exclusions, invalid samples, gap durations,
+endpoint/callsign/duration rejections, midnight deferrals, boundary joins, updates
+and duplicates. Failed batches keep diagnostics without advancing coverage.
+`--refresh-diagnostics` reprocesses selected inputs and needs raw/redownloads.
+Counters describe aircraft/samples/fragments, not missing-flight percentages.
+
+Private admin supports read/query/export and `maintenance clear-data --yes` or
+`maintenance reset --yes`, never producer launches, candidate edits/approvals or
+quota updates. Clear retains profiles/quota; reset also clears profiles/notices
+and restores 20 GiB. Both refuse active jobs, retain DB/schema identity, increment
+generation, clear receipts/evidence and leave serving untouched without unlinking
+a live SQLite family. Reads can use `inspect query` or `ingest adsblol status`.
+
+Python producers use `IngestionStore`/`IngestionService`. `document FILE.json`
+stores normalized evidence keyed by `(source,kind,key)`, with URL/licence, validity,
+content hash and revision. Payloads are limited to 64 KiB; no raw trace blobs.
+Documents never become flight facts without a validated adapter/publication policy.
+No public ingestion HTTP endpoint is exposed.

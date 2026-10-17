@@ -1,290 +1,212 @@
-# Ingestion and serving databases
+# Ingestion, serving and public API contracts
 
-**Implemented contract: `flight-legs`, schema version 1.** The canonical
-[SQLite DDL](../src/core/schema.sql) and [storage adapter](../src/core/storage.py)
-define the flight/airport contract in both stores. Pipeline state belongs only
-to the private [ingestion schema](../src/ingestion/schema.sql). Startup does not seed real databases.
-SQLite 3.38 or newer is required (STRICT tables and built-in JSON).
+**SQLite contract: `flight-legs`, version 1.** The authoritative
+[shared DDL](../src/core/schema.sql), [private ingestion DDL](../src/ingestion/schema.sql)
+and [storage adapter](../src/core/storage.py) define the implementation. SQLite
+3.38+ is required for STRICT tables and built-in JSON. Read-only startup does not
+initialize, migrate or seed real databases.
 
-## Start with the consumer
+## Store boundaries
 
-The ingestion database collects candidates and normalized reference evidence.
-The serving database holds explicitly published flight facts and airport metadata.
-They share a typed contract, so publication preserves aircraft type and time
-semantics without making observations look like schedules. Their stored roles
-prevent an ingestion file from being used by the backend or a manual writer.
-Admin can inspect either file, but only clear/reset ingestion, never manually edit it.
+Private ingestion collects candidates, reference evidence and pipeline state.
+Explicit publication copies flight facts and shared airport/operator dimensions
+into serving. The stored ingestion role prevents using a renamed private file as
+serving or opening it through manual serving writers.
 
-Store one leg per source identity. Build connecting journeys at query time.
-Keep aircraft type, airport pair, identifiers, time evidence, status and source
-provenance. Discard traces, positions and speeds. Missing information is NULL;
-never synthesize a flight number, schedule, airport timezone or city membership.
+Both stores use the same typed leg contract. Connecting journeys are computed at
+query time. Keep airport pair, identifiers, aircraft type, status, time semantics
+and provenance; discard raw tracks/positions/speeds. Missing facts are NULL, not
+guessed flight numbers, schedules, timezones or transfer-group membership.
 
-## Tables and retained state
-
-| Table | Purpose |
+| Table/view | Purpose |
 | --- | --- |
-| `flight_legs` | Shared, typed leg facts; source identity; aircraft type; separate time evidence; edit revision |
-| `flight_codeshares` | Zero or more source-reported marketing designators for a leg |
-| `airports` | IATA code and nullable descriptive/location/timezone metadata |
-| `airport_transfers` | Explicit, directed transfers between different airports |
-| `data_sources` | Provider codes, attribution and licence references |
-| `ingestion_batches` | Private input attempts/diagnostics; common FK structure exists in serving but publication leaves it empty |
-| `flight_tombstones` | Durable deletion intent across repeated imports/downloads |
-| `schema_metadata` | Versioned contract for startup checks |
-| `database_policy` | Persisted live database disk quota |
-| `ingestion_profiles` (private) | Configured source/input paths for repeatable producer jobs |
-| `ingestion_store_metadata` (private) | Role/version, immutable store identity and reset generation |
-| `ingestion_vrs_snapshot`, `ingestion_vrs_airports`, `ingestion_vrs_routes` (private) | Atomic CC0 reference receipt, explicit airport mappings and indexed callsign chains; no admission writes |
-| `ingestion_documents` (private) | Source/kind/key, validity, normalized JSON, content hash and revision |
-| `ingestion_adoptions` (private) | Verified legacy-copy fingerprints and inherited quota provenance |
-| `ingestion_audit_runs`, `ingestion_audit_changes` (private) | Scoped machine audit/correction receipts and per-record before/after evidence |
-| `publication_origin`, `publication_membership`, `publication_runs` (serving) | Publisher identity, owned source keys and per-day publication receipts |
-| `searchable_legs` (view) | Common departure/arrival intervals, filtered by explicit time basis |
+| `flight_legs` | Source identity, aircraft/airport/timing facts, evidence, revision and local edit state |
+| `flight_codeshares` | Ordered source-reported marketing designators |
+| `airports` | IATA identity and nullable names, ICAO, geography, coordinates, timezone and transfer group |
+| `carriers` | Normalized operator reference; unique ICAO, deliberately non-unique IATA |
+| `airport_transfers` | Explicit directed allowances between distinct airports |
+| `data_sources`, `reference_snapshots` | Attribution/licence and shared reference URL/hash/fetch/count provenance |
+| `flight_tombstones` | Deletion intent that survives passive reingestion |
+| `schema_metadata`, `database_policy` | Contract and persisted DB-family quota |
+| `flights` | Backend/admin compatibility projection of typed facts |
+| `searchable_legs` | Shared admission and selected departure/arrival intervals |
+| `ingestion_batches` | Input attempts/diagnostics; common FK structure exists in serving but publication leaves it empty |
+| `ingestion_store_metadata`, `ingestion_profiles` (private) | Store identity/reset generation and producer configuration |
+| `ingestion_documents` (private) | Normalized reference/review documents, validity, hash and revision |
+| `ingestion_vrs_snapshot`, `ingestion_vrs_airports`, `ingestion_vrs_routes` (private) | Atomic route snapshot, explicit mappings and indexed callsign chains |
+| `ingestion_adoptions`, `ingestion_audit_runs`, `ingestion_audit_changes` (private) | Verified handoff and correction receipts/journals |
+| `publication_origin`, `publication_membership`, `publication_runs` (serving) | Owning publisher, source keys and per-day reconciliation receipts |
 
-Extraction receipts, algorithm/config and overnight boundary summaries stay in
-ingestion. The `flights` view projects typed facts in both stores;
-`itinerary_legs` is an extractor-only compatibility view. Serving has no private
-profiles, reference documents, extraction receipts or boundary summaries.
-Boundary summaries contain compact airport/time evidence, not tracks. They remain
-after raw deletion to support disjoint backfills.
+Extraction receipts, policy/configuration and compact overnight boundaries remain
+private after raw deletion so adjacent and disjoint backfills can refine legs.
+`itinerary_legs` is an extractor-only compatibility view. Private documents,
+profiles, extraction receipts and boundaries never enter serving.
 
-## Identity, updates and truthfulness
+## Identity, updates and concurrency
 
-`UNIQUE(source_id, source_record_key)` makes overlapping imports idempotent.
-Preserve existing provider IDs and ADSB.lol's deterministic 32-character leg key.
-An integer internal ID keeps codeshare references small; the external API
-continues to use provider/key, so exports and saved references remain stable.
+`UNIQUE(source_id,source_record_key)` makes overlapping ingestion idempotent.
+ADSB.lol's deterministic leg key uses the aircraft's final airborne arrival
+observation; a departure backfill refines that record rather than making another
+flight. More complete evidence may replace an estimate; weaker input cannot erase
+stronger context. Identical inputs count as duplicates, not revisions.
 
-An identical reimport records a duplicate, without increasing the revision.
-A trustworthy upstream correction updates the same identity and increments its
-revision. An unexpected conflicting ADSB extraction identity fails its day's
-transaction and reports the conflict. `locally_modified_us` protects manual
-overrides from subsequent ingestion. Edits compare reviewed facts under an
-immediate transaction, and the stored revision tracks changes.
-Delete writes a tombstone in the same transaction as removing the leg. Only an
-explicit restore clears it. The shared flight view hides tombstoned identities.
+Local edits, explicit approvals and deletion tombstones take precedence over
+passive reingestion/publication. Do not deduplicate physical flights using only
+callsign, airport pair or date: repeated services, marketing codeshares and
+provider disagreements require separately validated matching. Suspected duplicate
+signatures are review hints, not automatic merges.
 
-Deduplication is guaranteed **within a source identity**. Callsign plus airport
-pair plus day is insufficient to merge different providers or repeated daily
-flights. Cross-provider matching requires a separately validated policy; until
-then report counts as source leg records, not unique physical flights.
+WAL permits concurrent readers and a short writer transaction. Download/parsing
+happen outside that transaction; one day's facts, airport stubs, boundaries, receipt
+and committed batch become visible atomically. Failures apply zero rows and retain
+diagnostics. Calculations use consistent read snapshots. Private readers see
+committed days; public readers see published days, independently of active ingestion.
 
-`flight_number`/`airline_iata` hold source-reported commercial identifiers.
-ADSB callsigns go in `callsign`; they do not populate either commercial field.
-`aircraft_type_code` is the observed/reported ICAO type designator, not a
-registration or seat configuration. An ADSB candidate has
-`evidence_kind = inferred_ground_brackets` or `inferred_airport_proximity`, and
-`status = unknown`. Proximity candidates use estimated event windows and inferred
-airport endpoints; neither evidence class certifies commercial service or an
-official landed status. Inference policy belongs in batch provenance, not a
-fabricated fact. `review_reasons` retains per-record uncertainty (airborne airport
-estimate, observation gap, implausible airport timing, legacy callsign variation).
-The approved labeled admission policy makes all four known uncertainty categories
-searchable. `blocked_for_search`/SQL admission remain separate from confidence-based
-`needs_review` and `quality.review_recommended`. Unknown future reasons fail closed;
-cancelled/deleted records and incomplete/invalid time evidence still cannot power
-routing/calendar. API, SQL and pure snapshot routing share the policy. See
-[unified confidence labels](itinerary-quality.md). Explicit human approval sets
-`itinerary_reviewed`, preserves reasons/conflict warnings and protects the record
-against passive reingestion. Private admin can inspect all candidates without
-changing them; confidence labels do not expose private reference tables or journals.
+Each DB owns its persisted quota (default 20 GiB) over SQLite/WAL/SHM, excluding raw
+and daily staging. Lowering below usage preserves reads/facts and pauses ingestion
+at later IO; no LRU erases the sole retained copy. Pending page growth is checked;
+WAL/readers may temporarily affect physical use. See [storage and recovery](ingestion.md#storage-placement-and-ram-backed-workspace).
 
-## Time model and routing
+## Time evidence and routing
 
-All instants use integer Unix microseconds in UTC, preserving current precision.
-SQLite checks chronological order; the application validates timezone names,
-airport/code normalization and the meaning of each provider's timestamps.
+All stored `*_us` timestamps are signed integer UTC microseconds. Precision is
+preserved through SQLite projections and JSON serialization.
 
-| Evidence | Stored values | Meaning |
-| --- | --- | --- |
-| Scheduled | Nullable departure/arrival pair | A provider's published schedule; can include future dates |
-| Actual | Nullable departure/arrival pair | Provider-reported events; event semantics must be documented by the adapter |
-| Observed | Four bounds: departure lower/upper, arrival lower/upper | Ground/air transitions or labelled proximity estimates; neither schedules nor gate times |
+| Basis | Fields/meaning |
+| --- | --- |
+| `scheduled` | Nullable departure/arrival pair; published schedule, not an actual event |
+| `actual` | Nullable reported pair; event kinds distinguish gate-out/takeoff and gate-in/landing, or unknown |
+| `observed` | Four ordered bounds: departure lower/upper and arrival lower/upper; observation-based estimates |
 
-Actual events also record `gate_out`/`takeoff` and `gate_in`/`landing`, or explicit
-`unknown` kinds. Routing must expose these semantics; a runway arrival cannot be
-silently treated as arrival at a passenger gate.
+Scheduled/actual partial facts remain available for lookup but require both ends
+for routing. Observed bounds must be complete and ordered. A leg may retain several
+bases; a calculation selects one without mixing schedules into missing actuals.
+The current ADSB archive powers historical **observed** mode, not future schedules.
 
-Partial schedule/actual data is retained for lookup but becomes searchable only
-when both endpoints exist. Observed bounds are either complete or absent.
-A leg can have multiple kinds of evidence. Queries select **one** basis
-(`scheduled`, `actual`, or `observed`); they never count all view rows as flights
-or silently fill missing actual times with schedule times. The API returns the
-selected intervals plus available evidence, callsign/flight number, aircraft
-type, provenance and quality. The frontend labels inferred times and coverage.
-The current ADSB dataset therefore powers historical **observed** mode only.
+For connection minimum `m`, require
+`next.departure_lower - previous.arrival_upper >= m`; for maximum `M`, require
+`next.departure_upper - previous.arrival_lower <= M`. Add explicit airport-transfer
+time. The full first departure interval must fit the departure window, and the
+final arrival upper bound must fit the horizon. Rank conservatively using latest
+arrival/maximum elapsed duration. A runway event cannot imply passenger gate
+availability; historical timing does not establish ticket or protected connections.
 
-For a minimum connection `m`, require
-`next.departure_lower - previous.arrival_upper >= m`. If maximum connection `M`
-is requested, also require
-`next.departure_upper - previous.arrival_lower <= M`. Apply airport-transfer
-time explicitly. Require the first departure interval to be wholly inside the
-requested window and the final arrival upper bound inside the horizon. Return
-duration bounds and use a documented conservative ranking (latest arrival for
-earliest-arrival ranking; maximum duration for shortest-elapsed ranking).
-Rebuild, replay and map responses use the same versioned interval contract.
-These are temporal possibilities; historical observations do not establish
-ticket availability or passenger connection feasibility.
+Calendar, routing and continuation use the same admission/time-basis rules. Local
+calendar days require both departure bounds on that date in the airport's IANA
+zone; UTC mode remains available without timezone metadata. Actual event kinds and
+time ranges remain public itinerary semantics, not source provenance.
 
-## Calendar, coverage and concurrent access
+## Confidence and search admission
 
-The calendar uses eligible `searchable_legs` for its selected basis and origin,
-including local overrides and deletion markers. A completed archive day with no
-accepted legs is not a selectable departure date. Airport-local dates require a
-known IANA timezone; otherwise explicitly offer UTC dates. For a departure
-interval crossing local midnight, report the ambiguous days in coverage without
-enabling an exact-day route option that has no guaranteed departures. A broader
-window spanning both days can still find the leg. Browsing may use interval
-overlap, labelled explicitly; the route calendar uses the strict search predicate.
-Compute day boundaries using IANA rules, including daylight-saving changes.
+Admission is separate from accuracy and human approval. The four known concerns
+are searchable: airport estimates, observation gaps, callsign variation and
+implausible timing. Unknown reasons fail closed; cancellation, tombstones and
+unusable time evidence still exclude records from routing/calendar.
 
-Private ingestion overview separates stored leg count, searchable count by basis, completed input
-days, excluded/rejected units, unresolved boundaries, missing metadata and last
-successful ingestion. Refresh time is distinct from flight date. Coverage is
-partial/unknown unless measured against a trusted reference; receipts alone do
-not establish completeness. A no-data response differs from a failed ingestion attempt.
+Internal levels are `standard`, `noted`, `uncertain`, `conflict`. Original concerns,
+evidence classes, source/reference identity and explicit review decisions remain
+backend facts. A positive VRS match can reduce an airport/gap concern but cannot
+verify historical operation, exact timing or continuity. Callsign/airport changes
+invalidate old matches. Different/missing undated associations do not disprove a
+past operation. Human approval never hides a genuine timing conflict.
 
-Use SQLite WAL and short read snapshots. Parsing/downloading takes place outside
-the write transaction; one day's leg upserts, airport stubs, boundary changes,
-receipt and committed batch state become visible atomically. Register the attempt
-first; persist failure diagnostics after rollback, with zero applied rows.
-Private readers keep accessing previously committed days during downloads and commits.
-Public readers see the latest published days, independent of ingestion progress.
-API responses use one consistent snapshot, not multiple unrelated connections.
-
-## Space and quota
-
-Typed columns replace per-flight JSON. Source names/licences are stored once;
-empty time fields cost only SQLite record-header space. Keep JSON for small
-variable diagnostics/configuration, not searchable leg payloads. Two partial
-indexes per time basis cover origin/time routing and global date windows; an
-observed-only dataset populates only two of those six indexes. The primary source
-identity index is needed for deduplication and lookup. They serve local queries;
-no downloadable itinerary catalogue is required.
-
-A compacted typed-fact size probe measured about 244 bytes/leg, including source
-identity and two observed-time indexes, versus 497 bytes/leg with per-leg JSON.
-This excludes receipts, boundary state, airports, diagnostics and WAL, so it is
-not a whole-database capacity claim. Scheduled/actual-rich records can be larger.
-
-The 20 GiB quota is stored in SQLite (`database_policy.quota_bytes`) and covers
-only the database and WAL/SHM. Raw daily inputs and staging have an independent
-`--budget-gib` working-space limit, even inside the same directory. Producer
-`init --quota-bytes N` changes private policy live; serving admin `storage quota`
-changes serving policy. Ingestion checks it before downloading,
-during parsing and before committing pending page growth. Reads remain available
-if policy is lowered below usage, and new ingestion pauses. Extracted legs,
-manual edits, tombstones, receipts and boundary state are protected: no LRU or
-background deletion can erase the sole copy. SQLite WAL/readers can cause a
-transient physical overage; later IO rechecks it. Noncontiguous ingestion remains
-supported without retaining annual raw archives or per-flight position files.
-
-## Initialization and serving
-
-Initialize ingestion using `python -m ingestion --db var/ingestion/ingestion.db init`.
-`FLIGHT_INGESTION_DATABASE_PATH` supplies its independent default. The producer
-CLI and Python API reject an existing serving database before fetching source
-records. `--data-root` is disposable working storage; `--db` selects the only
-pipeline output. A differing `--output-db` cannot redirect writes.
-
-Initialize serving with `python -m admin --db var/hosted/flights.db db --create`
-or let an explicit publication initialize a new serving target. `FLIGHT_DATABASE_PATH`
-continues to select serving/admin. The public backend and hosted deployment
-checks reject ingestion-role files, including renamed files. No ingestion HTTP
-write endpoint is exposed. Real serving never seeds demo data.
-
-Admin reads private stores using read-only SQLite connections: overview, flights,
-lookup, airports, exports, source status and bounded SELECT inspection. Record
-edits/imports, manual approvals, source job launches, schema/admission changes and
-quota updates are rejected. Clear/reset are explicit lifecycle exceptions and
-refuse held producer/extractor locks. They delete transactionally without
-unlinking a SQLite/WAL family; existing serving facts remain untouched.
-
-## Publication
-
-`python -m ingestion --db INGESTION.db publish --serving-db SERVING.db --start YYYY-MM-DD --end YYYY-MM-DD`
-is the only producer command that writes serving. Inclusive UTC days publish
-independently using an ingestion read snapshot and a short serving transaction.
-Both files remain available to readers. Quota failure rolls back the day's facts.
-SQLite/SHM/WAL usage is checked, excluding source scratch space.
-
-Publish admitted facts, retaining their confidence labels, source keys, available
-aircraft types and all reported times. Partial/cancelled facts remain useful to
-lookup/admin; normal routing/calendar eligibility still applies. Partition by the
-selected departure basis, falling back to available arrival evidence for partial
-records. Copy airport/transfer metadata and relevant source attribution, preserving
-existing serving metadata and valid transfers. Reference-only source documents,
-unknown-reason exclusions, profiles, receipts and boundary state never publish.
-
-Membership records allow a rerun to retract previously published facts that
-became excluded or disappeared, even if a correction moved their time outside the
-original day. Reconcile only requested dates. Stable provider keys deduplicate
-retries. Serving edits and deletion tombstones take precedence; publication does
-not resurrect deletions. Prior explicit human approvals remain protected.
-One serving file accepts one ingestion store identity, preventing competing
-publishers from deleting each other's records. Clearing/resetting ingestion
-increments generation without changing identity; clearing itself never changes
-serving. A later explicit publication can reconcile its affected days.
-
-The production ingestor already running in a frozen older runtime may finish
-without interruption. Its file is not a clean serving replacement under this
-architecture. Preserve it and its explicit human decisions; validate/import into
-a dedicated ingestion store before publishing a clean serving replacement.
-Never rename/copy the entire ingestion SQLite file over serving. Use the explicit, tested `adopt` handoff described in the
-[adoption/audit workflow](ingestion-review.md). No production adoption,
-publication or serving cutover occurs automatically.
-
-API routing still supports `scheduled`, `actual` and `observed` modes. Calendars
-use the same eligibility predicate; lookup/export retain incomplete facts. The
-frontend preserves inferred airport/time labels and aircraft type. Existing
-serving admin creation/edit/delete/approval and airport management remain intact.
-
-`tests/test_ingestion_store.py` exercises role guards, private read-only admin,
-clear/reset safety, evidence deduplication, publication/retraction, edit/delete
-protection and quota rollback. `tests/test_shared_flight_database.py` exercises
-extraction through publication to API/calendar/routing/rebuild/replay/export.
-
-VRS admission adds nullable `flight_legs.route_verification`: a typed JSON assertion
-binding a pinned reference hash to a callsign and directed airport pair, with
-positive, different, incomplete or missing outcomes and the mapped airport chain. It is
-separate from `itinerary_reviewed` and never removes original review reasons.
-Explicit writers upgrade old stores additively; read-only consumers do not migrate.
-A matching assertion changes confidence labels, not time evidence or human approval.
-All four known uncertainty categories now qualify for labeled search; unknown reasons
-remain blocking. See [VRS policy](vrs-verification.md#explicit-best-effort-route-admission).
-Review decisions/acknowledgements are private `ingestion_documents` of kind
-`validation`, source `review`; revision-bound fingerprints and before/after facts
-are journaled atomically. They never enter the serving database.
-
+Public summaries are only **Uncertain itinerary**, **Timing conflict** and
+**Approximate times**. Admin/producer retain detailed evidence and confidence-based
+review recommendations; review counts do not mean excluded from search. Cohort
+acknowledgement is not bulk approval. See [audit and review commands](ingestion.md#audit-review-and-publication).
 
 ## Shared airport and operator reference catalog
 
-The **main serving SQLite** owns `airports` and `carriers`; API requests need no
-CSV, private ingestion file or external lookup. Both dimensions also exist in the
-private store so producer imports can be validated before explicit publication.
-`reference_snapshots` stores the source URL, SHA-256, fetch time and accepted row
-count, with license/attribution in `data_sources`.
+Both stores own `airports`, `carriers` and snapshot provenance. Serving requests
+need neither private ingestion nor external CSV/API access. OurAirports imports
+names, ICAO, municipality, country/region and coordinates. Municipality is not a
+transfer `city_id`. Duplicate IATA assignments are counted/skipped. The source has
+no timezone column; unknown zones remain NULL and existing IANA zones/manual
+metadata are preserved. Timezone enrichment is tracked in
+[#21](https://github.com/lichen-liu/flightrepo/issues/21).
 
-Airports retain name, ICAO, municipality, ISO country/region and coordinates from
-OurAirports. Municipality is descriptive geography, **not** a transfer `city_id`.
-The source has no timezone column; imports leave unknown timezones NULL and keep
-existing IANA zones and explicit transfer groups. Duplicate IATA assignments are
-counted/skipped rather than chosen arbitrarily. Automated publication fills NULL
-fields even when coordinates already exist, preserving all populated admin fields.
+Carrier snapshots replace source-owned assignments atomically. A 4–8 character
+callsign resolves an operator only when it starts with a known three-letter ICAO
+code followed by a digit. The API shows the current undated operator name beside
+the unchanged callsign. It does not invent a marketing number or airline IATA,
+or claim historical operator/type/route verification. Unknown/private/ambiguous
+callsigns remain unresolved. Names are not duplicated across millions of rows.
+Reference-only publication fills missing airport metadata and updates operators
+without changing flight revisions, times, types, decisions or admission.
 
-`carriers(code,name,icao,iata,metadata_source_id,metadata_updated_us)` stores VRS
-standing-data airlines (CC0). ICAO is unique; IATA is deliberately non-unique.
-Source-owned carrier snapshots refresh atomically and withdraw stale assignments.
-The `flights` view resolves a normalized 4–8 character callsign only when it begins
-with a known three-letter ICAO operator followed by a digit. It exposes
-`operator_icao` and `operator_name`; the API and frontend retain the callsign and
-label the name as **operator**. These are current undated reference matches,
-not historical operator verification, marketing-carrier claims, or route/timing
-approvals. Unknown/private/ambiguous callsigns stay unresolved. No guessed flight
-number or airline IATA is written to a flight, and no name is duplicated across
-millions of flight rows. Reference-only backfills never change flight revisions,
-manual approvals, tombstones, timing, aircraft types or search admission.
+## Initialization, admin and publication
 
-Explicit writers add the optional reference extension and refresh the compatibility
-view transactionally. Read-only backend/admin processes never migrate a database.
+`python -m ingestion --db INGESTION.db init` creates the private role;
+`FLIGHT_INGESTION_DATABASE_PATH` supplies its default. `FLIGHT_DATABASE_PATH`
+independently selects serving/admin. Producer guards reject serving destinations
+before downloads. `--db` is the sole pipeline output; scratch paths cannot redirect it.
+
+Admin can inspect/query/export either store. Only serving permits manual flight
+and airport edits. Private producer launches, edits/imports/approvals and quota
+changes are rejected by admin; clear/reset are explicit lifecycle exceptions that
+refuse active locks and do not unlink live SQLite families or alter serving.
+
+Flight `publish --serving-db PATH --start DATE --end DATE` copies an explicit range
+one day at a time; `references publish` updates shared dimensions separately.
+Partial/cancelled facts may remain available for lookup while routing filters apply.
+Publication membership retracts missing/newly excluded owned facts, including
+corrections moved across dates. Serving edits, approvals, tombstones and populated
+airport metadata win. One serving file has one publisher identity; reset increments
+private generation without changing that identity or serving immediately.
+
+For a clean replacement, `--preserve-serving CANONICAL.db` copies canonical admin
+state and quota, excluding old automatic flights. Drift in that state requires a
+new replacement. Stop canonical writers, verify preservation again, checkpoint and
+cut over only a validated **serving** replacement. Never copy/rename ingestion over
+serving. Legacy `adopt` is an explicit verified copy into a new private file, not a
+startup migration. [The operator guide](ingestion.md#audit-review-and-publication)
+covers commands, reviews, recovery and cutover.
+
+## Public API boundary
+
+`server.public` allowlists responses for flight lookup, local/UTC search, legacy
+itineraries and every nested rebuild option/tail. It retains flight/callsign,
+operator, aircraft type, airport pair, status, available scheduled/actual times and
+selected bounds. It excludes provider/key, refresh timestamps, original reasons,
+evidence kind, reference results/chains/hashes, human-review status, connection
+policy source descriptions and replay/trace details. Catalogs exclude source lists,
+URLs, attribution objects and refresh metadata. Complete provenance stays in the
+backend/admin; public confidentiality does not mean erasing internal auditability.
+
+### Public identity and editing
+
+Public `prefix` and `chosen_next` references use `{"flight_id":"flight_…"}` in
+`POST /v1/plans/rebuild`. Provider/key pairs are rejected. Local admin, producer
+APIs and replay retain their internal provider/key contract. **Release compatible
+frontend/backend together**; this intentionally changes the public API contract.
+
+IDs use an indexed row locator plus an opaque identity fingerprint. The check
+prevents recycled row IDs after reset/replacement from silently selecting another
+flight. They stay stable while the same identity occupies that row; they are not
+authentication tokens. A full replacement may invalidate saved selections and
+require a new search. No mapping table or DB migration is needed.
+
+Public diagnostics retain completion/limits and route counts, excluding engine
+versions, request/snapshot hashes and events. Public trace requests do not enable
+trace capture. Errors allowlist necessary timezone/connection context and omit
+internal flight identities. OpenAPI describes public contracts, not internal
+`FlightRecord`, `RouteVerification` or replay models. Accuracy warnings remain
+visible without source-specific evidence.
+
+### Data sources, licences and exports
+
+**Data sources & licences**, `/data-sources`, is the intentional public source
+notice required by the data terms. It is rendered server-side from serving notices,
+with escaped source names/homepages, attribution and licence links. Raw download
+URLs, input paths, snapshot hashes and individual matches are excluded. The footer
+links the notice, and API responses carry `Link: </data-sources>; rel="license"`.
+This separates operational provenance; it does not promise unidentifiable origins.
+
+Journey format `flyji-journey-2` exports only the public selection/query plus an
+absolute `data_licence_notice` URL. Local admin exports stay internal and preserve
+source identity. Moving the notice does not change redistribution rights.
+
+Regression coverage includes nested responses, schemas, errors, conflicting
+references, stale/tampered IDs, indexed/chunked resolution, notice escaping,
+source-free exports, installed packaging and browser editing. The canonical DDL
+and tests are authoritative for field-level details.
