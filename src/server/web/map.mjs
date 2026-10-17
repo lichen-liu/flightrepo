@@ -13,7 +13,11 @@ export class RouteMap {
     this.world = null;
     this.d3 = window.d3;
     this.revision = 0;
-    this.resize = new ResizeObserver(() => this.draw());
+    // SVG updates can change layout. Draw after resize delivery has finished.
+    this.resize = new ResizeObserver(() => {
+      cancelAnimationFrame(this.resizeFrame);
+      this.resizeFrame = requestAnimationFrame(() => this.draw());
+    });
     this.resize.observe(svg);
     let drag = null;
     svg.addEventListener("pointerdown", (e) => {
