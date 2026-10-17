@@ -20,207 +20,237 @@
     <a class="skip" href="#results">Skip to flight options</a>
     <aside class="status-banner" aria-label="boboji.fyi tools">
       <span>BOBOJI / FLIGHT EXPLORER</span>
-      <a class="boboji-lockup" href="https://boboji.fyi/" aria-label="boboji.fyi home"
+      <a
+        class="boboji-lockup"
+        href="https://boboji.fyi/"
+        aria-label="boboji.fyi home"
         ><b aria-hidden="true">b/</b><span>boboji.fyi</span></a
       >
     </aside>
     <header class="site-header">
       <a href="/" class="brand" aria-label="Flyji home"
-        ><span class="brand-mark" aria-hidden="true">b/</span><span>FLYJI</span></a
+        ><span class="brand-mark" aria-hidden="true">b/</span
+        ><span>FLYJI</span></a
       >
       <nav class="header-actions" aria-label="Flyji tools">
         <button id="copy-search" type="button">Copy search link</button
         ><a href="/docs">API</a>
       </nav>
     </header>
-    <section id="request-progress" class="request-progress" role="status" aria-live="polite" hidden>
-      <div><strong id="request-label">Connecting to flight data</strong><span id="request-elapsed" aria-hidden="true">0s</span></div>
+    <section
+      id="request-progress"
+      class="request-progress"
+      role="status"
+      aria-live="polite"
+      hidden
+    >
+      <div>
+        <strong id="request-label">Connecting to flight data</strong
+        ><span id="request-elapsed" aria-hidden="true">0s</span>
+      </div>
       <div class="request-track" aria-hidden="true"><span></span></div>
       <progress aria-label="Waiting for backend response"></progress>
-      <p id="request-detail">Waiting for the server to respond.</p>
+      <p id="request-detail">Waiting for a response.</p>
     </section>
     <main>
       <div class="explore-hero">
-      <section class="search-section" aria-labelledby="page-title">
-        <div class="heading-row">
-          <span class="tag">FIND A WAY THROUGH</span>
-          <h1 id="page-title">Your next<br />connection.</h1>
-        </div>
-        <form id="search-form">
-          <div class="search-grid">
-            <label
-              >From<input
-                name="origin"
-                id="origin"
-                type="text"
-                list="airport-suggestions"
-                pattern="[A-Za-z]{3}"
-                title="Enter a three-letter airport code."
-                aria-label="From"
-                placeholder="e.g. YYZ"
-                autocomplete="off"
-                autocapitalize="characters"
-                spellcheck="false"
-                data-airport-code
-                aria-describedby="origin-name origin-coverage coverage-scope"
-                required
-              /><span id="origin-name" class="airport-name"
-                >Three-letter airport code</span
-              ><span id="origin-coverage" class="airport-coverage" role="status" hidden></span></label
-            >
-            <button
-              id="swap"
-              type="button"
-              aria-label="Swap origin and destination"
-            >
-              ⇄
-            </button>
-            <label
-              >To<input
-                name="destination"
-                id="destination"
-                type="text"
-                list="airport-suggestions"
-                pattern="[A-Za-z]{3}"
-                title="Enter a three-letter airport code."
-                aria-label="To"
-                placeholder="e.g. CDG"
-                autocomplete="off"
-                autocapitalize="characters"
-                spellcheck="false"
-                data-airport-code
-                aria-describedby="destination-name destination-coverage coverage-scope"
-                required
-              /><span id="destination-name" class="airport-name"
-                >Three-letter airport code</span
-              ><span id="destination-coverage" class="airport-coverage" role="status" hidden></span></label
-            >
-            <label
-              >Departure date<input name="date" id="date" type="date" required
-            /></label>
-            <button id="search-button" class="primary" type="submit" disabled>
-              Search flights
-            </button>
+        <section class="search-section" aria-labelledby="page-title">
+          <div class="heading-row">
+            <span class="tag">ROUTE PLANNER</span>
+            <h1 id="page-title">Find a flight.</h1>
           </div>
-          <p id="coverage-warning" class="small" role="status" hidden></p>
-          <button id="retry-dates" type="button" hidden>Retry departure dates</button>
-          <details class="coverage-details">
-            <summary>Airport availability details</summary>
-            <p id="coverage-scope" class="small muted" hidden></p>
-            <p id="date-availability" class="small" role="status">Loading departure dates…</p>
-            <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
-          </details>
-          <div class="route-filter">
-            <label
-              >Via airports (optional)<span class="airport-list-input"><input
-                name="via"
-                id="via"
-                type="text"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-controls="via-suggestions"
-                aria-expanded="false"
-                title="Enter airport codes separated by commas or spaces, in travel order."
-                aria-label="Via airports"
-                placeholder="e.g. LHR, AMS"
-                autocomplete="off"
-                autocapitalize="characters"
-                spellcheck="false"
-                data-airport-code
-                data-airport-list
-                aria-describedby="via-hint via-name" /><span
-                id="via-suggestions"
-                class="airport-suggestions"
-                role="listbox"
-                aria-label="Via airport suggestions"
-                hidden
-              ></span></span><span
-                id="via-name"
-                class="airport-name"
-                hidden
-              ></span
-            ></label>
-            <span id="via-hint" class="small muted"
-              >Visit each airport in this order. Separate codes with commas or spaces.</span
-            >
-          </div>
-          <datalist id="airport-suggestions"></datalist>
-          <div class="clock-row">
-            <span id="date-zones">Dates use airport local time.</span
-            ><label class="inline-label"
-              >Input clock<select name="input-clock">
-                <option value="local">Airport local</option>
-                <option value="UTC">UTC</option>
-              </select></label
-            >
-          </div>
-          <label class="inline-label">Flight times<select name="time-basis">
-            <option value="scheduled">Published schedules</option>
-            <option value="observed">Observed historical legs</option>
-            <option value="actual">Reported actual times</option>
-          </select></label>
-          <details id="search-details">
-            <summary>Search filters</summary>
-            <div class="filter-grid">
+          <form id="search-form">
+            <div class="search-grid">
               <label
-                >Last departure date<input name="last-date" type="date"
-              /></label>
-              <label
-                >Maximum stops<select name="stops">
-                  <option value="any" selected>Any number</option>
-                  <option value="0">Nonstop</option>
-                  <option value="1">1 stop</option>
-                  <option value="2">2 stops</option>
-                  <option value="3">3 stops</option>
-                </select></label
+                >From<input
+                  name="origin"
+                  id="origin"
+                  type="text"
+                  list="airport-suggestions"
+                  pattern="[A-Za-z]{3}"
+                  title="Enter a three-letter airport code."
+                  aria-label="From"
+                  placeholder="e.g. YYZ"
+                  autocomplete="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  data-airport-code
+                  aria-describedby="origin-name origin-coverage coverage-scope"
+                  required /><span id="origin-name" class="airport-name"
+                  >Three-letter airport code</span
+                ><span
+                  id="origin-coverage"
+                  class="airport-coverage"
+                  role="status"
+                  hidden
+                ></span
+              ></label>
+              <button
+                id="swap"
+                type="button"
+                aria-label="Swap origin and destination"
               >
+                ⇄
+              </button>
               <label
-                >Sort by<select name="ranking">
-                  <option value="fewest_legs">Fewest stops</option>
-                  <option value="shortest_elapsed">Shortest journey</option>
-                  <option value="earliest_arrival">Earliest arrival</option>
-                </select></label
-              >
+                >To<input
+                  name="destination"
+                  id="destination"
+                  type="text"
+                  list="airport-suggestions"
+                  pattern="[A-Za-z]{3}"
+                  title="Enter a three-letter airport code."
+                  aria-label="To"
+                  placeholder="e.g. CDG"
+                  autocomplete="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  data-airport-code
+                  aria-describedby="destination-name destination-coverage coverage-scope"
+                  required /><span id="destination-name" class="airport-name"
+                  >Three-letter airport code</span
+                ><span
+                  id="destination-coverage"
+                  class="airport-coverage"
+                  role="status"
+                  hidden
+                ></span
+              ></label>
               <label
-                >Minimum connection (minutes)<input
-                  name="minimum"
-                  type="number"
-                  min="0"
-                  max="1440"
-                  value="45"
+                >Departure date<input
+                  name="date"
+                  id="date"
+                  type="date"
                   required
               /></label>
+              <button id="search-button" class="primary" type="submit" disabled>
+                Search flights
+              </button>
+            </div>
+            <p id="coverage-warning" class="small" role="status" hidden></p>
+            <button id="retry-dates" type="button" hidden>
+              Retry departure dates
+            </button>
+            <details class="coverage-details">
+              <summary>Airport availability details</summary>
+              <p id="coverage-scope" class="small muted" hidden></p>
+              <p id="date-availability" class="small" role="status">
+                Loading departure dates…
+              </p>
+              <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
+            </details>
+            <div class="route-filter">
               <label
-                >Maximum connection<select name="maximum">
-                  <option value="180">3 hours</option>
-                  <option value="360" selected>6 hours</option>
-                  <option value="720">12 hours</option>
-                  <option value="1440">24 hours</option>
-                  <option value="any">Any time in the search window</option>
-                </select></label
-              >
-              <label
-                >Avoid airports<input
-                  name="avoid"
-                  placeholder="e.g. LHR, AMS"
-                  maxlength="199"
-                  autocomplete="off"
-              /></label>
-              <label class="check"
-                ><input type="checkbox" name="airport-change" />Allow
-                connections between airports in the same city</label
+                >Via airports (optional)<span class="airport-list-input"
+                  ><input
+                    name="via"
+                    id="via"
+                    type="text"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-controls="via-suggestions"
+                    aria-expanded="false"
+                    title="Enter airport codes separated by commas or spaces, in travel order."
+                    aria-label="Via airports"
+                    placeholder="e.g. LHR, AMS"
+                    autocomplete="off"
+                    autocapitalize="characters"
+                    spellcheck="false"
+                    data-airport-code
+                    data-airport-list
+                    aria-describedby="via-hint via-name" /><span
+                    id="via-suggestions"
+                    class="airport-suggestions"
+                    role="listbox"
+                    aria-label="Via airport suggestions"
+                    hidden
+                  ></span></span
+                ><span id="via-name" class="airport-name" hidden></span
+              ></label>
+              <span id="via-hint" class="small muted"
+                >Visit each airport in this order. Separate codes with commas or
+                spaces.</span
               >
             </div>
-          </details>
-        </form>
-        <p id="status" class="status" role="status" aria-live="polite">
-          Loading the airport catalog…
-        </p>
-        <p id="error" class="error" role="alert" hidden></p>
-        <button id="retry-catalog" type="button" hidden>
-          Retry data connection
-        </button>
-      </section>
+            <datalist id="airport-suggestions"></datalist>
+            <div class="clock-row">
+              <span id="date-zones">Dates use airport local time.</span
+              ><label class="inline-label"
+                >Input clock<select name="input-clock">
+                  <option value="local">Airport local</option>
+                  <option value="UTC">UTC</option>
+                </select></label
+              >
+            </div>
+            <label class="inline-label"
+              >Flight times<select name="time-basis">
+                <option value="scheduled">Published schedules</option>
+                <option value="observed">Observed historical legs</option>
+                <option value="actual">Reported actual times</option>
+              </select></label
+            >
+            <details id="search-details">
+              <summary>Search filters</summary>
+              <div class="filter-grid">
+                <label
+                  >Last departure date<input name="last-date" type="date"
+                /></label>
+                <label
+                  >Maximum stops<select name="stops">
+                    <option value="any" selected>Any number</option>
+                    <option value="0">Nonstop</option>
+                    <option value="1">1 stop</option>
+                    <option value="2">2 stops</option>
+                    <option value="3">3 stops</option>
+                  </select></label
+                >
+                <label
+                  >Sort by<select name="ranking">
+                    <option value="fewest_legs">Fewest stops</option>
+                    <option value="shortest_elapsed">Shortest journey</option>
+                    <option value="earliest_arrival">Earliest arrival</option>
+                  </select></label
+                >
+                <label
+                  >Minimum connection (minutes)<input
+                    name="minimum"
+                    type="number"
+                    min="0"
+                    max="1440"
+                    value="45"
+                    required
+                /></label>
+                <label
+                  >Maximum connection<select name="maximum">
+                    <option value="180">3 hours</option>
+                    <option value="360" selected>6 hours</option>
+                    <option value="720">12 hours</option>
+                    <option value="1440">24 hours</option>
+                    <option value="any">Any time in the search window</option>
+                  </select></label
+                >
+                <label
+                  >Avoid airports<input
+                    name="avoid"
+                    placeholder="e.g. LHR, AMS"
+                    maxlength="199"
+                    autocomplete="off"
+                /></label>
+                <label class="check"
+                  ><input type="checkbox" name="airport-change" />Allow
+                  connections between airports in the same city</label
+                >
+              </div>
+            </details>
+          </form>
+          <p id="status" class="status" role="status" aria-live="polite">
+            Loading the airport catalog…
+          </p>
+          <p id="error" class="error" role="alert" hidden></p>
+          <button id="retry-catalog" type="button" hidden>
+            Retry data connection
+          </button>
+        </section>
 
         <section class="map-panel" aria-labelledby="map-heading">
           <div class="panel-heading">
@@ -234,8 +264,10 @@
             </div>
           </div>
           <div class="map-overview">
-            <div id="map-route-title" class="map-route-title">Explore the connections.</div>
-            <div id="journey-summary" class="journey-summary"><span>Choose a journey to see its path and timing.</span></div>
+            <div id="map-route-title" class="map-route-title">Your route</div>
+            <div id="journey-summary" class="journey-summary">
+              <span>Select a flight option to see its path and times.</span>
+            </div>
           </div>
           <div id="map-container">
             <svg
@@ -244,7 +276,11 @@
               aria-label="World map. Choose a flight journey to display its route."
             ></svg
             ><span class="map-caption" id="map-caption">Flight route</span>
-            <div id="map-loading" class="map-loading" hidden><span class="loading-orbit" aria-hidden="true"></span><strong>Finding your routes</strong><span>Waiting for flight results…</span></div>
+            <div id="map-loading" class="map-loading" hidden>
+              <span class="loading-orbit" aria-hidden="true"></span
+              ><strong>Searching flights</strong
+              ><span>Results will appear here.</span>
+            </div>
           </div>
           <div class="map-toolbar">
             <span id="map-info" class="small muted"
@@ -268,19 +304,13 @@
               <button id="tilt-up" type="button" aria-label="Tilt globe up">
                 ↑
               </button>
-              <button
-                id="tilt-down"
-                type="button"
-                aria-label="Tilt globe down"
-              >
+              <button id="tilt-down" type="button" aria-label="Tilt globe down">
                 ↓
               </button>
               <button id="zoom-out" type="button" aria-label="Zoom out">
                 −
               </button>
-              <button id="zoom-in" type="button" aria-label="Zoom in">
-                +
-              </button>
+              <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
               <button id="fit-map" type="button">Fit journey</button>
             </div>
           </div>
@@ -310,7 +340,9 @@
             Search the loaded flight records.
           </p>
           <p id="partial" class="notice" hidden></p>
-          <div class="duration-legend" aria-label="Journey duration legend"><span>Flight</span><span>Connection</span></div>
+          <div class="duration-legend" aria-label="Journey duration legend">
+            <span>Flight</span><span>Connection</span>
+          </div>
           <div id="options">
             <p class="empty">
               Choose airports and departure dates to find a route.
@@ -395,9 +427,7 @@
                     >Next departure<select name="window">
                       <option value="soon">Within 6 hours</option>
                       <option value="day">Within 24 hours</option>
-                      <option value="any">
-                        Any time in the search window
-                      </option>
+                      <option value="any">Any time in the search window</option>
                       <option value="after">After a date and time</option>
                     </select></label
                   >

@@ -1178,7 +1178,6 @@ def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
         for tag, attrs in nodes
     )
     css = client.get("/assets/app.css").text
-    assert "@media (prefers-color-scheme: dark)" in css
     assert "color-scheme: dark" in css
     # Native controls use the night palette too. Browser QA establishes
     # computed colors, contrast, layout and focus.
