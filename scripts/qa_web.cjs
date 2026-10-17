@@ -1222,7 +1222,7 @@ check("timezone changes after loading dates are corrected before retry", async (
 check(
   "map failure leaves flight inspection and editing available",
   async (page) => {
-    await page.route("**/assets/vendor/world-110m.geojson", (route) =>
+    await page.route("**/world-110m.geojson", (route) =>
       route.fulfill({ status: 503, body: "Geometry unavailable" }),
     );
     await viaSearch(page);

@@ -53,7 +53,7 @@ export class RouteMap {
   }
   async load() {
     if (!this.d3) throw Error("Map library unavailable.");
-    const response = await fetch("/assets/vendor/world-110m.geojson");
+    const response = await fetch(new URL("./vendor/world-110m.geojson", import.meta.url));
     if (!response.ok) throw Error("World geometry unavailable.");
     this.world = await response.json();
     this.draw();

@@ -1120,8 +1120,9 @@ def test_family_fonts_are_real_self_hosted_assets_with_retained_licenses(client)
 
 def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
     page = client.get("/")
-    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"' in page.text
-    response = client.get("/assets/favicon.svg")
+    favicon = re.search(r'href="(/assets/v-[a-f0-9]{16}/favicon.svg)"', page.text)
+    assert favicon
+    response = client.get(favicon[1])
     assert response.status_code == 200
     assert response.headers["content-type"].split(";")[0] == "image/svg+xml"
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -1173,9 +1174,7 @@ def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
         tag == "aside" and attrs.get("aria-label") == "boboji.fyi tools" for tag, attrs in nodes
     )
     assert any(
-        tag == "meta"
-        and attrs.get("name") == "color-scheme"
-        and attrs.get("content") == "dark"
+        tag == "meta" and attrs.get("name") == "color-scheme" and attrs.get("content") == "dark"
         for tag, attrs in nodes
     )
     css = client.get("/assets/app.css").text
@@ -1507,3 +1506,18 @@ def test_public_dataset_mode_cannot_hide_mixed_demo_and_real_data(client, demo):
     result = client.get("/v1/catalog").json()
     assert result["dataset"]["data_mode"] == "mixed"
     assert_public(result)
+
+
+def test_actual_page_versions_all_entry_assets_and_their_relative_dependencies(client):
+    page = client.get("/")
+    revision = page.headers["x-flyji-assets"]
+    assert page.headers["cache-control"] == "no-store"
+    paths = re.findall(r'(?:href|src)="(/assets/[^"]+)"', page.text)
+    assert paths and all(path.startswith(f"/assets/v-{revision}/") for path in paths)
+    for path in paths:
+        assert client.get(path).status_code == 200
+    base = f"/assets/v-{revision}/app.mjs"
+    assert client.get(urljoin(base, "./map.mjs")).status_code == 200
+    css = f"/assets/v-{revision}/app.css"
+    assert client.get(urljoin(css, "fonts/manrope-variable.woff2")).content.startswith(b"wOF2")
+
