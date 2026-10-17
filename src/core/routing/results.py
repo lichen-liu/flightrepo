@@ -15,3 +15,5 @@ class RouteSearchResult(BaseModel):
     items: list[RouteItinerary]
     diagnostics: SearchDiagnostics
     airports: list[Airport] = Field(default_factory=list)
+    next_offset: int | None = None
+    data_revision: str | None = None

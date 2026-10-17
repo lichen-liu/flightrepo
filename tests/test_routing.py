@@ -710,7 +710,7 @@ def test_direct_manual_choice_not_charged_twice_and_option_page_keeps_choice():
     result = rebuild_from_snapshot(request, RoutingSnapshot(tuple(records)))
     assert (
         result.complete
-        and len(result.options) == 2
+        and len(result.options) == 3
         and result.options[-1].flight.provider_id == "7"
     )
     assert result.options_total == 8 and result.options_truncated and result.diagnostics.exhaustive
@@ -912,7 +912,6 @@ def test_rejected_selection_reports_measured_gap(tmp_path):
         {"origin": "AAA", "destination": "aaa"},
         {"minimum_connection_minutes": 50, "maximum_connection_minutes": 30},
         {"avoid_airports": ["AAA"]},
-        {"horizon_end": BASE + timedelta(days=100)},
         {"limits": {"max_candidates": 0}},
         {"departure_start": "0001-01-01T00:00:00+14:00"},
     ],
@@ -1056,14 +1055,12 @@ def test_valid_search_horizon_remains_valid_for_rebuild(days):
     assert rebuilt.complete and rebuilt.legs == searched.items[0].legs
 
 
-def test_rebuild_horizon_beyond_maximum_search_span_is_rejected():
+def test_rebuild_accepts_horizon_beyond_former_search_span():
     prefix = flight("prefix", "AAA", "BBB", 0, 30)
-    with pytest.raises(RoutingError) as error:
-        rebuild_from_snapshot(
-            continuation_request(horizon_end=BASE + timedelta(days=62, minutes=1)),
-            RoutingSnapshot((prefix,)),
-        )
-    assert error.value.code == "invalid_horizon"
+    result = rebuild_from_snapshot(
+        continuation_request(horizon_end=BASE + timedelta(days=400)), RoutingSnapshot((prefix,))
+    )
+    assert result.diagnostics.exhaustive and not result.complete
 
 
 def test_rebuild_outstanding_via_overrides_faster_tail_and_prefix_satisfaction():
@@ -1395,10 +1392,6 @@ def test_empty_via_list_allows_single_flight_and_single_leg_final_prefix():
         {"via_airport": ["BBB"], "max_legs": 1},
         {"via_airport": ["BBB", "CCC"], "max_legs": 2},
         {"via_airport": ["BBB", "CCC", "DDD"], "max_legs": 2, "allow_airport_change": True},
-        {
-            "via_airport": ["BBB", "CCC", "DDD", "FFF", "GGG", "HHH", "III"],
-            "allow_airport_change": True,
-        },
     ],
 )
 def test_ordered_via_invalid_elements_conflicts_and_impossible_capacity(updates, tmp_path):

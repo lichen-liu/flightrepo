@@ -5,13 +5,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
 from core.config import get_settings
 from core.connections import Airport
-from core.itineraries import build_itineraries
 from core.models import RouteSummary
 from core.routing.models import (
     IncompleteSearchError,
@@ -72,7 +71,9 @@ async def browser_headers(request: Request, call_next):
             response.headers.setdefault("Cache-Control", "no-cache")
     elif request.url.path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Link"] = '</data-sources>; rel="license"'
+        response.headers["Link"] = ", ".join(
+            filter(None, [response.headers.get("Link"), '</data-sources>; rel="license"'])
+        )
     return response
 
 
@@ -144,11 +145,12 @@ def search_availability(
     time_basis: TimeBasis | None = None,
     departure_date: date | None = None,
     departure_last_date: date | None = None,
+    onward_days: Annotated[int | None, Query(ge=0)] = None,
     store: FlightReader = Depends(get_store),
 ):
     try:
         return store.search_availability(
-            origin, destination, clock, time_basis, departure_date, departure_last_date
+            origin, destination, clock, time_basis, departure_date, departure_last_date, onward_days
         )
     except ValueError as error:
         raise routing_http_error(error) from error
@@ -173,7 +175,7 @@ def available_dates(
 
 @app.get("/v1/airport-coverage", response_model=AirportCoverage)
 def airport_coverage(
-    airport: Annotated[list[str], Query(min_length=1, max_length=2)],
+    airport: Annotated[list[str], Query(min_length=1)],
     time_basis: TimeBasis | None = None,
     store: FlightReader = Depends(get_store),
 ):
@@ -213,7 +215,7 @@ def routing_http_error(error):
         )
     if isinstance(error, RoutingError):
         return HTTPException(
-            status_code=422,
+            status_code=409 if error.code == "data_changed" else 422,
             detail={
                 "code": error.code,
                 "message": str(error),
@@ -278,41 +280,84 @@ def rebuild(request: PublicRebuildRequest, store: FlightReader = Depends(get_sto
         raise routing_http_error(error) from error
 
 
+def list_revision(store, expected):
+    try:
+        return store.check_page_revision(expected)
+    except RoutingError as error:
+        raise routing_http_error(error) from error
+
+
+def list_page(request, response, store, records, limit, offset, revision):
+    list_revision(store, revision)
+    response.headers["X-Data-Revision"] = revision
+    if len(records) > limit:
+        next_offset = offset + limit
+        response.headers["X-Next-Offset"] = str(next_offset)
+        url = request.url.include_query_params(offset=next_offset, data_revision=revision)
+        response.headers["Link"] = f'<{url}>; rel="next"'
+    return records[:limit]
+
+
 @app.get("/v1/airports", response_model=list[Airport])
 def airports(
+    request: Request,
+    response: Response,
     city_id: str | None = None,
-    q: Annotated[str, Query(max_length=80)] = "",
+    q: str = "",
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    data_revision: str | None = None,
     store: FlightReader = Depends(get_store),
 ) -> list[Airport]:
-    return store.airports(city_id, q, limit)
+    revision = list_revision(store, data_revision)
+    return list_page(
+        request,
+        response,
+        store,
+        store.airports(city_id, q, limit + 1, offset),
+        limit,
+        offset,
+        revision,
+    )
 
 
 @app.get("/v1/flights", response_model=list[PublicFlight])
 def flights(
+    request: Request,
+    response: Response,
     start: datetime,
     end: datetime,
     origin: str | None = None,
     destination: str | None = None,
     include_cancelled: bool = False,
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    data_revision: str | None = None,
     store: FlightReader = Depends(get_store),
 ) -> list[PublicFlight]:
     start, end = query_times(start, end)
-    return to_public(store, store.search(start, end, origin, destination, include_cancelled, limit))
+    revision = list_revision(store, data_revision)
+    records = store.search(start, end, origin, destination, include_cancelled, limit + 1, offset)
+    return to_public(store, list_page(request, response, store, records, limit, offset, revision))
 
 
 @app.get("/v1/routes", response_model=list[RouteSummary])
 def routes(
+    request: Request,
+    response: Response,
     start: datetime,
     end: datetime,
     origin: str | None = None,
     destination: str | None = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    data_revision: str | None = None,
     store: FlightReader = Depends(get_store),
 ) -> list[RouteSummary]:
     start, end = query_times(start, end)
-    return store.routes(start, end, origin, destination, limit)
+    revision = list_revision(store, data_revision)
+    records = store.routes(start, end, origin, destination, limit + 1, offset)
+    return list_page(request, response, store, records, limit, offset, revision)
 
 
 @app.get(
@@ -325,34 +370,48 @@ def routes(
     },
 )
 def itineraries(
+    request: Request,
+    response: Response,
     origin: str,
     destination: str,
     start: datetime,
     end: datetime,
     max_legs: Annotated[int | None, Query(ge=1)] = None,
-    min_connection_minutes: Annotated[int, Query(ge=20, le=360)] = 45,
-    max_connection_minutes: Annotated[int, Query(ge=60, le=1440)] = 360,
+    min_connection_minutes: Annotated[int, Query(ge=0)] = 45,
+    max_connection_minutes: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
     horizon_end: datetime | None = None,
+    data_revision: str | None = None,
     store: FlightReader = Depends(get_store),
 ) -> list[PublicItinerary]:
     start, end = query_times(start, end)
     try:
-        return to_public(
-            store,
-            build_itineraries(
-                store,
-                origin,
-                destination,
-                start,
-                end,
-                max_legs,
-                min_connection_minutes,
-                max_connection_minutes,
-                limit,
+        result = store.search_itineraries(
+            RouteSearchRequest(
+                origin=origin,
+                destination=destination,
+                departure_start=start,
+                departure_end=end,
                 horizon_end=horizon_end,
-            ),
+                max_legs=max_legs,
+                minimum_connection_minutes=min_connection_minutes,
+                maximum_connection_minutes=max_connection_minutes,
+                limit=limit,
+                offset=offset,
+                data_revision=data_revision,
+            )
         )
+        if not result.diagnostics.exhaustive:
+            raise IncompleteSearchError(result.diagnostics)
+        response.headers["X-Data-Revision"] = result.data_revision
+        if result.next_offset is not None:
+            response.headers["X-Next-Offset"] = str(result.next_offset)
+            url = request.url.include_query_params(
+                offset=result.next_offset, data_revision=result.data_revision
+            )
+            response.headers["Link"] = f'<{url}>; rel="next"'
+        return to_public(store, result.items)
     except ValueError as error:
         raise routing_http_error(error) from error
 

@@ -1,6 +1,6 @@
 """Validated search inputs and bounded, replayable routing diagnostics."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import (
@@ -16,8 +16,6 @@ ENGINE_VERSION = "routing-7"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None
-MAX_DEPARTURE_DAYS = 31
-MAX_ONWARD_DAYS = 31
 
 
 def airport_code(value: str) -> str:
@@ -46,8 +44,6 @@ def via_airports(value) -> ViaAirports:
         return optional_airport_code(value)
     if not isinstance(value, (list, tuple)):
         raise ValueError("via_airport must be an IATA code or an ordered list of codes")
-    if len(value) > 6:
-        raise ValueError("at most six via airports are supported")
     codes = [airport_code(code) for code in value]
     if len(set(codes)) != len(codes):
         raise ValueError("via airports must not repeat")
@@ -100,18 +96,20 @@ class RouteSearchRequest(BaseModel):
     destination: str
     departure_start: datetime
     departure_end: datetime
-    horizon_end: datetime
+    horizon_end: datetime | None = None
     max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
-    minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
-    maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44_640)
+    minimum_connection_minutes: int = Field(default=45, ge=0)
+    maximum_connection_minutes: int | None = Field(default=None, ge=0)
     allow_airport_change: bool = False
     via_airport: ViaAirports = Field(
         default=None,
         description="Required intermediate IATA code or ordered list. Each can be an arrival or permitted transfer departure.",
     )
-    avoid_airports: list[str] = Field(default_factory=list, max_length=50)
+    avoid_airports: list[str] = Field(default_factory=list)
     ranking: Ranking = "fewest_legs"
     limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    data_revision: str | None = None
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
     time_basis: TimeBasis | None = None
@@ -124,7 +122,10 @@ class RouteSearchRequest(BaseModel):
         return data
 
     _codes = field_validator("origin", "destination", mode="before")(airport_code)
-    _times = field_validator("departure_start", "departure_end", "horizon_end")(utc_instant)
+    _times = field_validator("departure_start", "departure_end")(utc_instant)
+    _horizon = field_validator("horizon_end")(
+        lambda value: utc_instant(value) if value is not None else None
+    )
 
     _avoided_codes = field_validator("avoid_airports", mode="before")(airport_codes)
     _via_codes = field_validator("via_airport", mode="before")(via_airports)
@@ -133,12 +134,10 @@ class RouteSearchRequest(BaseModel):
     def sensible_query(self):
         if self.origin == self.destination:
             raise ValueError("origin and destination must differ")
-        if not self.departure_start < self.departure_end <= self.horizon_end:
-            raise ValueError("require departure_start < departure_end <= horizon_end")
-        if self.departure_end - self.departure_start > timedelta(days=MAX_DEPARTURE_DAYS):
-            raise ValueError("departure window must be at most 31 days")
-        if self.horizon_end - self.departure_end > timedelta(days=MAX_ONWARD_DAYS):
-            raise ValueError("arrival horizon must be within 31 days of departure_end")
+        if self.departure_start >= self.departure_end:
+            raise ValueError("departure_end must follow departure_start")
+        if self.horizon_end is not None and self.horizon_end < self.departure_end:
+            raise ValueError("horizon_end must be on or after departure_end")
         if (
             self.maximum_connection_minutes is not None
             and self.maximum_connection_minutes < self.minimum_connection_minutes

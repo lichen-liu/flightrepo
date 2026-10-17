@@ -47,7 +47,6 @@ export function airportList(value) {
       );
   if (new Set(codes).size !== codes.length)
     throw Error("Via airports must not repeat.");
-  if (codes.length > 6) throw Error("Enter at most six via airports.");
   return codes;
 }
 export function airportListSuggestions(value, position, codes) {

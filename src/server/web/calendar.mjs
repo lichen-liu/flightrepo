@@ -154,6 +154,6 @@ export class DataCalendar {
     if (grid.contains(document.activeElement)) this.monthControl.focus();
     grid.innerHTML = `${["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => `<span>${day}</span>`).join("")}${"<span></span>".repeat(offset)}${days.map(({ date, day, enabled }) => `<button type="button" data-date="${date}" aria-label="${date}${enabled ? "" : ": no matching flight data"}" aria-pressed="${date === this.input.value}" ${enabled ? "" : "disabled"}>${day}</button>`).join("")}`;
     this.panel.querySelector(".calendar-summary").textContent =
-      `${count} selectable departure date${count === 1 ? "" : "s"} this month. ${this.months.length === 1 ? "Only this month has selectable dates for this search." : "Months without selectable dates are omitted."}${this.optional ? " Last date must be within 30 days of the first." : ""}`;
+      `${count} selectable departure date${count === 1 ? "" : "s"} this month. ${this.months.length === 1 ? "Only this month has selectable dates for this search." : "Months without selectable dates are omitted."}`;
   }
 }

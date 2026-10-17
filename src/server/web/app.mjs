@@ -51,6 +51,7 @@ const state = {
   catalog: null,
   airports: new Map(),
   result: null,
+  searchRequest: null,
   selection: null,
   history: [],
   editing: null,
@@ -114,6 +115,7 @@ const dateKey = () =>
     field("time-basis").value,
     field("date").value,
     field("last-date").value,
+    field("onward-days").value,
   ].join("/");
 function updateDatasetTag() {
   const data = state.catalog?.dataset;
@@ -186,6 +188,8 @@ function updateAirportNames() {
     .join(" → ");
   updateViaSuggestions();
 }
+const viaLookupLane = new RequestLane();
+let viaLookupTimer;
 let viaOptions = [],
   viaActive = -1;
 function hideViaSuggestions() {
@@ -236,6 +240,7 @@ function values() {
       "via",
       "date",
       "last-date",
+      "onward-days",
       "stops",
       "ranking",
       "minimum",
@@ -287,7 +292,7 @@ function updateZones() {
         : "UTC";
   $("date-zones").textContent = !origin
     ? "Dates use the departure airport’s local time. Choose UTC below to change this."
-    : `Departure dates: ${clock(origin)} · Routes searched up to 7 days after the departure window.`;
+    : `Departure dates: ${clock(origin)} · ${field("onward-days").value === "" ? "Arrivals use all available data." : `Arrivals searched up to ${field("onward-days").value} days after the departure window.`}`;
   const missing =
     /^[A-Z]{3}$/.test(origin) && !state.airports.get(origin)?.timezone;
   if (missing && local)
@@ -298,7 +303,7 @@ function updateLastDates() {
   const first = field("date").value;
   lastCalendar.setDates(
     [...availableDates].filter(
-      (date) => date >= first && date <= addDate(first, 30),
+      (date) => date >= first,
     ),
   );
 }
@@ -348,6 +353,7 @@ async function loadDates() {
     clock,
     time_basis: basis,
   });
+  if (field("onward-days").value !== "") params.set("onward_days", field("onward-days").value);
   if (requestedDate) params.set("departure_date", requestedDate);
   if (field("last-date").value)
     params.set("departure_last_date", field("last-date").value);
@@ -374,7 +380,7 @@ async function loadDates() {
       $("destination-coverage").textContent =
         `Inbound: ${result.inbound.toLocaleString()} within the arrival window`;
       $("coverage-scope").textContent =
-        `Searchable ${timeBasisLabel(basis).toLowerCase()} · exact airports · ${result.timezone}. Outbound uses the first departure date; inbound uses that date through 7 days after the departure window. Counts do not guarantee a connecting route.`;
+        `Searchable ${timeBasisLabel(basis).toLowerCase()} · exact airports · ${result.timezone}. Outbound uses the first departure date; inbound uses that date through ${field("onward-days").value === "" ? "the latest available arrival" : field("onward-days").value + " days after the departure window"}. Counts do not guarantee a connecting route.`;
       const warnings = [];
       if (!result.outbound)
         warnings.push(
@@ -494,6 +500,7 @@ function searchRequest() {
         ...query,
         departure_date: first,
         departure_last_date: last,
+        onward_days: field("onward-days").value === "" ? null : Number(field("onward-days").value),
         departure_timezone: state.airports.get(query.origin)?.timezone || null,
       },
     };
@@ -503,7 +510,7 @@ function searchRequest() {
       ...query,
       departure_start: `${first}T00:00:00Z`,
       departure_end: `${addDate(last, 1)}T00:00:00Z`,
-      horizon_end: `${addDate(last, 8)}T00:00:00Z`,
+      ...(field("onward-days").value === "" ? {} : {horizon_end: `${addDate(last, Number(field("onward-days").value) + 1)}T00:00:00Z`}),
     },
   };
 }
@@ -530,6 +537,7 @@ async function search() {
     request.body,
     (result) => {
       state.result = result;
+      state.searchRequest = request;
       state.history = [];
       state.queryValues = submitted;
       for (const airport of result.airports)
@@ -568,13 +576,40 @@ async function search() {
     },
   );
 }
+async function moreRoutes() {
+  const previous = state.result,
+    request = state.searchRequest;
+  if (!previous || previous.next_offset == null || !request) return;
+  $("more-routes").disabled = true;
+  await searchLane.run(
+    request.url,
+    { ...request.body, offset: previous.next_offset, data_revision: previous.data_revision },
+    (page) => {
+      state.result = {
+        ...previous,
+        next_offset: page.next_offset,
+        items: [...previous.items, ...page.items],
+        airports: [...new Map([...previous.airports, ...page.airports].map(a => [a.iata, a])).values()],
+      };
+      for (const airport of page.airports) state.airports.set(airport.iata, airport);
+      renderOptions();
+      $("status").textContent = `${state.result.items.length} journeys loaded${page.next_offset == null ? ". All matching journeys shown." : "."}`;
+    },
+    error => showError("error", errorMessage(error)),
+    () => {
+      $("more-routes").disabled = false;
+      updateSearchButton();
+    },
+  );
+}
+$("more-routes").addEventListener("click", moreRoutes);
 function renderOptions() {
   const result = state.result;
   if (!result) return;
+  $("more-routes").hidden = result.next_offset == null;
+  $("more-routes").disabled = false;
   updateWorkspaceState(!result.items.length);
-  $("result-count").textContent = result.diagnostics.result_limit_reached
-    ? `${result.items.length} of ${result.diagnostics.stats.routes_found}${result.diagnostics.exhaustive ? "" : " examined"}`
-    : String(result.items.length);
+  $("result-count").textContent = `${result.items.length}${result.next_offset != null ? "+" : ""}`;
   const v = state.queryValues,
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;
@@ -714,6 +749,7 @@ function closeEditor() {
   state.preview = null;
   $("connection-editor").hidden = true;
   $("next-options").replaceChildren();
+  $("more-next").hidden = true;
 }
 function updateEditorZone() {
   if (state.editing === null) return;
@@ -725,7 +761,7 @@ function openEditor(index) {
   closeEditor();
   state.editing = index;
   editField("minimum").value = state.result.query.minimum_connection_minutes;
-  editField("window").value = "soon";
+  editField("window").value = "any";
   editField("airport-change").checked = state.result.query.allow_airport_change;
   editField("next-airport").value = "";
   updateAirportNames();
@@ -771,7 +807,12 @@ function editorRequest(notBefore = null) {
       "scheduled",
   };
 }
-async function findNext() {
+$("more-next").addEventListener("click", () =>
+  findNext(state.preview?.plan.next_option_offset || 0),
+);
+async function findNext(optionOffset = 0) {
+  if (typeof optionOffset !== "number") optionOffset = 0;
+  const previous = optionOffset ? state.preview : null;
   if (state.editing === null) return;
   const mode = editField("window").value,
     after = editField("after").value;
@@ -779,13 +820,18 @@ async function findNext() {
     showError("editor-error", "Choose a not-before date and time.");
     return;
   }
-  state.preview = null;
-  $("next-options").replaceChildren();
+  if (!previous) {
+    state.preview = null;
+    $("next-options").replaceChildren();
+  }
+  $("more-next").hidden = true;
   showError("editor-error", "");
   $("find-next").disabled = true;
   $("editor-status").textContent =
     "Finding next flights and complete onward routes…";
-  let request = editorRequest();
+  let request = previous
+    ? { ...previous.request, option_offset: optionOffset, data_revision: previous.plan.data_revision }
+    : editorRequest();
   const fail = (error) => {
     acceptTimeError(error);
     showError("editor-error", errorMessage(error));
@@ -794,11 +840,17 @@ async function findNext() {
   };
   const finish = () => {
     $("find-next").disabled = false;
+    $("more-next").hidden = state.preview?.plan.next_option_offset == null;
   };
   const receive = (plan) => {
+    if (previous)
+      plan.options = [...new Map(
+        [...previous.plan.options, ...plan.options].map(option => [option.flight.flight_id, option]),
+      ).values()];
+    $("more-next").hidden = plan.next_option_offset == null;
     state.preview = { request, plan };
     $("editor-status").textContent =
-      `${plan.options.length} next-flight options${plan.options_total == null ? "" : ` of ${plan.options_total}`}${plan.options_truncated ? " · option list truncated" : ""}${plan.diagnostics.exhaustive ? "" : " · search partial"}.${plan.options.length ? " Choose a flight to apply." : ""}`;
+      `${plan.options.length} next-flight options${plan.options_total == null ? "" : ` of ${plan.options_total}`}${plan.next_option_offset != null ? " · more available" : ""}${plan.diagnostics.exhaustive ? "" : " · search partial"}.${plan.options.length ? " Choose a flight to apply." : ""}`;
     $("next-options").innerHTML = plan.options.length
       ? plan.options
           .map((option, i) => {
@@ -891,8 +943,24 @@ form.addEventListener("input", (event) => {
   updateZones();
   if ([field("origin"), field("destination")].includes(event.target))
     loadDates();
-  if (event.target.hasAttribute("data-airport-list"))
+  if (event.target.hasAttribute("data-airport-list")) {
     updateViaSuggestions(true);
+    clearTimeout(viaLookupTimer);
+    viaLookupLane.cancel();
+    const control = event.target,
+      before = control.value.slice(0, control.selectionStart ?? control.value.length),
+      token = before.split(/[\s,]+/).at(-1);
+    if (token.length >= 2)
+      viaLookupTimer = setTimeout(() => viaLookupLane.run(
+        `/v1/airports?${new URLSearchParams({ q: token })}`,
+        undefined,
+        airports => {
+          for (const airport of airports) state.airports.set(airport.iata, airport);
+          if (document.activeElement === control) updateViaSuggestions(true);
+        },
+        () => {},
+      ), 200);
+  }
   closeEditor();
   if (state.result)
     $("status").textContent =

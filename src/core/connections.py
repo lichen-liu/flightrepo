@@ -68,7 +68,7 @@ class Airport(BaseModel):
 class AirportTransfer(BaseModel):
     arrival_iata: str = Field(pattern=r"^[A-Z]{3}$")
     departure_iata: str = Field(pattern=r"^[A-Z]{3}$")
-    minimum_minutes: int = Field(ge=1, le=1440)
+    minimum_minutes: int = Field(ge=1)
     source: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -85,8 +85,8 @@ class FlightRef(BaseModel):
 
 class ConnectionWindow(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    minimum_minutes: int = Field(default=45, ge=0, le=1440)
-    maximum_minutes: int | None = Field(default=None, ge=0, le=44_640)
+    minimum_minutes: int = Field(default=45, ge=0)
+    maximum_minutes: int | None = Field(default=None, ge=0)
     not_before: datetime | None = None
 
     @field_validator("not_before")
@@ -116,10 +116,12 @@ class RebuildRequest(BaseModel):
         default=None,
         description="Exact destination IATA airport of the immediately next flight only.",
     )
-    avoid_airports: list[str] = Field(default_factory=list, max_length=50)
+    avoid_airports: list[str] = Field(default_factory=list)
     max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     chosen_next: FlightRef | None = None
     option_limit: int = Field(default=100, ge=1, le=500)
+    option_offset: int = Field(default=0, ge=0)
+    data_revision: str | None = None
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
     time_basis: TimeBasis | None = None
@@ -177,4 +179,6 @@ class RebuiltPlan(BaseModel):
     options_total: int | None = None
     options_truncated: bool = False
     diagnostics: SearchDiagnostics | None = None
+    next_option_offset: int | None = None
+    data_revision: str | None = None
     airports: list[Airport] = Field(default_factory=list)
