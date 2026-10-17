@@ -338,7 +338,7 @@ class FlightReader(SQLiteConnection):
 
     def _destination_candidates(self, connection, request, policy, basis):
         """Use bounded, lightweight edge data before loading full flight records."""
-        limit = max(100_000, request.limits.max_records * 20, request.limits.max_candidates)
+        limit = max(100_000, request.limits.max_records * 20, request.limits.max_candidates or 0)
         rows = connection.execute(
             "SELECT s.code,l.source_record_key,l.origin_iata,l.destination_iata,"
             "l.departure_lower_us,l.departure_upper_us,l.arrival_lower_us,l.arrival_upper_us "
