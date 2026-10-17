@@ -22,7 +22,8 @@ from core.routing.models import (
     RouteSearchRequest,
     RoutingError,
 )
-from core.routing.search import search_routes
+from core.routing.projection import ProjectedSnapshot, RoutingEdge
+from core.routing.search import calculate_routes, search_routes
 from core.routing.snapshot import RoutingSnapshot
 from ingestion.updater import FlightUpdater
 from server.api import app, get_store
@@ -63,6 +64,49 @@ def query(**updates):
 
 def identity(legs):
     return tuple((f.provider, f.provider_id) for f in legs)
+
+
+def test_default_search_ranks_candidates_beyond_the_former_cutoff():
+    # The best flight departs last. A departure-ordered candidate cutoff would
+    # return a feasible but worse flight even though the entire graph was loaded.
+    edges = tuple(
+        RoutingEdge(
+            "test",
+            str(i),
+            "AAA",
+            "EEE",
+            departure := BASE + timedelta(microseconds=i),
+            departure,
+            arrival := departure + timedelta(minutes=1 if i == 100_000 else 120),
+            arrival,
+            "scheduled",
+        )
+        for i in range(100_001)
+    )
+    snapshot = ProjectedSnapshot(edges, (), (), "scheduled", 1)
+    request = query(limit=1)
+    result = calculate_routes(request, snapshot, best_first=True, include_replay_identity=False)
+    assert result.diagnostics.exhaustive
+    assert result.diagnostics.stats.candidates_checked == 100_001
+    assert result.paths[0].legs[0].provider_id == "100000"
+
+    limited = calculate_routes(
+        query(limit=1, limits={"max_candidates": 100_000}),
+        snapshot,
+        best_first=True,
+        include_replay_identity=False,
+    )
+    assert not limited.diagnostics.exhaustive
+    assert limited.diagnostics.termination_reasons == ["candidate_limit"]
+    assert limited.paths[0].legs[0].provider_id != "100000"
+
+
+@pytest.mark.parametrize("limit", [None, 200_001, 999_999_999])
+def test_caller_can_disable_or_choose_a_larger_candidate_budget(limit):
+    request = query(limits={"max_candidates": limit})
+    assert request.limits.max_candidates == limit
+    result = search_routes(request, RoutingSnapshot((flight("one", "AAA", "EEE", 0, 60),)))
+    assert result.diagnostics.exhaustive and len(result.items) == 1
 
 
 def chain(count):
@@ -869,7 +913,7 @@ def test_rejected_selection_reports_measured_gap(tmp_path):
         {"minimum_connection_minutes": 50, "maximum_connection_minutes": 30},
         {"avoid_airports": ["AAA"]},
         {"horizon_end": BASE + timedelta(days=100)},
-        {"limits": {"max_candidates": 999999999}},
+        {"limits": {"max_candidates": 0}},
         {"departure_start": "0001-01-01T00:00:00+14:00"},
     ],
 )

@@ -66,7 +66,8 @@ class RoutingSession:
         self.required_via = required_via_airports(request.via_airport)
 
     def take(self):
-        if self.stats.candidates_checked >= self.request.limits.max_candidates:
+        limit = self.request.limits.max_candidates
+        if limit is not None and self.stats.candidates_checked >= limit:
             self.search_truncated = True
             raise SearchBudgetReached()
         self.stats.candidates_checked += 1
