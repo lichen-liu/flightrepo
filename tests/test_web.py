@@ -1134,7 +1134,7 @@ def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
     assert "img-src 'self'" in response.headers["content-security-policy"]
 
 
-def test_family_shell_keeps_accessible_flight_workspace_and_system_theme(client):
+def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
     class Elements(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -1175,14 +1175,14 @@ def test_family_shell_keeps_accessible_flight_workspace_and_system_theme(client)
     assert any(
         tag == "meta"
         and attrs.get("name") == "color-scheme"
-        and attrs.get("content") == "light dark"
+        and attrs.get("content") == "dark"
         for tag, attrs in nodes
     )
     css = client.get("/assets/app.css").text
     assert "@media (prefers-color-scheme: dark)" in css
-    assert "color-scheme: light dark" in css
-    # These source checks preserve the agreed system-theme contract. Browser
-    # QA still has to establish computed colors, contrast, layout and focus.
+    assert "color-scheme: dark" in css
+    # Native controls use the night palette too. Browser QA establishes
+    # computed colors, contrast, layout and focus.
     assert "@media (prefers-reduced-motion: reduce)" in css
 
 

@@ -190,6 +190,15 @@ export class RouteMap {
         ? `Flight route ${this.legs.map((f) => f.origin_iata).join(" → ")} → ${this.legs.at(-1).destination_iata}`
         : "World map",
     );
+    const defs = s.append("defs");
+    const ocean = defs.append("radialGradient").attr("id", "atlas-ocean").attr("cx", "35%").attr("cy", "25%").attr("r", "80%");
+    ocean.append("stop").attr("offset", "0%").attr("stop-color", "#153b49");
+    ocean.append("stop").attr("offset", "70%").attr("stop-color", "#0a2030");
+    ocean.append("stop").attr("offset", "100%").attr("stop-color", "#06111e");
+    if (this.mode === "globe") {
+      s.append("circle").attr("class", "map-atmosphere").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale());
+      s.append("circle").attr("class", "map-orbit").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale() * 1.09);
+    }
     s.append("path")
       .datum({ type: "Sphere" })
       .attr("class", "map-ocean")

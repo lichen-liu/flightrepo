@@ -490,7 +490,7 @@ function renderOptions() {
           const count = item.legs.length,
             codes = journeyAirports(item.legs);
           return `<button class="option" type="button" data-option="${index}" aria-pressed="${!state.selection?.edited && item.itinerary_id === state.selection?.itinerary_id}">
-      <span class="option-title"><span>${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)).split(",").at(-1).trim())}</span><span>${e(duration(item.duration_minutes))}</span></span>
+      <span class="option-title"><span><span class="option-rank" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)).split(",").at(-1).trim())}</span><span>${e(duration(item.duration_minutes))}</span></span>
       <span class="route-codes route-chain" aria-label="${e(codes.join(" → "))}">${routeChain(codes)}</span>
       ${durationChart(item.legs)}
       <span class="option-times">Depart ${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)))}<br>Arrive ${e(stamp(item.arrival, zone(item.legs.at(-1).destination_iata, result)))}</span>
