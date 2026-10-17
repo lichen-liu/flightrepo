@@ -99,10 +99,19 @@ export class RouteMap {
       ])
       .filter(Boolean);
     if (points.length && this.d3) {
-      const c = this.d3.geoCentroid({
-        type: "MultiPoint",
-        coordinates: points,
-      });
+      const center = this.d3.geoCentroid({ type: "MultiPoint", coordinates: points });
+      // A centroid overweights clustered stops and can hide a distant origin.
+      // Also consider the midpoint of the widest pair, then minimize the
+      // furthest angular distance from the camera to any journey airport.
+      let widest = 0, pair = [points[0], points[0]];
+      for (let i = 0; i < points.length; i++)
+        for (let j = i + 1; j < points.length; j++) {
+          const distance = this.d3.geoDistance(points[i], points[j]);
+          if (distance > widest) { widest = distance; pair = [points[i], points[j]]; }
+        }
+      const candidates = [center, this.d3.geoInterpolate(...pair)(0.5)];
+      const radius = (c) => Math.max(...points.map((point) => this.d3.geoDistance(c, point)));
+      const c = candidates.reduce((best, candidate) => radius(candidate) < radius(best) ? candidate : best);
       this.rotation = [-c[0], -c[1], 0];
     } else this.rotation = [35, -35, 0];
     this.zoom = 1;

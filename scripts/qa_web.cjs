@@ -1275,3 +1275,18 @@ check("route map leads the desktop page and options visualize flights and connec
   await expect(page.locator("#route-map")).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth), false);
 });
+
+check("globe fit keeps a distant origin visible beside clustered connection airports", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async route => {
+    const response = await route.fetch(), data = await response.json();
+    const coordinates = {YYZ:[-75,43],LHR:[120,25],CDG:[100,14]};
+    data.airports = data.airports.map(airport => coordinates[airport.iata]
+      ? {...airport,longitude:coordinates[airport.iata][0],latitude:coordinates[airport.iata][1]} : airport);
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  for (const code of ["YYZ", "LHR", "CDG"])
+    await expect(page.locator("#route-map .map-airport-label", {hasText:code})).toBeVisible();
+  await page.getByRole("button", {name:"Fit journey",exact:true}).click();
+  await expect(page.locator("#route-map .map-airport-label", {hasText:"YYZ"})).toBeVisible();
+});
