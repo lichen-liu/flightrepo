@@ -5,6 +5,10 @@ publication and a read-only serving process. Flight facts use typed columns,
 integer UTC timestamps and shared admission rules. References remain dimensions;
 raw archives and temporary staging do not become serving tables.
 
+The [limits audit](backend-limits-audit.md) distinguishes benchmark fixture size
+from actual candidate, date, response and execution restrictions. The 100,000-row
+storage fixture does not configure the backend or cap its SQL graph.
+
 ## Read budgets
 
 Each server process admits two concurrent `/v1/` requests by default, plus one
