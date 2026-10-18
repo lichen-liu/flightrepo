@@ -292,6 +292,20 @@ with closing(sqlite3.connect(sys.argv[1])) as source, closing(sqlite3.connect(sy
         ).stdout
     )
     assert audited["health"]["passed"] and audited["counts"]["records"] == 2
+    # Adoption intentionally starts with a fresh reference catalog. Seed its
+    # local fixtures too, so this publication cannot download missing catalogs.
+    invoke(
+        [
+            "--db",
+            str(adopted),
+            "references",
+            "refresh",
+            "--airports-csv",
+            str(airports),
+            "--carriers-csv",
+            str(carriers),
+        ]
+    )
     replacement = root / "replacement.db"
     released = json.loads(
         invoke(

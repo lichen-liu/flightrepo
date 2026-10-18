@@ -40,11 +40,20 @@ class RoutingSession:
         self.include_replay_identity = include_replay_identity or request.trace
         # Simple paths cannot revisit airports. This is a graph-derived bound,
         # not a user-facing stop ceiling, and keeps unbounded searches finite.
-        airports = {
-            code for f in self.records.values() for code in (f.origin_iata, f.destination_iata)
-        }
+        supplied_index = getattr(snapshot, "index", None)
+        airport_count = (
+            supplied_index.airport_count
+            if supplied_index is not None
+            else len(
+                {
+                    code
+                    for f in self.records.values()
+                    for code in (f.origin_iata, f.destination_iata)
+                }
+            )
+        )
         self.max_legs = (
-            request.max_legs if request.max_legs is not None else max(1, len(airports) - 1)
+            request.max_legs if request.max_legs is not None else max(1, airport_count - 1)
         )
         anchors = len(getattr(request, "prefix", ())) + int(
             getattr(request, "chosen_next", None) is not None
@@ -57,7 +66,13 @@ class RoutingSession:
                 "snapshot_too_large",
                 "supplied snapshot exceeds the record budget; load a bounded snapshot",
             )
-        self.index = FlightIndex(self.records, policy, request.horizon_end)
+        self.index = supplied_index or FlightIndex(
+            self.records,
+            policy,
+            request.horizon_end,
+            minimum_legs=getattr(snapshot, "minimum_legs", None),
+            earliest_arrival=getattr(snapshot, "earliest_arrival", None),
+        )
         self.distance = self.index.minimum_legs_to(request.destination)
         self.stats = SearchStats(
             rows_loaded=len(self.records), origins_queried=snapshot.origins_queried
@@ -92,9 +107,13 @@ class RoutingSession:
             )
         )
 
-    def onward(self, previous, window):
-        candidates, skipped = self.index.onward(
-            previous, window, self.policy, self.request.horizon_end
+    def onward(self, previous, window, *, horizon=None, destinations=None, index=None):
+        candidates, skipped = (index or self.index).onward(
+            previous,
+            window,
+            self.policy,
+            horizon or self.request.horizon_end,
+            destinations=destinations,
         )
         self.stats.candidates_skipped_by_time += skipped
         return candidates
@@ -124,6 +143,9 @@ class RoutingSession:
         return progress == len(self.required_via)
 
     def diagnostics(self, *, result_limit_reached=False):
+        if getattr(self.snapshot, "index", None) is not None:
+            self.stats.rows_loaded = self.index.rows_loaded
+            self.stats.origins_queried = len(self.index.origins)
         reasons = []
         if self.snapshot.data_truncated:
             reasons.append("data_limit")

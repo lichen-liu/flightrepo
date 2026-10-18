@@ -5,11 +5,15 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from core.models import FlightStatus
 from core.routing.models import RoutingError
 from core.routing.snapshot import flight_key
+
+if TYPE_CHECKING:
+    from core.routing.index import FlightIndex
+
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -65,6 +69,8 @@ class ProjectedSnapshot:
     data_truncated: bool = False
     minimum_legs: dict = field(default_factory=dict)
     earliest_arrival: dict = field(default_factory=dict)
+    index: "FlightIndex | None" = field(default=None, repr=False, compare=False)
+    data_revision: str | None = None
 
     def with_time_basis(self, basis):
         if basis not in (None, self.time_basis):
@@ -87,6 +93,7 @@ class ProjectedSnapshot:
             json.dumps(
                 {
                     "basis": self.time_basis,
+                    "data_revision": self.data_revision,
                     "airports": [
                         (a.iata, a.city_id) for a in sorted(self.airports, key=lambda a: a.iata)
                     ],

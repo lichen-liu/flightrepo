@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-ENGINE_VERSION = "routing-7"
+ENGINE_VERSION = "routing-8"
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None

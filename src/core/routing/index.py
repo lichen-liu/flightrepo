@@ -13,7 +13,9 @@ def departure_key(flight):
 
 
 class FlightIndex:
-    def __init__(self, records, policy, horizon):
+    def __init__(self, records, policy, horizon, *, minimum_legs=None, earliest_arrival=None):
+        self.minimum_legs = minimum_legs or {}
+        self.earliest_arrival = earliest_arrival or {}
         grouped = defaultdict(list)
         for flight in records.values():
             if flight.blocked_for_search:
@@ -39,21 +41,48 @@ class FlightIndex:
                 reverse[flight.destination_iata].add(arrival)
         self.reverse = reverse
 
-    def window(self, origin, lower, upper, *, upper_inclusive=True):
+    def first_departure(self, previous, window, policy, seen, horizon):
+        candidates, _ = self.onward(previous, window, policy, horizon)
+        try:
+            return next(
+                (
+                    flight.departure_lower
+                    for flight in candidates
+                    if policy.assess(previous, flight, window, seen, horizon).reason == "accepted"
+                ),
+                None,
+            )
+        finally:
+            candidates.close()
+
+    def for_horizon(self, horizon, window, *, start=None):
+        return self
+
+    def origin_size(self, origin):
+        return len(self.by_origin.get(origin, ()))
+
+    def window(
+        self, origin, lower, upper, *, upper_inclusive=True, destinations=None, arrival_horizon=None
+    ):
         rows, times = self.by_origin.get(origin, ()), self.times.get(origin, ())
         a = bisect_left(times, lower)
         b = bisect_right(times, upper) if upper_inclusive else bisect_left(times, upper)
         b = max(a, b)
-        return map(rows.__getitem__, range(a, b)), len(rows) - (b - a)
+        selected = map(rows.__getitem__, range(a, b))
+        if arrival_horizon is not None:
+            selected = (flight for flight in selected if flight.arrival_upper <= arrival_horizon)
+        if destinations is not None:
+            selected = (flight for flight in selected if flight.destination_iata in destinations)
+        return selected, len(rows) - (b - a)
 
-    def onward(self, previous, window, policy, horizon):
+    def onward(self, previous, window, policy, horizon, *, destinations=None):
         groups, skipped = [], 0
         for origin in policy.origins(previous.destination_iata):
             bounds = policy.bounds(previous, origin, window, horizon)
             rows, excluded = (
-                self.window(origin, *bounds)
+                self.window(origin, *bounds, destinations=destinations, arrival_horizon=horizon)
                 if bounds
-                else ((), len(self.by_origin.get(origin, ())))
+                else ((), self.origin_size(origin))
             )
             groups.append(rows)
             skipped += excluded

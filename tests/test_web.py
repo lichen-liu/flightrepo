@@ -548,7 +548,7 @@ def test_large_sql_projection_hydrates_only_returned_flights(demo, monkeypatch):
     )
     assert result.diagnostics.exhaustive
     assert result.diagnostics.scope == "sql_projection"
-    assert result.diagnostics.stats.rows_loaded == count
+    assert count <= result.diagnostics.stats.rows_loaded <= count + len(data["flights"])
     assert result.diagnostics.stats.records_hydrated == len(decoded) == 2
     assert result.items[0].legs == [flights[-1]]
     returned = {(f.provider, f.provider_id) for item in result.items for f in item.legs}

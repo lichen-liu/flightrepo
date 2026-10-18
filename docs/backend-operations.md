@@ -90,7 +90,8 @@ still retain stable replay identities.
 
 ## Index and publication maintenance
 
-The table contract remains version 1. Three additive destination/arrival indexes
+The table contract remains version 1. A covering airport-pair index supports
+relaxed routing bounds without scanning flight metadata. Three destination/arrival indexes
 complement the existing departure indexes, with one partial index per time basis.
 Cancelled and incomplete records do not occupy these indexes. See the
 [canonical definitions](../src/core/query_indexes.sql) and
@@ -132,6 +133,12 @@ rejections and reports readiness p95 latency. Other HTTP errors, incomplete
 ranking or inconsistent successful responses fail the probe. For a representative
 local serving instance, use `--url`, `--query-json` and optionally `--utc` with a
 request for that endpoint. The probe refuses non-loopback hosts.
+
+Profile a representative database search or continuation with
+`scripts/profile_route_search.py`. It reports elapsed time, process peak memory,
+SQL statement count and routing work, and can compare ordered results with a
+saved baseline. See [routing performance](routing-performance.md) for the query
+strategy, correctness arguments, measurements and commands.
 
 Compare write cost and inbound query plans on disposable synthetic data:
 
