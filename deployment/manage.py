@@ -24,9 +24,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from serve import read_settings
 
 LABELS = {"server": "fyi.boboji.flyji.server", "tunnel": "fyi.boboji.flyji.tunnel"}
-# Match startup and ongoing probes; real-archive aggregation needs headroom
-# beyond ten seconds while every HTTP operation remains bounded.
+# Readiness and ordinary HTTP checks should fail promptly.
 HTTP_PROBE_TIMEOUT = 20
+# A publication invalidates cached statistics; a cold catalog scans the archive.
+CATALOG_PROBE_TIMEOUT = 180
 # The offline preflight aggregates catalogs and exercises routing on real data.
 INSTALLATION_CHECK_TIMEOUT = 180
 
@@ -271,7 +272,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
 
     opener = build_opener(SameOriginRedirect())
 
-    def fetch(path, payload=None):
+    def fetch(path, payload=None, *, timeout=HTTP_PROBE_TIMEOUT):
         body = json.dumps(payload).encode() if payload is not None else None
         request = Request(
             base_url + path,
@@ -281,7 +282,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
                 "User-Agent": "Flyji-Deployment-Check/1.0",
             },
         )
-        with opener.open(request, timeout=HTTP_PROBE_TIMEOUT) as response:
+        with opener.open(request, timeout=timeout) as response:
             if origin(response.geturl()) != expected_origin:
                 raise ValueError("The response is not from the configured Flyji origin.")
             content = response.read(1_000_001)
@@ -294,7 +295,7 @@ def probe(base_url: str, *, data_mode="synthetic") -> dict:
     if b"via_airport" not in fetch("/assets/app.mjs"):
         raise ValueError("The Flyji frontend is missing or outdated.")
     ready = json.loads(fetch("/health/ready"))
-    catalog = json.loads(fetch("/v1/catalog"))
+    catalog = json.loads(fetch("/v1/catalog", timeout=CATALOG_PROBE_TIMEOUT))
     if not isinstance(ready, dict) or not isinstance(catalog, dict):
         raise ValueError("Unexpected readiness or catalog response from Flyji.")
     dataset = catalog.get("dataset")
