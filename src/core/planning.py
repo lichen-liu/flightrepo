@@ -21,6 +21,7 @@ from core.routing.policy import Assessment, ConnectionPolicy
 from core.routing.projection import ProjectedSnapshot, RoutingEdge
 from core.routing.session import RoutingSession, SearchBudgetReached
 from core.routing.snapshot import RoutingSnapshot, flight_key
+from core.routing.tail import earliest_tail
 
 
 def rejection_context(flight: FlightRecord, assessment) -> dict:
@@ -153,74 +154,8 @@ def calculate_rebuild(
     prefix_via = session.via_progress(prefix)
     memo, options, total, chosen = {}, [], 0, None
 
-    def tail_frame(previous, remaining, seen, path, via_progress):
-        if via_progress is None:
-            return None
-        if previous.destination_iata == request.destination:
-            return ((), ()) if session.via_satisfied(via_progress) else None
-        if remaining == 0 or not session.reachable(previous.destination_iata, remaining):
-            return None
-        key = (flight_key(previous), remaining, tuple(sorted(seen)), via_progress)
-        if key in memo:
-            session.stats.memo_hits += 1
-            return memo[key]
-        session.stats.states_expanded += 1
-        best, best_score = None, None
-        try:
-            for flight in session.onward(previous, later_window):
-                session.take()
-                assessment = policy.assess(
-                    previous, flight, later_window, seen, request.horizon_end
-                )
-                next_seen = seen | {flight.origin_iata, flight.destination_iata}
-                next_via = session.advance_via(via_progress, flight)
-                if assessment.reason == "accepted" and next_via is None:
-                    assessment = Assessment("required_via_out_of_order")
-                if (
-                    assessment.reason == "accepted"
-                    and flight.destination_iata == request.destination
-                    and not session.via_satisfied(next_via)
-                ):
-                    assessment = Assessment("required_via_not_visited")
-                session.record(path, flight, assessment)
-                if assessment.reason != "accepted":
-                    continue
-                tail = yield (
-                    flight,
-                    remaining - 1,
-                    next_seen,
-                    [*path, flight],
-                    next_via,
-                )
-                if tail is None:
-                    continue
-                candidate = ((flight, *tail[0]), (assessment.connection, *tail[1]))
-                score = (
-                    candidate[0][-1].arrival_upper,
-                    len(candidate[0]),
-                    tuple(flight_key(f) for f in candidate[0]),
-                )
-                if best_score is None or score < best_score:
-                    best, best_score = candidate, score
-        except SearchBudgetReached:
-            pass
-        if not session.search_truncated:
-            memo[key] = best
-        return best
-
     def best_tail(*args):
-        # Drive recursive subproblems with generators so long valid journeys
-        # do not depend on Python's recursion limit.
-        stack, result = [tail_frame(*args)], None
-        while stack:
-            try:
-                child = stack[-1].send(result)
-                stack.append(tail_frame(*child))
-                result = None
-            except StopIteration as done:
-                stack.pop()
-                result = done.value
-        return result
+        return earliest_tail(session, *args, later_window, memo)
 
     def option(flight, assessment):
         return PlannedOption(
@@ -331,7 +266,13 @@ def calculate_rebuild(
                     if assessment.reason != "accepted":
                         continue
                     item = option(flight, assessment)
-                    fill_tail(item)
+                    visible = (
+                        request.option_offset
+                        <= total
+                        < request.option_offset + request.option_limit
+                    )
+                    if visible or request.chosen_next is None and chosen is None:
+                        fill_tail(item)
                 total += 1
                 if (
                     request.option_offset

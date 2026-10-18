@@ -1,7 +1,7 @@
 # Backend limits audit
 
 Audited on October 17, 2026, initially against PR #22 revision `3b7162e` and
-updated after its merge and the search-scope follow-up. This covers the public
+updated after its merge, the search-scope follow-up and the October 18 routing optimization. This covers the public
 search path, calendar and listing APIs, private snapshot/replay, ingestion and hosted serving. It describes code
 behavior, not a deployment.
 
@@ -65,11 +65,13 @@ paths; pagination does not promise constant computation or memory.
 
 ## Paths that do not impose a live SQL row cap
 
-Normal database search and continuation use `server.routing_projection.project_routes`.
-Its SQL has no row `LIMIT`. SQL retains all admitted edges matching the requested
-time window and conservative reachability filters. Exact timing, via order and
-cycle decisions remain in the engine. Full details are fetched only for returned
-flights and validation anchors.
+Normal database search and continuation use indexed SQL windows through
+`server.routing_projection`. These queries have no row `LIMIT`. The engine
+prunes only with conservative reachability or ranking bounds derived from valid
+incumbents. Earliest-tail trials expand to the full requested horizon when
+needed; their initial size is not a coverage ceiling. Full details are fetched
+only for returned flights and validation anchors. See the
+[routing performance notes](routing-performance.md) for the proofs and probes.
 
 The private `routing_snapshot` / `rebuild_snapshot` paths are different:
 

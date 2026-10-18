@@ -27,12 +27,11 @@ from core.routing.models import (
 )
 from core.routing.policy import ConnectionPolicy
 from core.routing.results import RouteSearchResult
-from core.routing.search import calculate_routes
 from core.routing.snapshot import RoutingSnapshot, flight_key
 from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
 from server.reachability import TimeEdge, reverse_reachable_flights
-from server.routing_projection import project_routes
+from server.routing_projection import calculate_database_routes, project_routes
 from server.web_models import (
     AirportCoverage,
     AirportTraffic,
@@ -620,8 +619,9 @@ class FlightReader(SQLiteConnection):
                 airports,
                 transfers,
                 basis,
-                prefix=tuple(normalized),
                 anchors=tuple(anchors.values()),
+                start=normalized[-1].arrival_upper,
+                revision=revision,
             )
             hydrated = {
                 key: f.model_copy(update={"time_basis": basis}) if basis != "scheduled" else f
@@ -739,9 +739,14 @@ class FlightReader(SQLiteConnection):
             self.check_page_revision(request.data_revision)
         basis = request.time_basis or self._default_basis(connection)
         request = self._search_horizon(connection, request, basis)
-        snapshot = project_routes(connection, request, airports, transfers, basis)
-        calculation = calculate_routes(
-            request, snapshot, best_first=True, include_replay_identity=not self.serving_only
+        calculation = calculate_database_routes(
+            connection,
+            request,
+            airports,
+            transfers,
+            basis,
+            revision=revision,
+            include_replay_identity=not self.serving_only,
         )
         hydrated = self._hydrate_flights(connection, calculation.flights, basis)
         result = calculation.materialize(hydrated)

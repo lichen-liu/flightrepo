@@ -1,8 +1,10 @@
 """Enumerate bounded simple paths; retain exact top-k under an explicit ranking."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 from heapq import heappop, heappush, heapreplace
 from itertools import count
+from math import inf, nextafter
 
 from core.connections import ConnectionWindow
 from core.routing.models import RouteSearchRequest, SearchDiagnostics
@@ -126,19 +128,67 @@ def calculate_routes(
     )
     best = []
 
-    def frame(legs, connections, seen, via_progress):
+    def candidate_bounds(legs):
+        remaining = session.max_legs - len(legs)
+        horizon = request.horizon_end
+        if best_first and len(best) == retained:
+            worst = best[0].score
+            elapsed = None
+            if request.ranking == "fewest_legs":
+                remaining = min(remaining, worst[0] - len(legs))
+                if (
+                    legs
+                    and len(legs) + session.distance.get(legs[-1].destination_iata, 0) >= worst[0]
+                ):
+                    elapsed = worst[1]
+            elif request.ranking == "earliest_arrival":
+                horizon = min(horizon, worst[0])
+            else:
+                elapsed = worst[0]
+            if elapsed is not None:
+                # Scores use floating seconds. Include the whole tied float bin,
+                # then let the complete score decide ties by legs and identity.
+                duration = timedelta(seconds=nextafter(elapsed, inf))
+                departure = legs[0].departure_lower if legs else request.departure_end
+                if duration < horizon - departure:
+                    horizon = departure + duration
+        return remaining, horizon
+
+    def frame(legs, connections, seen, via_progress, *, terminal=None):
         session.stats.states_expanded += 1
-        if legs:
-            candidates = session.onward(legs[-1], window)
-        else:
-            candidates, skipped = session.index.window(
-                request.origin,
-                request.departure_start,
-                request.departure_end,
-                upper_inclusive=False,
-            )
-            session.stats.candidates_skipped_by_time += skipped
-        return legs, connections, seen, via_progress, iter(candidates)
+
+        def read(destinations=None):
+            remaining, horizon = candidate_bounds(legs)
+            if destinations is None and best_first:
+                destinations = frozenset(
+                    code
+                    for code, distance in session.distance.items()
+                    if distance < remaining and code != request.destination
+                )
+                if not destinations:
+                    return
+            if legs:
+                candidates = session.onward(
+                    legs[-1], window, horizon=horizon, destinations=destinations
+                )
+            else:
+                candidates, skipped = session.index.window(
+                    request.origin,
+                    request.departure_start,
+                    request.departure_end,
+                    upper_inclusive=False,
+                    destinations=destinations,
+                    arrival_horizon=horizon,
+                )
+                session.stats.candidates_skipped_by_time += skipped
+            yield from candidates
+
+        if terminal:
+            airport = legs[-1].destination_iata if legs else request.origin
+            if session.distance.get(airport, session.max_legs + 1) > 1:
+                return legs, connections, seen, via_progress, iter(())
+        destinations = frozenset((request.destination,)) if terminal else None
+        return legs, connections, seen, via_progress, read(destinations)
 
     def extend(legs, connections, seen, via_progress, flight):
         session.take()
@@ -209,22 +259,43 @@ def calculate_routes(
             return arrival, minimum_legs, elapsed, departure, identity
         return minimum_legs, elapsed, departure, arrival, identity
 
+    def detour_score(legs):
+        if not legs:
+            arrival = departure = request.departure_start
+            count = max(2, session.distance.get(request.origin, session.max_legs + 1))
+            if request.ranking == "shortest_elapsed":
+                return 0, count, arrival, departure, ()
+            if request.ranking == "earliest_arrival":
+                return arrival, count, 0, departure, ()
+            return count, 0, departure, arrival, ()
+        bound = list(lower_score(legs))
+        position = 0 if request.ranking == "fewest_legs" else 1
+        bound[position] = max(bound[position], len(legs) + 2)
+        return tuple(bound)
+
     try:
         if best_first:
             serial = count()
-            pending = [((), next(serial), ([], [], {request.origin}, 0))]
+            pending = [((), next(serial), ([], [], {request.origin}, 0), True)]
             while pending:
-                lower, _, state = heappop(pending)
+                lower, _, state, terminal = heappop(pending)
                 if len(best) == retained and lower >= best[0].score:
                     # No unexpanded path can improve the retained ranking.
                     break
-                legs, connections, seen, via_progress, candidates = frame(*state)
+                legs, connections, seen, via_progress, candidates = frame(*state, terminal=terminal)
                 for flight in candidates:
                     child = extend(legs, connections, seen, via_progress, flight)
                     if child is not None:
                         bound = lower_score(child[0])
                         if len(best) < retained or bound < best[0].score:
-                            heappush(pending, (bound, next(serial), child))
+                            heappush(pending, (bound, next(serial), child, True))
+                if terminal and len(legs) + 2 <= session.max_legs:
+                    # Finishing here and taking a detour have different lower
+                    # leg counts. Delay detours until shorter completions have
+                    # established a bound, without allocating their child paths.
+                    bound = detour_score(legs)
+                    if len(best) < retained or bound < best[0].score:
+                        heappush(pending, (bound, next(serial), state, False))
         else:
             stack = [frame([], [], {request.origin}, 0)]
             while stack:
