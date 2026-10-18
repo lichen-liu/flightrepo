@@ -131,4 +131,7 @@ The startup installation check has a three-minute deadline because it validates
 real catalog aggregates and an end-to-end search before loading either job.
 A failed or timed-out check leaves both jobs unloaded. This deadline applies to
 the deployment preflight, not to user route searches or their coverage. Startup
-readiness and ongoing HTTP probes retain their separate budgets.
+readiness and ordinary HTTP probes retain a 20-second timeout. The catalog probe
+allows three minutes for a cold statistics refresh, including when ingestion
+publishes between checks and invalidates the cache. A catalog timeout still
+fails the deployment check; it does not shorten or truncate user searches.

@@ -1052,23 +1052,34 @@ def test_startup_readiness_deadline_is_bounded_after_timeouts(scripts, monkeypat
     assert clock[0] <= 60.2
 
 
-def test_public_probe_allows_slow_archive_responses_with_bounded_requests(scripts, monkeypatch):
+@pytest.mark.parametrize("catalog_seconds", [45, 181])
+def test_public_probe_allows_cold_catalog_with_bounded_requests(
+    scripts, monkeypatch, catalog_seconds
+):
     bodies = public_responses()
-    budgets = []
+    budgets = {}
 
     def open_url(request, timeout):
-        budgets.append(timeout)
-        # A 12-second response is valid for a large archive; no wall-clock wait.
-        if timeout < 12:
+        path = urlsplit(request.full_url).path
+        budgets[path] = timeout
+        # Publication can invalidate the catalog cache; no wall-clock wait.
+        seconds = catalog_seconds if path == "/v1/catalog" else 12
+        if timeout < seconds:
             raise TimeoutError("archive aggregation exceeded request budget")
-        value = bodies[urlsplit(request.full_url).path]
+        value = bodies[path]
         return Response(
             value if isinstance(value, bytes) else json.dumps(value).encode(), request.full_url
         )
 
     stub_requests(scripts, monkeypatch, open_url)
-    assert scripts.manage.probe("https://fly.boboji.fyi")["route_search"] == "passed"
-    assert budgets and all(12 <= timeout <= 20 for timeout in budgets)
+    if catalog_seconds > 180:
+        with pytest.raises(TimeoutError):
+            scripts.manage.probe("https://fly.boboji.fyi")
+        assert "/v1/itineraries/search" not in budgets
+    else:
+        assert scripts.manage.probe("https://fly.boboji.fyi")["route_search"] == "passed"
+    assert budgets.pop("/v1/catalog") == 180
+    assert set(budgets.values()) == {20}
 
 
 def test_application_overlay_rejects_replaced_routing_code(tmp_path, scripts, monkeypatch):
