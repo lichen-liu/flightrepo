@@ -310,7 +310,7 @@ def test_airport_coverage_counts_exact_airports_and_missing_directions(client, d
     assert len(client.get("/v1/airport-coverage?airport=YYZ&airport=yyz").json()["airports"]) == 1
     assert client.get("/v1/airport-coverage?airport=bad-code").status_code == 422
     assert client.get("/v1/airport-coverage?airport=YYZ&time_basis=bad").status_code == 422
-    assert client.get("/v1/airport-coverage?airport=YYZ&airport=NRT&airport=LHR").status_code == 422
+    assert client.get("/v1/airport-coverage?airport=YYZ&airport=NRT&airport=LHR").status_code == 200
     assert client.get("/v1/airport-coverage").status_code == 422
 
 
@@ -355,6 +355,7 @@ def test_search_availability_uses_departure_day_and_destination_arrival_window(c
         "clock": "UTC",
         "time_basis": "scheduled",
         "departure_date": "2026-10-17",
+        "onward_days": 7,
     }
     response = client.get("/v1/search-availability", params=params)
     assert response.status_code == 200, response.text
@@ -430,6 +431,7 @@ def test_search_availability_resolves_dst_and_counts_same_day_arrivals(client, d
             "destination": "CDG",
             "clock": "local",
             "departure_date": day,
+            "onward_days": 7,
         },
     ).json()
     assert data["selected_date"] == day and data["outbound"] == 1 and data["inbound"] >= 1
@@ -671,13 +673,13 @@ def test_departure_search_needs_no_arrival_input(client):
     assert result["items"]
     query = result["query"]
     assert query["departure_end"] == "2026-10-18T04:00:00Z"
-    assert query["horizon_end"] == "2026-10-25T04:00:00Z"
+    assert query["horizon_end"] == "2026-10-19T05:30:00Z"
 
 
 @pytest.mark.parametrize("date,hours", [("2026-03-08", 23), ("2026-11-01", 25)])
-def test_default_horizon_follows_resolved_departure_window_across_dst(client, date, hours):
+def test_explicit_horizon_follows_resolved_departure_window_across_dst(client, date, hours):
     response = client.post(
-        "/v1/itineraries/search/local", json=departure_request(departure_date=date)
+        "/v1/itineraries/search/local", json=departure_request(departure_date=date, onward_days=7)
     )
     assert response.status_code == 200, response.text
     query = response.json()["query"]
@@ -701,13 +703,13 @@ def test_default_horizon_does_not_require_destination_timezone(client, demo):
     assert response.status_code == 200, response.text
     result = response.json()
     assert result["items"] and result["arrival_timezone"] is None
-    assert result["query"]["horizon_end"] == "2026-10-25T04:00:00Z"
+    assert result["query"]["horizon_end"] == "2026-10-18T04:00:00Z"
 
 
 @pytest.mark.parametrize("date", ["9999-12-28", "9999-12-31"])
-def test_default_horizon_overflow_is_a_readable_422(client, date):
+def test_explicit_horizon_overflow_is_a_readable_422(client, date):
     response = client.post(
-        "/v1/itineraries/search/local", json=departure_request(departure_date=date)
+        "/v1/itineraries/search/local", json=departure_request(departure_date=date, onward_days=7)
     )
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["code"] == "invalid_local_dates"
@@ -735,12 +737,12 @@ def test_wide_departure_range_remains_editable(client):
     assert plan.json()["complete"] and plan.json()["legs"] == legs
 
 
-def test_departure_range_still_respects_elapsed_day_bound(client):
+def test_departure_range_across_dst_has_no_elapsed_day_ceiling(client):
     response = client.post(
         "/v1/itineraries/search/local",
         json=departure_request(departure_date="2026-10-10", departure_last_date="2026-11-09"),
     )
-    assert response.status_code == 422, response.text
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 """Legacy list adapter. Partial searches must not masquerade as ranked results."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from core.contracts import RoutingQuery
 from core.models import Itinerary
@@ -15,16 +15,12 @@ def build_itineraries(
     end: datetime,
     max_legs: int | None = None,
     min_connection_minutes: int = 45,
-    max_connection_minutes: int = 360,
+    max_connection_minutes: int | None = None,
     limit: int = 20,
     *,
     horizon_end: datetime | None = None,
+    offset: int = 0,
 ) -> list[Itinerary]:
-    if horizon_end is None:
-        try:
-            horizon_end = end + timedelta(days=7)
-        except OverflowError as error:
-            raise ValueError("specify an arrival horizon within the datetime range") from error
     request = RouteSearchRequest(
         origin=origin,
         destination=destination,
@@ -35,6 +31,7 @@ def build_itineraries(
         minimum_connection_minutes=min_connection_minutes,
         maximum_connection_minutes=max_connection_minutes,
         limit=limit,
+        offset=offset,
     )
     result = store.search_itineraries(request)
     if not result.diagnostics.exhaustive:

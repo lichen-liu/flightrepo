@@ -108,6 +108,7 @@ class PublicQuery(BaseModel):
     ranking: Ranking
     limit: int
     time_basis: TimeBasis | None = None
+    offset: int = 0
 
 
 class PublicSearchResult(BaseModel):
@@ -115,6 +116,8 @@ class PublicSearchResult(BaseModel):
     items: list[PublicRouteItinerary]
     diagnostics: PublicDiagnostics
     airports: list[Airport]
+    next_offset: int | None = None
+    data_revision: str | None = None
 
 
 class PublicLocalSearchResult(PublicSearchResult):
@@ -142,6 +145,8 @@ class PublicPlan(BaseModel):
     options_total: int | None
     options_truncated: bool
     diagnostics: PublicDiagnostics | None
+    next_option_offset: int | None = None
+    data_revision: str | None = None
     airports: list[Airport]
 
 
@@ -343,6 +348,8 @@ def to_public(store, value):
             items=[itinerary(i) for i in value.items],
             diagnostics=diagnostics(value.diagnostics),
             airports=value.airports,
+            next_offset=value.next_offset,
+            data_revision=value.data_revision,
         )
         if isinstance(value, LocalRouteSearchResult):
             return PublicLocalSearchResult(

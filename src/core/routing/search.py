@@ -45,6 +45,7 @@ class RouteCalculation:
     paths: list
     airports: list
     diagnostics: SearchDiagnostics
+    next_offset: int | None = None
 
     @property
     def flights(self):
@@ -77,6 +78,7 @@ class RouteCalculation:
             items=items,
             airports=self.airports,
             diagnostics=self.diagnostics,
+            next_offset=self.next_offset,
         )
 
 
@@ -88,6 +90,23 @@ def calculate_routes(
     include_replay_identity=True,
 ) -> RouteCalculation:
     snapshot = snapshot.with_time_basis(request.time_basis)
+    if request.horizon_end is None:
+        request = request.model_copy(
+            update={
+                "horizon_end": max(
+                    request.departure_end,
+                    max(
+                        (
+                            f.arrival_upper
+                            for f in snapshot.flights
+                            if f.destination_iata == request.destination
+                        ),
+                        default=request.departure_end,
+                    ),
+                )
+            }
+        )
+    retained = request.offset + request.limit + 1
     policy = ConnectionPolicy(
         snapshot.airports,
         snapshot.transfers,
@@ -159,7 +178,7 @@ def calculate_routes(
         if flight.destination_iata == request.destination:
             session.stats.routes_found += 1
             item = RankedPath(route_score(next_legs, request.ranking), next_legs, links)
-            if len(best) < request.limit:
+            if len(best) < retained:
                 heappush(best, item)
             elif item.score < best[0].score:
                 heapreplace(best, item)
@@ -196,7 +215,7 @@ def calculate_routes(
             pending = [((), next(serial), ([], [], {request.origin}, 0))]
             while pending:
                 lower, _, state = heappop(pending)
-                if len(best) == request.limit and lower >= best[0].score:
+                if len(best) == retained and lower >= best[0].score:
                     # No unexpanded path can improve the retained ranking.
                     break
                 legs, connections, seen, via_progress, candidates = frame(*state)
@@ -204,7 +223,7 @@ def calculate_routes(
                     child = extend(legs, connections, seen, via_progress, flight)
                     if child is not None:
                         bound = lower_score(child[0])
-                        if len(best) < request.limit or bound < best[0].score:
+                        if len(best) < retained or bound < best[0].score:
                             heappush(pending, (bound, next(serial), child))
         else:
             stack = [frame([], [], {request.origin}, 0)]
@@ -220,7 +239,8 @@ def calculate_routes(
                     stack.append(frame(*child))
     except SearchBudgetReached:
         pass
-    paths = sorted(best, key=lambda item: item.score)
+    ranked = sorted(best, key=lambda item: item.score)
+    paths = ranked[request.offset : request.offset + request.limit]
     used_airports = {request.origin, request.destination}
     used_airports.update(
         code
@@ -235,8 +255,11 @@ def calculate_routes(
             (a for a in snapshot.airports if a.iata in used_airports), key=lambda a: a.iata
         ),
         diagnostics=session.diagnostics(
-            result_limit_reached=session.stats.routes_found > request.limit
+            result_limit_reached=session.stats.routes_found > request.offset + request.limit
         ),
+        next_offset=(request.offset + request.limit)
+        if len(ranked) > request.offset + request.limit and not session.search_truncated
+        else None,
     )
 
 

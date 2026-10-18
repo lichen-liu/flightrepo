@@ -132,7 +132,6 @@ def test_metadata_city_update_cannot_invalidate_existing_rule(demo):
     "updates",
     [
         {"horizon_end": "2026-10-18T01:00:00Z"},
-        {"horizon_end": "2027-01-01T00:00:00Z"},
         {"horizon_end": "2026-10-24T00:00:00"},
         {"window": {"not_before": "2026-10-19T00:00:00"}},
         {"window": {"minimum_minutes": 45, "maximum_minutes": 30}},

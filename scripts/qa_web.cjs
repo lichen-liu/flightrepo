@@ -125,6 +125,38 @@ check("flight details show the flight's stored aircraft type code", async (page)
   await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
 });
 
+check("journey pages append results and preserve the selected journey", async (page) => {
+  const requests = [];
+  await page.route("**/v1/itineraries/search/local", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    await route.continue({ postData: JSON.stringify({ ...body, limit: 2 }) });
+  });
+  const first = await open(page);
+  assert.equal(first.items.length, 2);
+  const selected = await page.locator('[data-option][aria-pressed="true"]').innerText();
+  await expect(page.locator("#more-routes")).toBeVisible();
+  await result(page, searchPath, () => page.locator("#more-routes").click());
+  await expect(page.locator("[data-option]")).toHaveCount(4);
+  assert.equal(requests.at(-1).offset, 2);
+  assert.equal(requests.at(-1).data_revision, first.data_revision);
+  assert.equal(await page.locator('[data-option][aria-pressed="true"]').innerText(), selected);
+  assert.equal(new Set(await page.locator("[data-option]").allTextContents()).size, 4);
+});
+
+check("arrival window is optional and survives shared search links", async (page) => {
+  const initial = await open(page);
+  assert.equal(initial.query.maximum_connection_minutes, null);
+  await page.locator("#search-details > summary").click();
+  await expect(page.locator('[name="onward-days"]')).toHaveValue("");
+  await page.locator('[name="onward-days"]').fill("100");
+  await page.locator('[name="onward-days"]').press("Tab");
+  await expect(page.locator("#date-zones")).toContainText("100 days");
+  const data = await search(page);
+  assert.equal(Date.parse(data.query.horizon_end) - Date.parse(data.query.departure_end), 100 * 86400000);
+  assert.equal(new URL(page.url()).searchParams.get("onward-days"), "100");
+});
+
 check("stop count defaults to unbounded and survives links exports and connection editing", async (page) => {
   const initial = await open(page);
   assert.equal(initial.query.max_legs, null);
@@ -212,7 +244,7 @@ check("counts follow the departure date and zero inbound disables every calendar
   await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
   await expect(page.locator("#origin-coverage")).not.toContainText("Inbound");
   await expect(page.locator("#destination-coverage")).not.toContainText("Outbound");
-  await expect(page.locator("#coverage-scope")).toContainText("7 days after the departure window");
+  await expect(page.locator("#date-zones")).toContainText("Arrivals use all available data");
   await page.getByLabel("To", { exact: true }).fill("XYZ");
   await expect(page.locator("#destination-coverage")).toContainText("Inbound: 0");
   await expect(page.locator("#coverage-warning")).toContainText("No searchable arrivals into XYZ");
@@ -383,7 +415,7 @@ check("last departure calendar navigates months within the selected range", asyn
   await expect(calendar.locator('[data-date="2026-11-01"]')).toBeEnabled();
   await expect(calendar.locator('[data-date="2026-11-17"]')).toBeDisabled();
   await month.click();
-  await expect(calendar.getByRole('button', { name: 'December 2026', exact: true })).toHaveCount(0);
+  await expect(calendar.getByRole('button', { name: 'December 2026', exact: true })).toHaveCount(1);
   await month.press('Escape');
   await calendar.locator('[data-date="2026-11-01"]').click();
   await expect(input).toHaveValue("2026-11-01");
@@ -607,6 +639,25 @@ async function viaSearch(page, input = "ams", expected = ["AMS"]) {
   return data;
 }
 
+check("next-flight pages append options without changing the selected journey", async (page) => {
+  const requests = [];
+  await page.route("**/v1/plans/rebuild", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    await route.continue({ postData: JSON.stringify({ ...body, option_limit: 1 }) });
+  });
+  await viaSearch(page);
+  const before = identity((await exported(page)).selection.legs);
+  await edit(page);
+  const first = await next(page);
+  await expect(page.locator("#more-next")).toBeVisible();
+  await result(page, /\/v1\/plans\/rebuild$/, () => page.locator("#more-next").click());
+  await expect(page.locator("[data-next]")).toHaveCount(2);
+  assert.equal(requests.at(-1).option_offset, first.next_option_offset);
+  assert.equal(requests.at(-1).data_revision, first.data_revision);
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+});
+
 check(
   "departure dates set the search window and discard old arrival inputs",
   async (page) => {
@@ -633,12 +684,12 @@ check(
     await expect(
       page.getByLabel("Repeated arrival time", { exact: true }),
     ).toHaveCount(0);
-    await expect(page.locator("#date-zones")).toContainText("7 days");
+    await expect(page.locator("#date-zones")).toContainText("all available data");
     assert.equal(initial.query.departure_start, "2026-10-17T04:00:00Z");
     const checkWindow = (query) =>
       assert.equal(
         Date.parse(query.horizon_end) - Date.parse(query.departure_end),
-        7 * 24 * 60 * 60 * 1000,
+        Math.max(Date.parse("2026-10-19T05:30:00Z"), Date.parse(query.departure_end)) - Date.parse(query.departure_end),
       );
     checkWindow(initial.query);
     assert.equal(new URL(page.url()).searchParams.has("arrival"), false);
@@ -940,6 +991,8 @@ check("partial searches differ from exhaustive empty results", async (page) => {
   );
   await page.unroute("**/v1/itineraries/search/local");
   await page.getByLabel("To", { exact: true }).fill("NRT");
+  await page.locator("#search-details > summary").click();
+  await page.locator('[name="maximum"]').selectOption("360");
   await page.getByLabel("Input clock").selectOption("UTC");
   const empty = await search(page);
   assert.equal(empty.diagnostics.exhaustive, true);
@@ -1143,7 +1196,7 @@ check(
       airport = selected.airports.find(
         (a) => a.iata === first.destination_iata,
       );
-    const threshold = Date.parse(first.arrival_scheduled) + 12 * 60 * 60 * 1000;
+    const threshold = Date.parse(first.arrival_scheduled) + 6 * 60 * 60 * 1000;
     const { localInput } = await import("../src/server/web/format.mjs");
     await edit(page);
     await page.getByLabel("Next departure").selectOption("after");

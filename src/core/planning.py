@@ -1,7 +1,7 @@
 """Exact-prefix continuation planning using the shared schedule routing rules."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from core.connections import (
     ConnectionWindow,
@@ -13,8 +13,6 @@ from core.connections import (
 from core.models import FlightRecord
 from core.routing.index import departure_key
 from core.routing.models import (
-    MAX_DEPARTURE_DAYS,
-    MAX_ONWARD_DAYS,
     RoutingError,
     SearchDiagnostics,
     required_via_airports,
@@ -58,13 +56,6 @@ def validate_prefix(
         and prefix[-1].destination_iata != request.destination
     ):
         raise RoutingError("invalid_horizon", "horizon_end must follow the selected arrival")
-    # A retained first flight may lie at the start of a full search window.
-    maximum_span = MAX_DEPARTURE_DAYS + MAX_ONWARD_DAYS
-    if request.horizon_end - prefix[0].departure_lower > timedelta(days=maximum_span):
-        raise RoutingError(
-            "invalid_horizon",
-            f"horizon must be within {maximum_span} days of first departure",
-        )
     policy = ConnectionPolicy(
         snapshot.airports,
         snapshot.transfers,
@@ -117,6 +108,8 @@ class PlanCalculation:
     options_total: int | None
     options_truncated: bool
     diagnostics: SearchDiagnostics
+    next_option_offset: int | None = None
+    data_revision: str | None = None
 
     @property
     def flights(self):
@@ -340,7 +333,11 @@ def calculate_rebuild(
                     item = option(flight, assessment)
                     fill_tail(item)
                 total += 1
-                if len(options) < request.option_limit:
+                if (
+                    request.option_offset
+                    <= total - 1
+                    < request.option_offset + request.option_limit
+                ):
                     options.append(item)
                 if request.chosen_next is None and chosen is None and item.complete:
                     chosen = item
@@ -350,8 +347,6 @@ def calculate_rebuild(
     if chosen is not None and all(
         flight_key(o.flight) != flight_key(chosen.flight) for o in options
     ):
-        if len(options) == request.option_limit:
-            options.pop()
         options.append(chosen)
     options.sort(key=lambda item: departure_key(item.flight))
     legs = [*prefix, *([chosen.flight, *chosen.tail] if chosen else [])]
@@ -361,7 +356,8 @@ def calculate_rebuild(
     ]
     final_via = session.via_progress(legs)
     complete = legs[-1].destination_iata == request.destination and session.via_satisfied(final_via)
-    diagnostics = session.diagnostics(result_limit_reached=total > request.option_limit)
+    more = total > request.option_offset + request.option_limit
+    diagnostics = session.diagnostics(result_limit_reached=more)
     partial = not diagnostics.exhaustive
     message = (
         "Later legs updated" if complete else "No complete continuation in the loaded search window"
@@ -407,6 +403,9 @@ def calculate_rebuild(
         options_total=None if session.search_truncated else total,
         options_truncated=total > len(options) or session.search_truncated,
         diagnostics=diagnostics,
+        next_option_offset=(request.option_offset + request.option_limit)
+        if more and not session.search_truncated
+        else None,
     )
 
 

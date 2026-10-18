@@ -177,6 +177,7 @@
                 <label
                   >Last departure date<input name="last-date" type="date"
                 /></label>
+                <label>Arrival window (days after last departure)<input name="onward-days" type="number" min="0" placeholder="All available data" /></label>
                 <label
                   >Maximum stops<select name="stops">
                     <option value="any" selected>Any number</option>
@@ -198,24 +199,22 @@
                     name="minimum"
                     type="number"
                     min="0"
-                    max="1440"
                     value="45"
                     required
                 /></label>
                 <label
                   >Maximum connection<select name="maximum">
                     <option value="180">3 hours</option>
-                    <option value="360" selected>6 hours</option>
+                    <option value="360">6 hours</option>
                     <option value="720">12 hours</option>
                     <option value="1440">24 hours</option>
-                    <option value="any">Any time in the search window</option>
+                    <option value="any" selected>Any time in the search window</option>
                   </select></label
                 >
                 <label
                   >Avoid airports<input
                     name="avoid"
                     placeholder="e.g. LHR, AMS"
-                    maxlength="199"
                     autocomplete="off"
                 /></label>
                 <label class="check"
@@ -330,6 +329,7 @@
               Choose airports and departure dates to find a route.
             </p>
           </div>
+          <button id="more-routes" type="button" hidden>Show more journeys</button>
         </section>
         <div class="journey-workspace">
           <section class="schedule-panel" aria-labelledby="schedule-heading">
@@ -409,7 +409,7 @@
                     >Next departure<select name="window">
                       <option value="soon">Within 6 hours</option>
                       <option value="day">Within 24 hours</option>
-                      <option value="any">Any time in the search window</option>
+                      <option value="any" selected>Any time in the search window</option>
                       <option value="after">After a date and time</option>
                     </select></label
                   >
@@ -418,8 +418,7 @@
                       name="minimum"
                       type="number"
                       min="0"
-                      max="1440"
-                      value="45"
+                        value="45"
                       required
                   /></label>
                   <label id="after-field" hidden
@@ -450,6 +449,7 @@
               ></p>
               <p id="editor-error" role="alert" class="error" hidden></p>
               <div id="next-options"></div>
+              <button id="more-next" type="button" hidden>Show more next flights</button>
             </section>
           </section>
           <details id="dataset-info" class="evidence-panel">

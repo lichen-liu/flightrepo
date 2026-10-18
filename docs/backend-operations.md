@@ -9,6 +9,45 @@ The [limits audit](backend-limits-audit.md) distinguishes benchmark fixture size
 from actual candidate, date, response and execution restrictions. The 100,000-row
 storage fixture does not configure the backend or cap its SQL graph.
 
+## Search scope and response pages
+
+Departure ranges, onward horizons, via/avoid counts and connection allowances
+have no arbitrary upper ceiling. Minimum allowances are nonnegative; a supplied
+maximum must be at least the minimum. Airports must be valid codes and journeys
+cannot repeat airports or reuse an endpoint as an intermediate stop.
+
+Omit `horizon_end` on UTC searches to include available destination arrivals.
+The server resolves it to the latest arrival in the selected time basis, at least
+the departure-window end. Local searches do the same when both `arrival_by_local`
+and `onward_days` are omitted. A positive or zero `onward_days` explicitly searches
+that many elapsed days after the resolved departure-window end. Do not supply it
+with `arrival_by_local`. Calendar availability accepts the same `onward_days`
+filter. The browser defaults to all available data and no maximum layover.
+
+POST search uses `offset` and `limit` (at most 100 per response), returning
+`next_offset` or null. Continuation uses `option_offset` and `option_limit` (at
+most 500 per response), returning `next_option_offset`. Keep the same query on
+later pages and send back `data_revision`. A changed database produces HTTP 409
+`data_changed`; restart the search rather than appending a page from different
+facts. Explicitly budget-limited partial calculations do not promise a next page.
+Continuation selection is independent of pagination. A selected option outside
+the page is included in addition to that page, so it cannot displace an entry.
+
+GET `/v1/airports`, `/v1/flights`, `/v1/routes` and legacy `/v1/itineraries` retain
+list-shaped bodies. Follow their `Link: <...>; rel="next"` headers, which preserve
+filters and carry the next `offset` and `data_revision`. `X-Next-Offset` and
+`X-Data-Revision` expose the same values. Airports, flights and route summaries
+return at most 1,000 per page; legacy itineraries return at most 100. These are
+response sizes, not total-result ceilings. Narrow airport lookup searches the
+full catalog; via autocomplete also queries the server rather than relying on
+the initial bootstrap subset.
+
+Offset paging reruns the query. Deep ranked pages retain the best `offset +
+limit + 1` paths to establish ordering and whether another page exists. They do
+not cache an entire search or promise constant work per page. Resource isolation,
+cancellation and host controls are tracked separately in
+[issue #27](https://github.com/lichen-liu/flightrepo/issues/27).
+
 ## Read budgets
 
 Each server process admits two concurrent `/v1/` requests by default, plus one

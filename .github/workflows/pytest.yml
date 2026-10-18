@@ -90,7 +90,7 @@ jobs:
             exit 1
           fi
           node scripts/qa_web.cjs
-          FLYJI_QA_BROWSER=webkit FLYJI_QA_OUTPUT=var/web-qa/webkit node --test --test-name-pattern='calendar|fresh visits|airport lookup|phone airport|delayed bootstrap|statistics loaded' scripts/qa_web.cjs
+          FLYJI_QA_BROWSER=webkit FLYJI_QA_OUTPUT=var/web-qa/webkit node --test --test-name-pattern='calendar|fresh visits|airport lookup|phone airport|delayed bootstrap|statistics loaded|journey pages|arrival window|next-flight pages' scripts/qa_web.cjs
       - name: Upload browser failure screenshots
         if: failure()
         uses: actions/upload-artifact@v4

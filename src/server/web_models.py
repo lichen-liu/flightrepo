@@ -28,16 +28,19 @@ class LocalRouteSearchRequest(BaseModel):
     departure_date: date
     departure_last_date: date | None = None
     arrival_by_local: datetime | None = None
+    onward_days: int | None = Field(default=None, ge=0)
     arrival_fold: Literal[0, 1] | None = None
     departure_timezone: str | None = None
     arrival_timezone: str | None = None
     max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
-    minimum_connection_minutes: int = Field(default=45, ge=0, le=1440)
-    maximum_connection_minutes: int | None = Field(default=360, ge=0, le=44640)
+    minimum_connection_minutes: int = Field(default=45, ge=0)
+    maximum_connection_minutes: int | None = Field(default=None, ge=0)
     allow_airport_change: bool = False
-    avoid_airports: tuple[str, ...] = Field(default=(), max_length=50)
+    avoid_airports: tuple[str, ...] = Field(default=())
     ranking: Ranking = "fewest_legs"
     limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    data_revision: str | None = None
     trace: bool = False
     limits: SearchLimits = Field(default_factory=SearchLimits)
     time_basis: TimeBasis | None = None
@@ -50,6 +53,10 @@ class LocalRouteSearchRequest(BaseModel):
     _via_codes = field_validator("via_airport", mode="before")(via_airports)
 
     def utc_request(self, airports: tuple[Airport, ...]) -> RouteSearchRequest:
+        if self.onward_days is not None and self.arrival_by_local is not None:
+            raise RoutingError(
+                "invalid_horizon", "Choose an arrival deadline or an arrival window, not both."
+            )
         by_code = {a.iata: a for a in airports}
         required = ["origin"]
         if self.arrival_by_local is not None:
@@ -91,12 +98,6 @@ class LocalRouteSearchRequest(BaseModel):
                 "Last departure date must be on or after the first.",
                 context={"field": "departure_last_date"},
             )
-        if (last - first).days >= 31:
-            raise RoutingError(
-                "invalid_local_dates",
-                "Choose at most 31 departure dates.",
-                context={"field": "departure_last_date"},
-            )
         try:
             end = last + timedelta(days=1)
         except OverflowError as error:
@@ -109,7 +110,11 @@ class LocalRouteSearchRequest(BaseModel):
         )
         try:
             horizon = (
-                departure_end + timedelta(days=7)
+                (
+                    departure_end + timedelta(days=self.onward_days)
+                    if self.onward_days is not None
+                    else None
+                )
                 if self.arrival_by_local is None
                 else resolve_local(
                     self.arrival_by_local,
@@ -127,6 +132,7 @@ class LocalRouteSearchRequest(BaseModel):
                 "departure_date",
                 "departure_last_date",
                 "arrival_by_local",
+                "onward_days",
                 "arrival_fold",
                 "departure_timezone",
                 "arrival_timezone",

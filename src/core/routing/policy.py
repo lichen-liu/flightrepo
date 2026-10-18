@@ -74,16 +74,15 @@ class ConnectionPolicy:
         rule = self.minimum(previous.destination_iata, origin, window)
         if not rule:
             return None
-        if horizon - previous.arrival_upper < timedelta(minutes=rule[0]):
+        if rule[0] > (horizon - previous.arrival_upper) // timedelta(minutes=1):
             return None
         lower = previous.arrival_upper + timedelta(minutes=rule[0])
         if window.not_before is not None:
             lower = max(lower, window.not_before)
         upper = horizon
-        if (
-            window.maximum_minutes is not None
-            and timedelta(minutes=window.maximum_minutes) < horizon - previous.arrival_upper
-        ):
+        if window.maximum_minutes is not None and window.maximum_minutes <= (
+            horizon - previous.arrival_lower
+        ) // timedelta(minutes=1):
             upper = previous.arrival_lower + timedelta(minutes=window.maximum_minutes)
         return lower, upper
 

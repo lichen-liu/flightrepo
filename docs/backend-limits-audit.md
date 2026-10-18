@@ -1,8 +1,8 @@
 # Backend limits audit
 
 Audited on October 17, 2026, initially against PR #22 revision `3b7162e` and
-updated after its merge. This covers the public search path, calendar and listing
-APIs, private snapshot/replay, ingestion and hosted serving. It describes code
+updated after its merge and the search-scope follow-up. This covers the public
+search path, calendar and listing APIs, private snapshot/replay, ingestion and hosted serving. It describes code
 behavior, not a deployment.
 
 Search and continuation now have no default candidate-count cutoff. An explicit
@@ -22,17 +22,17 @@ The separate **100,000 candidate-check search budget** was a real restriction
 in the initial audit. It has been removed from the defaults; the benchmark size
 has never configured either SQL loading or routing.
 
-## Restrictions that can omit or prevent valid results
+## Search restrictions reviewed and removed
 
 | Restriction | Actual behavior | Assessment |
 | --- | --- | --- |
 | Candidate checks: unlimited by default; optional positive caller budget | `SearchLimits.max_candidates=null` has no count cutoff. An explicit budget interrupts search and continuation with `candidate_limit` and incomplete diagnostics. Visits count repeated examination along different paths, not distinct SQL rows. | The former 100,000 default and 200,000 maximum have been removed. Explicit budgets can still omit better or matching journeys and must not be presented as complete ranking. |
 | Serving read deadline: disabled by default; optional positive operator setting | A configured monotonic deadline applies per read connection, checked every 1,000 SQLite VM instructions. An interrupt returns 503 `query_timeout`, not an empty result. Unset `FLIGHT_READ_QUERY_TIMEOUT_SECONDS` to disable it. | Explicit execution policy, not a SQL optimization. The former 15-second default and 120-second maximum have been removed. When enabled, the timer also elapses during Python work while the connection is open; it is not accumulated SQL execution time. |
-| Departure span: at most 31 elapsed days | `RouteSearchRequest` rejects longer windows. Local requests allow 31 calendar dates, but the UTC validator can reject that range across a fall-back DST change. | A product/validation ceiling, not a correctness requirement. Calendar dates and elapsed durations are inconsistent at DST boundaries. |
-| Arrival horizon: at most 31 days after departure-window end | Longer explicit horizons receive validation errors. Continuation separately enforces at most 62 days from the first retained departure. | Another fixed product ceiling. Any change must keep full-search, continuation, calendar and local/UTC validation aligned. |
-| Calendar/browser horizon: seven days after departure-window end | Local search defaults to this horizon; UTC browser requests explicitly construct it. Calendar availability hardcodes the same horizon and has no configurable horizon argument. | This can hide dates whose only valid journey arrives later. It is explicit in the current UI scope but not an unrestricted search of the archive. |
-| Via airports: maximum six; avoided airports: maximum 50 | Requests exceeding these counts are rejected, even with unrestricted stops. The browser additionally caps the avoid field at 199 characters. | Historical input ceilings, not graph correctness requirements. Valid no-repeat via constraints are a separate matter. |
-| Connection allowances | POST search defaults to 45 minutes minimum and 360 maximum; maximum can be `null`. Numeric minimum is capped at 1,440 and maximum at 44,640 minutes. The legacy GET endpoint is tighter: minimum 20–360, maximum 60–1,440, and no nullable maximum. | Caller-selected layovers define eligibility, but arbitrary numeric ceilings and differences between adapters need justification. Removing a work budget does not undo these filters. |
+| Departure span | No fixed day ceiling; ordered, representable UTC/local dates remain required. | The former 31-day ceiling and DST inconsistency are removed. |
+| Arrival horizon | No fixed day ceiling in search or continuation. An omitted horizon uses the latest available destination arrival, at least the departure-window end. | The former 31/62-day ceilings are removed. |
+| Calendar/browser horizon | Uses all available arrival data by default. Optional `onward_days` is shared by availability and search; precise local/UTC arrival deadlines remain supported. | The fixed seven-day eligibility window is removed. |
+| Via and avoided airports | No count ceiling. Codes, no-repeat vias, endpoint exclusions and conflicts remain validated. | The six-via/fifty-avoid ceilings and browser character cap are removed. |
+| Connection allowances | Nonnegative minimum and nullable maximum, without arbitrary numeric ceilings. Maximum must be at least minimum. Public adapters agree; default maximum is unrestricted. | The 1,440/44,640-minute ceilings and tighter legacy validators are removed. |
 | Continuation gap semantics | The edited gap uses its requested maximum/not-before. Later gaps use the minimum without a maximum. | Continuation and full-search policies differ; an edited journey may exceed the maximum used in its original search. This is documented behavior, not a row-loading cutoff. |
 
 Sources: [request validation](../src/core/routing/models.py),
@@ -44,24 +44,24 @@ Sources: [request validation](../src/core/routing/models.py),
 [local-time conversion](../src/server/web_models.py),
 [HTTP adapters](../src/server/api.py), [browser request](../src/server/web/app.mjs).
 
-## Response sizes are also real restrictions
+## Response pages and initial suggestions
 
-These do not limit the eligible SQL graph, but they restrict what a caller can
-retrieve. Most are bounded lists, **not implemented cursor pagination**.
+Response sizes bound each page without limiting the total results a caller can
+retrieve. See [pagination and revision handling](backend-operations.md#search-scope-and-response-pages).
 
 | Surface | Default / maximum | Consequence |
 | --- | --- | --- |
-| Ranked itineraries | 20 / 100 | The engine can prove the exact best K without enumerating every worse route. `exhaustive` means that ranking completed within the request scope; it does not mean every possible route was returned. There is no cursor/offset for route 101. |
-| Continuation options | 100 / 500 | Enumeration continues after the list fills; automatic selection is independent of the display cap unless the candidate budget interrupts it. The explicit/automatic selected option is retained. Total/truncated fields exist, but there is no ordinary next-page cursor. |
-| Flights, direct route summaries, airport listing | 500 / 1,000 per call | List-shaped APIs have no cursor/offset or `has_more` response. Broad queries can silently omit entries beyond the list limit. Route-summary grouping still covers its query before limiting returned pairs. |
-| Catalog/bootstrap airport suggestions | 1,000, fetched with a 1,001st sentinel | `airports_truncated` exists, but the frontend does not use it to fetch more suggestions. A legitimate airport can be absent from suggestions. Exact backend lookup/routing still works beyond this subset. |
-| Via autocomplete | First eight matches from the loaded airport subset | A UI suggestion cap, not an engine filter, but the incomplete source catalog compounds discovery problems. |
-| Airport coverage | One or two airports per request | Request shape only; repeated calls can inspect others. It is not a graph-size ceiling. |
+| Ranked itineraries | 20 / 100 per page | `offset`, `next_offset` and `data_revision` make later ranked entries reachable. Ranking remains exact within the requested scope unless an explicit caller budget reports incomplete calculation. |
+| Continuation options | 100 / 500 per page | `option_offset` and `next_option_offset` expose later entries. Selection remains independent; an out-of-page selected option is added without displacing a page entry. |
+| Flights, direct route summaries, airport listing | 500 / 1,000 per page | Next links carry offset, filters and database revision. List bodies retain their existing shape. A changed dataset returns 409 rather than mixing pages. |
+| Catalog/bootstrap airport suggestions | 1,000, fetched with a 1,001st sentinel | This initial cache is explicitly truncated. Airport and via lookups query the full server catalog; clients can also follow airport listing pages. |
+| Via autocomplete | First eight matches | A display size only. Typing a code queries the full catalog rather than restricting discovery to bootstrap data. |
+| Airport coverage | Any nonempty airport list | Grouped indexed reads use JSON parameters without one SQL column per requested airport. The former two-airport request ceiling is removed. |
 
-Retain reasonable response page sizes, but make all relevant entries reachable
-through genuine pagination or server-side airport lookup. A truncated array must
-not be presented as the complete dataset. Raising 1,000 to a bigger constant is
-not a complete remedy.
+Response page sizes remain bounded; every relevant entry is reachable through
+pagination or narrowed server-side airport lookup. Truncated bootstrap caches
+are not complete catalogs. Deep ranked pages rerun calculation and retain more
+paths; pagination does not promise constant computation or memory.
 
 ## Paths that do not impose a live SQL row cap
 
@@ -163,29 +163,24 @@ not just a hypothetical concern. It is not a claim that this synthetic route
 volume reflects a physical service.
 
 A separate disposable two-flight example arrived January 10 after a January 1
-departure. With no maximum layover, an explicit longer-horizon request found the
-route; the fixed calendar arrival window offered no date. Scope alone can explain
-missing results even when no compute budget is reached.
+departure. Previously an explicit longer-horizon request found the route while
+the fixed calendar arrival window offered no date. Calendar and default search
+now agree on all available arrivals; an explicit shorter window can still exclude
+the journey as a user-selected filter.
 
 Regression coverage includes the former cutoff, unrestricted stops, optional SQL
 deadlines, explicit budget diagnostics and capacity cleanup. Validation now accepts
 `max_candidates=null` and positive values above the former 200,000 ceiling.
 
-For the stated preference of no arbitrary query cutoffs, the decisions are:
+The completed changes remove default candidate/SQL deadlines, date ceilings,
+via/avoid counts and numeric connection ceilings, and expose reachable result
+pages. Domain correctness rules and per-response sizes remain intentional.
+Private snapshot/replay artifact bounds and ingestion/transport resource controls
+remain separate from public SQL routing.
 
-1. Removed mandatory candidate-count ceilings; optional caller budgets retain
-   explicit incomplete outcomes. Increasing the fixed number would not resolve
-   the policy problem.
-2. Disabled the serving deadline by default and removed its fixed maximum. A
-   configured SQL deadline still does not cover the entire calculation lifecycle;
-   cancellation across Python routing remains follow-up work.
-3. Make departure/arrival scope caller-controlled and consistent across calendar,
-   search and continuation. Remove arbitrary six-via/fifty-avoid ceilings and
-   reconcile the differing connection validators.
-4. Implement reachable response pages and airport lookup; keep page sizes separate
-   from the amount of eligible data examined.
-5. Retain configurable admission, transport and ingestion resource controls that
-   fail explicitly instead of returning a fabricated complete empty result.
+Backend resource isolation, cancellation and host controls are deferred in
+[issue #27](https://github.com/lichen-liu/flightrepo/issues/27). This work does not
+claim that unrestricted request scope establishes production resource safety.
 
 Exact top-K does not require returning every path: admissible pruning may stop
 once no unseen route can improve the answer. A fixed candidate counter offers no

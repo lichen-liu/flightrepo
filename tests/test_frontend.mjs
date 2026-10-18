@@ -39,10 +39,7 @@ test("via lists preserve travel order across whitespace, commas and trailing sep
   assert.deepEqual(airportList("xyz"), ["XYZ"]);
   assert.throws(() => airportList("AMS ams"), /must not repeat/);
   assert.throws(() => airportList("AMS FRA1"), /Invalid airport code: FRA1/);
-  assert.throws(
-    () => airportList("AAA BBB CCC DDD EEE FFF GGG"),
-    /at most six/,
-  );
+  assert.equal(airportList("AAA BBB CCC DDD EEE FFF GGG").length, 7);
 });
 
 test("via suggestions replace the active token and retain the other airports", () => {
