@@ -19,15 +19,19 @@ cancellation. Health checks and static files are outside this API budget; the
 hosted Uvicorn connection limit still applies to the whole process.
 
 `FLIGHT_MAX_CONCURRENT_READS` changes the interactive limit (1–32).
-`FLIGHT_READ_QUERY_TIMEOUT_SECONDS` changes the serving read deadline (default
-15 seconds, maximum 120). Set these in the serving process environment and restart
-it. Configuration is per process, not shared among replicas.
+`FLIGHT_READ_QUERY_TIMEOUT_SECONDS` optionally enables a serving read deadline in
+seconds. It is unset by default, so accepted queries have no SQL time cutoff. Any
+positive duration is accepted; remove the environment variable to disable it. Set
+these in the serving process environment and restart it. Configuration is per
+process, not shared among replicas.
 
 SQLite checks the deadline every 1,000 virtual-machine instructions. An interrupted
 read returns HTTP 503 with `query_timeout`, rather than an empty or partial route
 list. The deadline applies to SQL work within a read connection; it is not a hard
-wall-clock limit on Python routing or network delivery. Engine candidate/state
-budgets still apply. Admin and ingestion do not inherit the serving deadline.
+wall-clock limit on Python routing or network delivery. Search and continuation
+have no candidate-count cutoff by default. Callers may explicitly set
+`limits.max_candidates`; reaching that budget reports incomplete ranking. Admin
+and ingestion do not inherit the serving deadline.
 
 Start with the defaults and measure representative data and date windows before
 raising concurrency. More simultaneous graph searches increase memory and CPU
