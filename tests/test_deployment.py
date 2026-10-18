@@ -572,6 +572,49 @@ def start_boundaries(scripts, monkeypatch):
     monkeypatch.setattr(scripts.manage.socket, "socket", Available)
 
 
+@pytest.mark.parametrize("validation_seconds", [45, 90])
+def test_large_archive_preflight_finishes_before_jobs_load(
+    tmp_path, scripts, monkeypatch, validation_seconds
+):
+    root = runtime(tmp_path / "runtime", tmp_path / "db", controls=True)
+    start_boundaries(scripts, monkeypatch)
+    monkeypatch.setattr(scripts.manage, "loaded", lambda job: False)
+    validated, launches = [], []
+
+    def check(command, **kwargs):
+        if kwargs["timeout"] < validation_seconds:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        validated.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def launch(*args):
+        assert validated, "Validate the installation before starting either job"
+        launches.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(scripts.manage.subprocess, "run", check)
+    monkeypatch.setattr(scripts.manage, "launchctl", launch)
+    scripts.manage.start(root)
+    assert validated[0][-1] == "--check"
+    assert len(launches) == 2 and all(args[0] == "bootstrap" for args in launches)
+
+
+def test_preflight_timeout_keeps_both_jobs_unloaded(tmp_path, scripts, monkeypatch):
+    root = runtime(tmp_path / "runtime", tmp_path / "db", controls=True)
+    start_boundaries(scripts, monkeypatch)
+    monkeypatch.setattr(scripts.manage, "loaded", lambda job: False)
+    launches = []
+    monkeypatch.setattr(scripts.manage, "launchctl", lambda *args: launches.append(args))
+
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(scripts.manage.subprocess, "run", timeout)
+    with pytest.raises(subprocess.TimeoutExpired):
+        scripts.manage.start(root)
+    assert launches == [] and not list((root / "jobs").iterdir())
+
+
 def test_port_occupied_never_bootstraps_or_kills_other_process(tmp_path, scripts, monkeypatch):
     root = runtime(tmp_path / "runtime", tmp_path / "db", controls=True)
     start_boundaries(scripts, monkeypatch)

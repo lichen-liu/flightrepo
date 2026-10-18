@@ -27,6 +27,8 @@ LABELS = {"server": "fyi.boboji.flyji.server", "tunnel": "fyi.boboji.flyji.tunne
 # Match startup and ongoing probes; real-archive aggregation needs headroom
 # beyond ten seconds while every HTTP operation remains bounded.
 HTTP_PROBE_TIMEOUT = 20
+# The offline preflight aggregates catalogs and exercises routing on real data.
+INSTALLATION_CHECK_TIMEOUT = 180
 
 
 def runtime_root() -> Path:
@@ -171,7 +173,7 @@ def start(root: Path):
         [str(root / "venv/bin/python"), str(root / "serve.py"), "--check"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=INSTALLATION_CHECK_TIMEOUT,
     )
     if checked.returncode:
         raise RuntimeError("Installation check failed. Rerun the installer while stopped.")
