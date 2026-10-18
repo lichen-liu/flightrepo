@@ -1,5 +1,6 @@
 """Bounded, explicit publication of admitted candidates into a clean serving store."""
 
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from core.database_roles import require_ingestion
 from core.file_lock import file_mutex
 from core.storage import SQLiteConnection, flight_record, source_id, store_flight, utc_us
 from ingestion.references import copy_catalog, copy_source
-from ingestion.store import check_quota
+from ingestion.store import check_quota, job_lock
 from ingestion.updater import FlightUpdater
 
 PARTITION_TIME_SQL = """CASE
@@ -64,19 +65,36 @@ def admitted(record):
 
 
 def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
+    from ingestion import authority
+
+    canonical = authority.selected(ingestion_db, serving_db)
+    with job_lock(ingestion_db, blocking=False) if canonical else nullcontext(True) as acquired:
+        if not acquired:
+            raise ValueError("Stop the active ingestion job before publication")
+        return _publish_day(ingestion_db, serving_db, day, audit_routes=audit_routes)
+
+
+def _publish_day(ingestion_db, serving_db, day, *, audit_routes):
+    from ingestion import authority
+
     ingestion_db, serving_db = Path(ingestion_db).resolve(), Path(serving_db).resolve()
     if ingestion_db == serving_db or (serving_db.exists() and ingestion_db.samefile(serving_db)):
         raise ValueError("Ingestion and serving databases must be different files")
+    canonical = authority.selected(ingestion_db, serving_db)
     day = date.fromisoformat(day) if isinstance(day, str) else day
     reference_audit = None
     if audit_routes:
         from ingestion.vrs import audit_cached_day
 
+        if canonical:
+            authority.hydrate_window(ingestion_db, day, day)
         reference_audit = audit_cached_day(ingestion_db, day)
     lower = utc_us(datetime.combine(day, time.min, UTC))
     upper = lower + 86400_000000
     reader = SQLiteConnection(ingestion_db, read_only=True)
     with reader.connect() as source:
+        if canonical:
+            authority.attach(source)
         source.execute("BEGIN")
         require_ingestion(source)
         identity = source.execute(
@@ -119,6 +137,18 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
                     row = source.execute(
                         "SELECT * FROM flights WHERE provider=? AND provider_id=?", key
                     ).fetchone()
+                    if (
+                        row is None
+                        and canonical
+                        and not source.execute(
+                            "SELECT 1 FROM flight_tombstones t JOIN data_sources s ON s.id=t.source_id WHERE s.code=? AND t.source_record_key=?",
+                            key,
+                        ).fetchone()
+                    ):
+                        row = source.execute(
+                            "SELECT * FROM canonical.flights WHERE provider=? AND provider_id=?",
+                            key,
+                        ).fetchone()
                     records[key] = flight_record(row) if row is not None else None
             counts = dict(inserted=0, updated=0, duplicate=0, retired=0, protected=0, held=0)
             providers = {
@@ -201,6 +231,13 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
                 ),
             )
             check_quota(serving_db, output)
+    if canonical:
+        from ingestion.daily import serving_receipts
+
+        proofs = serving_receipts(serving_db, store_id, generation, day, day)
+        counts["released_private_copies"] = authority.release_window(
+            ingestion_db, serving_db, day, day, proofs
+        )
     return dict(
         day=str(day),
         route_audit=reference_audit,
@@ -213,10 +250,19 @@ def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
 def publish_range(
     ingestion_db, serving_db, start, end, *, preserve_serving=None, audit_routes=True
 ):
+    from ingestion import authority
+
     if end < start:
         raise ValueError("Publish end must follow start")
-    # One committed publication per day; readers remain live, retries are idempotent.
-    with file_mutex(Path(str(Path(serving_db).resolve()) + ".publish.lock")):
+    canonical = authority.selected(ingestion_db, serving_db)
+    # A canonical read-through needs the same producer lease as daily staging.
+    # Validate the bound destination before preparing any replacement store.
+    with (
+        job_lock(ingestion_db, blocking=False) if canonical else nullcontext(True) as acquired,
+        file_mutex(Path(str(Path(serving_db).resolve()) + ".publish.lock")),
+    ):
+        if not acquired:
+            raise ValueError("Stop the active ingestion job before publication")
         if preserve_serving is not None:
             from ingestion.serving_controls import prepare_serving
 

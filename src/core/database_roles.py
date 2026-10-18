@@ -41,9 +41,22 @@ def require_serving(connection):
 def require_ingestion(connection):
     if not is_ingestion(connection):
         raise ValueError("Select an ingestion database initialized by python -m ingestion init")
-    row = connection.execute("SELECT version FROM ingestion_store_metadata WHERE id=1").fetchone()
-    if row is None or row[0] != 1:
+    row = connection.execute(
+        "SELECT version,store_id,generation FROM ingestion_store_metadata WHERE id=1"
+    ).fetchone()
+    if row is None or row[0] not in (1, 2):
         raise ValueError("Unsupported ingestion database identity/version")
+    if row[0] == 2:
+        if (
+            not connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name='ingestion_fact_authority'"
+            ).fetchone()
+            or not connection.execute(
+                "SELECT 1 FROM ingestion_fact_authority WHERE id=1 AND store_id=? AND generation=?",
+                (row[1], row[2]),
+            ).fetchone()
+        ):
+            raise ValueError("Serving-authoritative ingestion identity requires its binding")
 
 
 def ingestion_target(path):

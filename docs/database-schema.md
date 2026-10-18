@@ -43,11 +43,25 @@ guessed flight numbers, schedules, timezones or transfer-group membership.
 | `ingestion_vrs_snapshot`, `ingestion_vrs_airports`, `ingestion_vrs_routes` (private) | Atomic route snapshot, explicit mappings and indexed callsign chains |
 | `ingestion_adoptions`, `ingestion_audit_runs`, `ingestion_audit_changes` (private) | Verified handoff and correction receipts/journals |
 | `publication_origin`, `publication_membership`, `publication_runs` (serving) | Owning publisher, source keys and per-day reconciliation receipts |
+| `ingestion_fact_authority`, `ingestion_fact_history` (private, opt-in) | Bound serving identity/generation and first-batch/revision history after releasing private copies |
+| `serving_fact_authority` (serving, opt-in) | Persistent canonical database identity; contains no private pipeline evidence |
 
 Extraction receipts, policy/configuration and compact overnight boundaries remain
 private after raw deletion so adjacent and disjoint backfills can refine legs.
 `itinerary_legs` is an extractor-only compatibility view. Private documents,
 profiles, extraction receipts and boundaries never enter serving.
+
+With [`daily --serving-authoritative`](ingestion.md#serving-as-the-authoritative-flight-store),
+verified serving flights are canonical and private `flight_legs` is a staging area.
+Matching copies are removed only after a committed serving publication receipt;
+history and receipts remain private. Bounded canonical windows are staged again
+for verification, and individual backfill keys read through to serving before
+quality comparison. Missing private rows retain canonical flights; explicit
+tombstones/held replacements retract owned flights. Manual serving controls win.
+The optional binding upgrades the **ingestion role** to version 2, fencing older
+producers; the shared flight contract and serving role remain version 1. Bound
+state cannot be cleared independently, and another/missing serving database is
+rejected. The unbound version 1 workflow continues retaining full private facts.
 
 ## Identity, updates and concurrency
 

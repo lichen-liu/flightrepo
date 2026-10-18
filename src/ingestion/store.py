@@ -157,6 +157,15 @@ class IngestionStore(FlightUpdater):
                     raise ValueError("Stop the active ingestion job before clearing this database")
             with SQLiteConnection(self.path).connect() as connection:
                 require_ingestion(connection)
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM sqlite_schema WHERE name='ingestion_fact_authority'"
+                    ).fetchone()
+                    and connection.execute("SELECT 1 FROM ingestion_fact_authority").fetchone()
+                ):
+                    raise ValueError(
+                        "Serving owns verified facts; preserve its bound ingestion history"
+                    )
                 connection.execute("BEGIN IMMEDIATE")
                 tables = {
                     r[0]

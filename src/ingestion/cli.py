@@ -49,6 +49,11 @@ def parser():
     daily.add_argument("--start", type=date.fromisoformat, required=True)
     daily.add_argument("--end", type=date.fromisoformat, required=True)
     daily.add_argument("--finish-year", action="store_true")
+    daily.add_argument(
+        "--serving-authoritative",
+        action="store_true",
+        help="bind verified facts to serving; retain only candidates and pipeline history privately",
+    )
     daily.add_argument("--data-root", type=Path)
     daily.add_argument("--offline", action="store_true")
     init = commands.add_parser("init", help="initialize a NEW ingestion store")
@@ -255,6 +260,7 @@ def run(arguments, *, database_path=None, interactive=False):
             args.end,
             ingest_day=ingest_day,
             finish_year=args.finish_year,
+            serving_authoritative=args.serving_authoritative,
             progress=progress,
         ):
             output(result)
