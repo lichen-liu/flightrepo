@@ -126,3 +126,9 @@ The current and previous release are held in memory so a page loading during a
 static-file update can finish using consistent files. A server restart clears
 that history; an older page that has not finished loading may need a refresh.
 No manual version bump is required.
+
+The startup installation check has a three-minute deadline because it validates
+real catalog aggregates and an end-to-end search before loading either job.
+A failed or timed-out check leaves both jobs unloaded. This deadline applies to
+the deployment preflight, not to user route searches or their coverage. Startup
+readiness and ongoing HTTP probes retain their separate budgets.
