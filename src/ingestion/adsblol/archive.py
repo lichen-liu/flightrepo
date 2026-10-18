@@ -1,9 +1,11 @@
 """Resumable downloads of the preferred full daily ADSB.lol archive copies."""
 
+import bisect
 import gzip
 import hashlib
 import io
 import json
+import math
 import re
 import shutil
 import tarfile
@@ -22,26 +24,69 @@ MAX_BUDGET_BYTES = 20 * 2**30
 MAX_TRACE_BYTES = 32 * 1024**2
 
 
+def archive_groups(paths):
+    """Separate a standalone tar from an ordered split tar of the same release."""
+    paths = sorted(map(Path, paths))
+    if not paths or len(set(paths)) != len(paths):
+        raise ValueError("Missing or duplicate daily archive parts")
+    standalone = [path for path in paths if path.suffix == ".tar"]
+    split = [path for path in paths if path.suffix != ".tar"]
+    if (
+        len(standalone) > 1
+        or split
+        and (
+            [path.suffix for path in split] != [".a" + chr(ord("a") + n) for n in range(len(split))]
+            or len({path.with_suffix("") for path in split}) != 1
+        )
+    ):
+        raise ValueError("Daily archive parts are incomplete or out of order")
+    if standalone and split and standalone[0] != split[0].with_suffix(""):
+        raise ValueError("Daily archive parts belong to different releases")
+    return ([standalone] if standalone else []) + ([split] if split else [])
+
+
 class JoinedFiles:
     """Read split tar parts as one byte stream without extracting to disk."""
 
     def __init__(self, files):
-        self.files = iter(files)
-        self.current = next(self.files, None)
+        self.files = list(files)
+        self.ends = []
+        for source in self.files:
+            size = source.seek(0, 2)
+            source.seek(0)
+            self.ends.append((self.ends[-1] if self.ends else 0) + size)
+        self.position = 0
 
-    def read(self, size):
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=0):
+        position = offset + (self.position if whence == 1 else self.ends[-1] if whence == 2 else 0)
+        if position < 0 or whence not in (0, 1, 2):
+            raise ValueError("Invalid archive seek")
+        self.position = position
+        return position
+
+    def read(self, size=-1):
+        size = (
+            min(size, self.ends[-1] - self.position) if size >= 0 else self.ends[-1] - self.position
+        )
         chunks = []
-        while size and self.current is not None:
-            chunk = self.current.read(size)
+        while size > 0:
+            index = bisect.bisect_right(self.ends, self.position)
+            start = self.ends[index - 1] if index else 0
+            source = self.files[index]
+            source.seek(self.position - start)
+            chunk = source.read(min(size, self.ends[index] - self.position))
             if not chunk:
-                self.current = next(self.files, None)
-                continue
+                raise EOFError("Archive part ended before its recorded size")
             chunks.append(chunk)
             size -= len(chunk)
+            self.position += len(chunk)
         return b"".join(chunks)
 
 
-def archive_traces(paths, *, diagnostics=None):
+def _stream_traces(paths, *, diagnostics=None):
     """Yield one bounded aircraft member at a time; never extract tar paths to disk."""
     with ExitStack() as stack:
         files = [stack.enter_context(path.open("rb")) for path in paths]
@@ -54,29 +99,146 @@ def archive_traces(paths, *, diagnostics=None):
                 count(diagnostics, "archive_members", "ignored_non_trace")
                 continue
             count(diagnostics, "archive_members", "aircraft_trace")
-            if member.size > MAX_TRACE_BYTES:
-                count(diagnostics, "invalid_records", "oversized_compressed_member")
-                raise ValueError("Trace exceeds compressed size limit; day not committed")
-            with archive.extractfile(member) as source:
-                compressed = source.read()
-            try:
-                with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
-                    raw = source.read(MAX_TRACE_BYTES + 1)
-            except (OSError, EOFError, zlib.error):
-                count(diagnostics, "invalid_records", "invalid_gzip_member")
-                raise
-            if len(raw) > MAX_TRACE_BYTES:
-                count(diagnostics, "invalid_records", "oversized_decompressed_member")
-                raise ValueError("Trace exceeds decompressed size limit; day not committed")
-            try:
-                data = json.loads(raw)
-            except (ValueError, UnicodeError):
-                count(diagnostics, "invalid_records", "invalid_json_member")
-                raise
-            if not isinstance(data, dict):
-                count(diagnostics, "invalid_records", "invalid_member_shape")
-                raise ValueError("Aircraft member must be a JSON object")
-            yield data, len(compressed)
+            yield _read_trace(archive, member, diagnostics=diagnostics), member.size
+
+
+def _read_trace(archive, member, *, diagnostics=None):
+    if member.size > MAX_TRACE_BYTES:
+        count(diagnostics, "invalid_records", "oversized_compressed_member")
+        raise ValueError("Trace exceeds compressed size limit; day not committed")
+    with archive.extractfile(member) as source:
+        compressed = source.read()
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
+            raw = source.read(MAX_TRACE_BYTES + 1)
+    except (OSError, EOFError, zlib.error):
+        count(diagnostics, "invalid_records", "invalid_gzip_member")
+        raise
+    if len(raw) > MAX_TRACE_BYTES:
+        count(diagnostics, "invalid_records", "oversized_decompressed_member")
+        raise ValueError("Trace exceeds decompressed size limit; day not committed")
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError):
+        count(diagnostics, "invalid_records", "invalid_json_member")
+        raise
+    if not isinstance(data, dict):
+        count(diagnostics, "invalid_records", "invalid_member_shape")
+        raise ValueError("Aircraft member must be a JSON object")
+    return data
+
+
+def _merge_snapshots(records, *, diagnostics=None):
+    """Union one aircraft's snapshots by absolute observation time.
+
+    The snapshot spanning the longest interval supplies metadata and wins equal-time
+    ties, just as the reducer keeps the first observation for a timestamp. Retain
+    distinct source timestamps without fuzzy rounding or inferring new positions.
+    """
+
+    def timed(data):
+        base = data.get("timestamp")
+        if not isinstance(base, (int, float)) or not math.isfinite(base):
+            raise ValueError("Mixed aircraft snapshot has an invalid base timestamp")
+        if not isinstance(data.get("trace"), list):
+            raise ValueError("Mixed aircraft snapshot has no observation list")
+        result, invalid = [], []
+        for row in data["trace"]:
+            if (
+                not isinstance(row, list)
+                or not row
+                or not isinstance(row[0], (int, float))
+                or not math.isfinite(row[0])
+            ):
+                invalid.append(row)
+                continue
+            result.append((round(base * 1_000_000) + round(row[0] * 1_000_000), row))
+        return result, invalid
+
+    if len({data.get("icao") for data in records}) != 1:
+        raise ValueError("Mixed aircraft snapshots disagree on aircraft identity")
+    sources = [(data, *timed(data)) for data in records]
+    sources.sort(
+        key=lambda item: (
+            max((t for t, _ in item[1]), default=0) - min((t for t, _ in item[1]), default=0),
+            len(item[1]),
+        ),
+        reverse=True,
+    )
+    primary = sources[0][0]
+    base = round(primary["timestamp"] * 1_000_000)
+    merged = []
+    invalid = []
+    for _, rows, rejected in sources:
+        for timestamp, row in rows:
+            merged.append((timestamp, [(timestamp - base) / 1_000_000, *row[1:]]))
+        invalid.extend(rejected)
+    result = {**primary, "trace": [row for _, row in sorted(merged, key=lambda x: x[0])] + invalid}
+    # Retain equal-time rows in source priority order: the existing reducer keeps
+    # the first whole observation and checks exclusion categories in every row.
+    flags = 0
+    for data in records:
+        if isinstance(data.get("dbFlags"), int):
+            flags |= data["dbFlags"]
+    result["dbFlags"] = flags
+    types = {
+        data["t"].strip().upper()
+        for data in records
+        if isinstance(data.get("t"), str)
+        and re.fullmatch(r"[A-Z0-9]{2,8}", data["t"].strip().upper())
+    }
+    result["t"] = next(iter(types)) if len(types) == 1 else None
+    if len(types) > 1:
+        count(diagnostics, "metadata", "mixed_snapshot_type_conflict")
+    count(diagnostics, "archive_members", "merged_aircraft_snapshots")
+    return result
+
+
+def archive_traces(paths, *, diagnostics=None):
+    groups = archive_groups(paths)
+    if len(groups) == 1:
+        yield from _stream_traces(groups[0], diagnostics=diagnostics)
+        return
+    # A mixed release is two independent tar streams, not their concatenation:
+    # tar EOF markers would silently hide the later archive. Index headers only,
+    # then read/merge at most one aircraft from each stream at a time.
+    with ExitStack() as stack:
+        members = {}
+        for group in groups:
+            files = [stack.enter_context(path.open("rb")) for path in group]
+            archive = stack.enter_context(tarfile.open(fileobj=JoinedFiles(files), mode="r:"))
+            names = set()
+            for member in archive:
+                count(diagnostics, "archive_members", "examined")
+                if not member.isfile() or not re.fullmatch(
+                    r"(?:\./)?traces/[0-9a-f]{2}/trace_full_[~0-9a-f]+\.json", member.name
+                ):
+                    count(diagnostics, "archive_members", "ignored_non_trace")
+                    continue
+                name = member.name.removeprefix("./")
+                if name in names:
+                    count(diagnostics, "invalid_records", "duplicate_aircraft_member")
+                    raise ValueError("Duplicate aircraft member; day not committed")
+                names.add(name)
+                if member.size > MAX_TRACE_BYTES:
+                    count(diagnostics, "invalid_records", "oversized_compressed_member")
+                    raise ValueError("Trace exceeds compressed size limit; day not committed")
+                members.setdefault(name, []).append((archive, member))
+        for entries in members.values():
+            records = []
+            compressed_bytes = 0
+            for archive, member in entries:
+                count(diagnostics, "archive_members", "aircraft_trace")
+                records.append(_read_trace(archive, member, diagnostics=diagnostics))
+                compressed_bytes += member.size
+            yield (
+                (
+                    _merge_snapshots(records, diagnostics=diagnostics)
+                    if len(records) > 1
+                    else records[0]
+                ),
+                compressed_bytes,
+            )
 
 
 def sha256_file(path):

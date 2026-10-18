@@ -18,6 +18,7 @@ from core.storage import BASE_SCHEMA, store_flight, utc_us
 from core.storage import SCHEMA as SERVING_SCHEMA
 from ingestion.adsblol.archive import (
     MAX_BUDGET_BYTES,
+    archive_groups,
     archive_traces,
     download_manifest,
     validate_asset,
@@ -810,9 +811,7 @@ def extract_day(
         validate_asset(item)
         if item["date"] != str(day):
             raise ValueError("Archive selection crosses UTC days")
-    suffixes = [item["name"].rsplit(".", 1)[1] for item in assets]
-    if suffixes != ["tar"] and suffixes != ["a" + chr(ord("a") + n) for n in range(len(assets))]:
-        raise ValueError("Daily archive parts are incomplete or out of order")
+    archive_groups(item["name"] for item in assets)
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     budget = ExtractionBudget(root, limit, policy_db, output_db=output_db)

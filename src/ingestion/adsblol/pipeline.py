@@ -8,7 +8,7 @@ from pathlib import Path
 
 from core.database_roles import ingestion_target
 from core.quality import review_recommended_sql
-from ingestion.adsblol.archive import MAX_BUDGET_BYTES, validate_asset
+from ingestion.adsblol.archive import MAX_BUDGET_BYTES, archive_groups, validate_asset
 from ingestion.adsblol.diagnostics import Diagnostics
 from ingestion.adsblol.extraction import extract_day
 from ingestion.adsblol.legs import airport_points
@@ -28,6 +28,7 @@ def inventory(path, boundary_manifest=None):
             validate_asset(item)
             daily.setdefault(date.fromisoformat(item["date"]), []).append(item)
         for day, assets in daily.items():
+            archive_groups(item["name"] for item in assets)
             grouped.setdefault(day, assets)
     return primary["year"], grouped
 

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from ingestion.adsblol.archive import (
+    archive_groups,
     archive_traces,
     download_manifest,
 )
@@ -15,6 +16,32 @@ from ingestion.adsblol.policy import ExtractionPolicy
 
 def rules(**changes):
     return ExtractionPolicy(**changes)
+
+
+def test_mixed_release_preserves_both_tar_streams():
+    from pathlib import Path
+
+    assert archive_groups(["day.tar.ab", "day.tar", "day.tar.aa"]) == [
+        [Path("day.tar")],
+        [Path("day.tar.aa"), Path("day.tar.ab")],
+    ]
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        [],
+        ["day.tar", "day.tar"],
+        ["day.tar.ab"],
+        ["day.tar.aa", "day.tar.ac"],
+        ["day.tar", "other.tar.aa"],
+        ["one.tar.aa", "two.tar.ab"],
+        ["one.tar", "two.tar"],
+    ],
+)
+def test_invalid_daily_streams_are_rejected(names):
+    with pytest.raises(ValueError):
+        archive_groups(names)
 
 
 def trace(**changes):

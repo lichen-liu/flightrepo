@@ -147,7 +147,24 @@ guaranteeing zero SSD writes.
 
 The manifest records UTC day, preferred release URL, filename, byte length and
 optional SHA-256. Adjacent-year repositories can host year-end inputs; download
-one preferred copy rather than replicas. Tar members
+one preferred release rather than replicas. Validate every day's archive layout
+before starting the range: a standalone `.tar`, contiguous `.tar.aa/.tar.ab/...`
+parts, or both with the same basename. A mixed release contains two independent
+tar streams; concatenating them would stop at the first tar EOF marker.
+
+Mixed releases index trace headers and combine matching aircraft members one
+aircraft at a time, retaining observations unique to either snapshot. Absolute
+microsecond timestamps establish order. The snapshot spanning the longest time
+interval takes priority, then the one with more observations, then the standalone
+archive. Equal-time rows retain this order; the existing reducer keeps the first
+usable whole observation, without combining conflicting coordinates or rounding
+nearby observations together. Military flags and excluded emitter categories from
+either snapshot still apply. Conflicting normalized aircraft types become unknown
+and increment `metadata.mixed_snapshot_type_conflict`; merged aircraft increment
+`archive_members.merged_aircraft_snapshots`. All asset identities and checksums
+remain in the receipt. Duplicate members within a stream still fail the day.
+
+Tar members
 `traces/xx/trace_full_<icao>.json` contain gzip-compressed JSON:
 
 ```json
