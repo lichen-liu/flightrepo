@@ -84,6 +84,13 @@ default time basis remain in `/v1/catalog`. Bootstrap defaults are cached per
 reader process and invalidated on DB/WAL changes or file replacement. Returned
 models are independent, so callers cannot mutate the cached copy.
 
+Shared UTC links submit the route query immediately, alongside calendar
+availability. Bootstrap waits for those two interactive reads; archive statistics
+start after the search returns. Calendar counts still control manual date
+selection, but do not gate an already specified shared query. Background
+statistics report their own status in the availability details rather than
+keeping the page-wide activity bar open after route results arrive.
+
 Public search and continuation responses do not compute replay graph fingerprints,
 which their response contracts exclude. Private calculations and explicit traces
 still retain stable replay identities.
