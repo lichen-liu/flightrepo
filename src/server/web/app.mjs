@@ -35,7 +35,7 @@ const field = (name) => form.elements.namedItem(name),
 const activity = new RequestActivity($("request-progress"));
 const track = (label, priority) => () => activity.begin(label, priority);
 const searchLane = new RequestLane(track("Finding flight routes", 5)),
-  catalogLane = new RequestLane(track("Loading dataset statistics", 0)),
+  catalogLane = new RequestLane(),
   bootstrapLane = new RequestLane(track("Loading airports", 1)),
   datesLane = new RequestLane(track("Checking available dates", 3)),
   editLane = new RequestLane(track("Updating your connection", 5));
@@ -413,7 +413,7 @@ async function loadDates() {
       )
         $("date-availability").textContent +=
           ` No matching departure data on ${requestedDate}; selected ${field("date").value}.`;
-      if (!state.result) {
+      if (!state.result && !searchLane.controller) {
         updateWorkspaceState(!result.dates.length);
         $("options").innerHTML = result.dates.length
           ? '<p class="empty">Choose departure dates and search to find a route.</p>'
@@ -458,15 +458,16 @@ function commonQuery() {
     time_basis: field("time-basis").value,
   };
 }
-function searchRequest() {
+function searchRequest({ checkAvailability = true } = {}) {
   const query = commonQuery(),
     first = field("date").value,
     last = field("last-date").value || first;
   if (!first) throw Error("Choose a departure date.");
   if (
-    datesKey !== dateKey() ||
-    !availableDates.has(first) ||
-    !availableDates.has(last)
+    checkAvailability &&
+    (datesKey !== dateKey() ||
+      !availableDates.has(first) ||
+      !availableDates.has(last))
   )
     throw Error(
       "Choose dates with origin departures and destination arrivals within the search horizon.",
@@ -514,10 +515,10 @@ function searchRequest() {
     },
   };
 }
-async function search() {
+async function search(options) {
   let request;
   try {
-    request = searchRequest();
+    request = searchRequest(options);
   } catch (error) {
     showError("error", errorMessage(error));
     return;
@@ -1265,8 +1266,8 @@ map
       `${error.message} Flight details and connection editing remain available.`,
     ),
   );
-// Explicit UTC links can load their route dates immediately. Catalog metadata
-// and archive-wide counts must not block or overwrite a user's linked search.
+// A shared UTC query is already complete. Availability configures the calendars;
+// it must not delay sending that query to the authoritative search endpoint.
 const linkedValues = Object.fromEntries(new URLSearchParams(location.search));
 const linkedSearch =
   [linkedValues.origin, linkedValues.destination].every((code) => /^[a-z]{3}$/i.test(code || "")) &&
@@ -1275,8 +1276,15 @@ const linkedUTC = linkedSearch && linkedValues["input-clock"] === "UTC" &&
   ["scheduled", "observed", "actual"].includes(linkedValues["time-basis"]);
 restore(linkedValues);
 updateZones();
-loadBootstrap();
-loadCatalog();
-if (linkedUTC || !linkedSearch) loadDates().then(() => {
-  if (linkedUTC && !userEdited && availableDates.size) search();
-});
+if (linkedUTC) {
+  const initialSearch = search({ checkAvailability: false });
+  const initialDates = loadDates();
+  // Keep bootstrap out of the two interactive slots until both initial reads
+  // finish, and leave archive-wide statistics off the first-result path.
+  initialSearch.then(loadCatalog);
+  Promise.all([initialSearch, initialDates]).then(loadBootstrap);
+} else {
+  loadBootstrap();
+  loadCatalog();
+  if (!linkedSearch) loadDates();
+}

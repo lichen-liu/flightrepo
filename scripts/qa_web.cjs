@@ -563,6 +563,47 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await expect(calendar).toBeHidden();
 }, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
+check("shared UTC search renders before calendar availability and background statistics", async (page) => {
+  let releaseDates, releaseStatistics;
+  const datesGate = new Promise(resolve => { releaseDates = resolve; }),
+    statisticsGate = new Promise(resolve => { releaseStatistics = resolve; });
+  let bootstrapRequests = 0, searches = 0;
+  page.on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/v1/bootstrap") bootstrapRequests++;
+    if (searchPath.test(pathname)) searches++;
+  });
+  await page.route("**/v1/search-availability?*", async route => {
+    await datesGate;
+    await route.continue();
+  });
+  await page.route("**/v1/catalog*", async route => {
+    await statisticsGate;
+    await route.continue();
+  });
+  try {
+    const data = await result(page, searchPath, () => page.goto(
+      `${base}?origin=YYZ&destination=CDG&date=2026-10-17&stops=any&input-clock=UTC&time-basis=scheduled`,
+    ));
+    assert.ok(data.items.length);
+    assert.equal(data.query.departure_start, "2026-10-17T00:00:00Z");
+    await expect(page.locator("[data-option]").first()).toBeVisible();
+    await expect(page.locator("#date")).toHaveValue("2026-10-17");
+    await expect(page.locator("#date")).toBeDisabled();
+    assert.equal(bootstrapRequests, 0, "bootstrap cannot crowd out the initial interactive reads");
+    const bootstrap = page.waitForResponse("**/v1/bootstrap");
+    releaseDates();
+    await bootstrap;
+    await expect(page.locator("#search-button")).toBeEnabled();
+    await expect(page.locator("#request-progress")).toBeHidden();
+    await expect(page.locator("#date")).toHaveValue("2026-10-17");
+    assert.equal(searches, 1, "availability and bootstrap must not rerun the shared search");
+  } finally {
+    releaseDates();
+    releaseStatistics();
+  }
+});
+
 check("linked search disables calendar before statistics load when destination has no arrivals", async (page) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; }), searches = [];
@@ -575,7 +616,7 @@ check("linked search disables calendar before statistics load when destination h
     await expect(page.locator('[name="last-date"]')).toBeDisabled();
     await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
     await expect(page.locator("#search-button")).toBeDisabled();
-    assert.deepEqual(searches, []);
+    assert.equal(searches.length, 1, "the server evaluates the shared query independently of calendar counts");
   } finally { release(); }
 });
 
