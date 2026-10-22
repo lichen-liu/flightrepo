@@ -10,11 +10,31 @@ import pytest
 from core.config import Settings
 from ingestion import cli as client
 from ingestion import jobs as ingestion
+from ingestion.adsblol.pipeline import inventory
 from ingestion.adsblol.prepare import AIRPORT_URL, prepare_inputs
 
 AIRPORTS = (
     b"iata_code,latitude_deg,longitude_deg,scheduled_service,type\nAAA,40,-70,yes,large_airport\n"
 )
+
+
+def test_inventory_preflights_a_later_incomplete_day(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    assets = []
+    for day, suffix in [("2024-03-21", ""), ("2024-03-22", ".ab")]:
+        name = f"v{day.replace('-', '.')}-planes-readsb-prod-0.tar{suffix}"
+        assets.append(
+            {
+                "date": day,
+                "name": name,
+                "bytes": 1,
+                "sha256": None,
+                "url": f"https://github.com/adsblol/globe_history_2024/releases/download/v{day.replace('-', '.')}-planes-readsb-prod-0/{name}",
+            }
+        )
+    manifest.write_text(json.dumps({"year": 2024, "assets": assets}))
+    with pytest.raises(ValueError, match="incomplete or out of order"):
+        inventory(manifest)
 
 
 def transport_for(days, requests):

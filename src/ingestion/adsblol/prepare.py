@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ingestion.adsblol.archive import RESERVE_BYTES, validate_asset
+from ingestion.adsblol.archive import RESERVE_BYTES, archive_groups, validate_asset
 from ingestion.adsblol.legs import airport_points
 from ingestion.adsblol.policy import ExtractionPolicy
 
@@ -103,6 +103,11 @@ def _assets(client, start, end):
                 )
         else:
             raise ValueError("Release pagination exceeded preparation limit")
+    daily = defaultdict(list)
+    for item in results.values():
+        daily[item["date"]].append(item["name"])
+    for names in daily.values():
+        archive_groups(names)
     return sorted(results.values(), key=lambda item: (item["date"], item["name"]))
 
 
