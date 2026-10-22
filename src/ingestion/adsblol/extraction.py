@@ -189,6 +189,9 @@ def implausible_airport_timing(connection, data):
 
 
 def save_candidate(connection, key, data, counters, *, diagnostics=None):
+    from ingestion.authority import hydrate_key
+
+    hydrate_key(connection, "adsblol", key)
     protected = connection.execute(
         "SELECT 1 FROM flight_tombstones WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? UNION ALL SELECT 1 FROM flight_legs WHERE source_id=(SELECT id FROM data_sources WHERE code='adsblol') AND source_record_key=? AND locally_modified_us IS NOT NULL",
         (key, key),
@@ -608,6 +611,9 @@ def _extract_day(
                 raise ValueError("Legacy extraction schema; use a new output database")
             connection.execute("DROP TABLE itinerary_legs")
         connection.executescript(SCHEMA)
+        from ingestion.authority import attach
+
+        attach(connection)
         saved_config = connection.execute(
             "SELECT data FROM extraction_config WHERE id=1"
         ).fetchone()
@@ -781,7 +787,7 @@ def _extract_day(
             diagnostics.phase = "commit"
         diagnostics.committed = True
         diagnostics.phase = "checkpoint"
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        connection.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
         budget.check()
     diagnostics.phase = "cleanup"
     cleanup_raw(root, receipt)

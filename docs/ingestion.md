@@ -94,6 +94,71 @@ interleave. Manual serving edits/tombstones and each database's quota still appl
 Raw/staging remain on RAM, private evidence stays private, and serving readers stay
 online. Existing browser pages may need a refresh to fetch the updated calendar.
 
+### Serving as the authoritative flight store
+
+The daily workflow can keep verified flight records in serving and retain only
+pending replacements and pipeline history in private ingestion:
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db daily \
+  --serving-db var/hosted/flights.db --serving-authoritative \
+  --start 2024-01-01 --end 2024-12-31 --finish-year
+```
+
+This is an explicit, persistent binding to that serving database's identity and
+publisher. Subsequent daily commands recognize it without repeating the flag.
+It changes the ingestion identity to version 2: older producer binaries reject
+the database rather than interpreting released private copies as deletions.
+It never changes the serving role or exposes pending candidates to the website.
+
+After each day's serving transaction commits, the producer checks its publication
+receipt and compares each candidate with the current canonical record. It releases
+matching copies, or copies superseded by serving manual controls, in a separate
+private transaction. An interrupted handoff leaves either an extra private copy or
+the committed canonical flight. Retries handle both states. Changed/unpublished
+candidates remain private; input receipts, audit journals, first-batch provenance,
+reference evidence and overnight boundaries remain persistent.
+
+Reverification stages the relevant canonical days back into ingestion, runs the
+existing audit/VRS checks and republishes before releasing copies again. Extraction
+also reads canonical records before comparing a backfill, so weaker reconstruction
+cannot replace stronger evidence. Serving edits and tombstones continue to win.
+Missing private rows mean the canonical record remains; an explicit private
+tombstone or held replacement still retracts an owned publication. Standalone
+publication uses the same handoff and bound destination checks.
+
+The private `flight_legs` count now measures pending/staged records, **not total
+ingested flights**. Count input completion from `extraction_days`, publication from
+serving receipts, and retained flight totals from serving. Private audit/review
+commands inspect the candidate workspace; a read-only full-fact audit should use
+the serving database. A daily rerun stages and reverifies canonical windows when
+their input, references or fingerprint changed. Bound pipeline history cannot be
+cleared/reset independently of the authoritative store.
+
+For an existing run, use a controlled cutover:
+
+1. Finish/stop the producer and confirm its job/extraction locks are released.
+   Keep the verified RAM mount and session. Use a frozen release containing both
+   this feature and any archive-layout fixes required by the manifest.
+2. Take and verify SQLite backups of both durable databases, including their
+   committed WAL content, with writers stopped. Keep the existing runtime and
+   launch configuration. Do not copy an open `.db` without its WAL.
+3. Resume the **original full range** with `--serving-authoritative`. Already
+   committed inputs are reused; previous published days are rechecked and their
+   duplicate private facts are released progressively. Binding alone deletes no
+   flights. Starting only at the next input leaves older private copies in place.
+4. Verify daily receipts, serving totals/controls, input coverage and both quotas.
+   Monitor serving as the authoritative dataset and private state as pending work.
+
+Both databases remain on disk with separate persisted quotas; this feature does
+not raise either limit. Boundary history can still occupy substantial space.
+Released SQLite pages are reused by future work and do not immediately shrink the
+physical file. No automatic VACUUM, reset, file replacement or RAM detach occurs.
+Serving is now essential for recovery and needs a durable backup alongside pipeline
+history. A rollback after release requires the supported runtime or a verified
+pre-cutover database pair; an older producer cannot reconstruct serving from the
+remaining private candidates alone. Missing/replaced serving files fail closed.
+
 ## Storage placement and RAM-backed workspace
 
 **Raw archives and disposable per-day SQLite staging use RAM. Private ingestion

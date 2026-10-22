@@ -50,13 +50,24 @@ def fingerprint(path, input_day, start, end, departure_year):
                 add(tuple(item))
         lower = utc_us(datetime.combine(start, time.min, UTC))
         upper = utc_us(datetime.combine(end + timedelta(days=1), time.min, UTC))
-        for item in c.execute(
-            f"""SELECT f.id,f.revision,f.source_id,f.source_record_key,
+        from ingestion import authority
+
+        canonical = authority.configuration(c)
+        if canonical:
+            add(["serving-authority-v1", canonical])
+            for item in authority.fingerprint_rows(c, lower, upper):
+                add(item)
+        for item in (
+            ()
+            if canonical
+            else c.execute(
+                f"""SELECT f.id,f.revision,f.source_id,f.source_record_key,
                 f.locally_modified_us,f.itinerary_reviewed,a.latitude,a.longitude,b.latitude,b.longitude
                 FROM flight_legs f JOIN airports a ON a.iata=f.origin_iata
                 JOIN airports b ON b.iata=f.destination_iata
                 WHERE ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<? ORDER BY f.id""",
-            (lower, upper),
+                (lower, upper),
+            )
         ):
             add(tuple(item))
         for item in c.execute(
@@ -100,7 +111,17 @@ def serving_receipts(path, store_id, generation, start, end, expected=None):
         return result
 
 
-def daily_range(path, serving, start, end, *, ingest_day, finish_year=False, progress=None):
+def daily_range(
+    path,
+    serving,
+    start,
+    end,
+    *,
+    ingest_day,
+    finish_year=False,
+    progress=None,
+    serving_authoritative=False,
+):
     """Never advance to the next raw day before audit and publication succeed.
 
     Successful receipts are reused; failed/interrupted stages replay idempotently.
@@ -121,6 +142,11 @@ def daily_range(path, serving, start, end, *, ingest_day, finish_year=False, pro
         if not acquired:
             raise ValueError("Stop the active ingestion job before starting daily publication")
         store.initialize()
+        from ingestion import authority
+
+        if serving_authoritative:
+            authority.bind(path, serving)
+        canonical = authority.selected(path, serving)
         if serving.exists():
             with SQLiteConnection(serving, read_only=True).connect() as c:
                 require_serving(c)
@@ -182,12 +208,15 @@ def daily_range(path, serving, start, end, *, ingest_day, finish_year=False, pro
                         end=str(final),
                     )
                 )
+            if canonical:
+                authority.hydrate_window(path, first, final)
             audit = audit_database(path, apply=True, start=first, end=final, progress=progress)
             if not audit["health"]["passed"] or audit["changes"]["skipped_concurrent"]:
                 raise ValueError("Daily audit failed; publication stopped")
             verification = admit(path, start=first, end=final, apply=True, progress=progress)
             # No second VRS pass; the producer lock spans all stages.
             published = list(publish_range(path, serving, first, final, audit_routes=False))
+            proofs = serving_receipts(serving, *identity, first, final)
             identity, after = fingerprint(path, day, first, final, departure_year)
             result = dict(
                 event="daily_published",
@@ -196,13 +225,17 @@ def daily_range(path, serving, start, end, *, ingest_day, finish_year=False, pro
                 start=str(first),
                 end=str(final),
                 fingerprint=after,
-                serving_receipts=serving_receipts(serving, *identity, first, final),
+                serving_receipts=proofs,
                 audit=dict(
                     health=audit["health"], counts=audit["counts"], changes=audit["changes"]
                 ),
                 vrs=verification["counts"],
                 publication=published,
             )
+            if canonical:
+                result["released_private_copies"] = sum(
+                    p["released_private_copies"] for p in published
+                )
             check_quota(path)
             check_quota(serving)
             store.document(
