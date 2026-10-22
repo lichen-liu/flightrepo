@@ -455,3 +455,11 @@ stores normalized evidence keyed by `(source,kind,key)`, with URL/licence, valid
 content hash and revision. Payloads are limited to 64 KiB; no raw trace blobs.
 Documents never become flight facts without a validated adapter/publication policy.
 No public ingestion HTTP endpoint is exposed.
+
+
+ADSB aircraft traces have no fixed compressed or decompressed byte-size cap.
+The archive reader opens one aircraft member at a time directly through gzip,
+then parses its JSON; it never extracts tar member paths to disk. A complete
+trace must fit in available process memory. Corrupt gzip, malformed JSON and
+invalid member shapes still fail the day before its atomic commit. Database
+quotas and the raw-workspace budget remain separate limits.

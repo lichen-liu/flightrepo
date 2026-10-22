@@ -158,3 +158,58 @@ def test_same_size_corrupt_download_is_not_published_as_verified(tmp_path):
     path = tmp_path / item["date"] / item["name"]
     assert not path.exists()
     assert not path.with_name(path.name + ".verified.json").exists()
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+@pytest.mark.parametrize("compresslevel", [0, 9])
+def test_reads_trace_larger_than_former_32_mib_limit(tmp_path, mixed, compresslevel):
+    # Valid JSON whitespace expands past the former cap without requiring a huge
+    # observation list. Both streaming and mixed archive readers must accept it.
+    data = trace()
+    raw = gzip.compress(
+        b" " * (32 * 1024**2 + 1) + json.dumps(data).encode(),
+        compresslevel=compresslevel,
+        mtime=0,
+    )
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        item = tarfile.TarInfo("traces/5c/trace_full_a5ea5c.json")
+        item.size = len(raw)
+        archive.addfile(item, io.BytesIO(raw))
+    payload = stream.getvalue()
+    stem = "v2025.01.01-planes-readsb-prod-0.tar"
+    full = tmp_path / stem
+    full.write_bytes(payload)
+    paths = [full]
+    if mixed:
+        for suffix, content in [("aa", payload[:600]), ("ab", payload[600:])]:
+            part = tmp_path / (stem + "." + suffix)
+            part.write_bytes(content)
+            paths.append(part)
+    result = list(archive_traces(paths))
+    assert len(result) == 1
+    expected = (
+        {**data, "trace": [row for row in data["trace"] for _ in range(2)]} if mixed else data
+    )
+    assert result[0][0] == expected
+    assert result[0][1] == len(raw) * (2 if mixed else 1)
+
+
+@pytest.mark.parametrize(
+    "payload,diagnostic",
+    [(b"not gzip", "invalid_gzip_member"), (gzip.compress(b"not json"), "invalid_json_member")],
+)
+def test_uncapped_reader_still_rejects_corrupt_members(tmp_path, payload, diagnostic):
+    from ingestion.adsblol.diagnostics import Diagnostics
+
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        item = tarfile.TarInfo("traces/5c/trace_full_a5ea5c.json")
+        item.size = len(payload)
+        archive.addfile(item, io.BytesIO(payload))
+    path = tmp_path / "v2025.01.01-planes-readsb-prod-0.tar"
+    path.write_bytes(stream.getvalue())
+    diagnostics = Diagnostics()
+    with pytest.raises((OSError, ValueError)):
+        list(archive_traces([path], diagnostics=diagnostics))
+    assert diagnostics.groups["invalid_records"][diagnostic] == 1

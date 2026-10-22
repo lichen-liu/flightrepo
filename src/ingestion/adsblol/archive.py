@@ -3,7 +3,6 @@
 import bisect
 import gzip
 import hashlib
-import io
 import json
 import math
 import re
@@ -21,7 +20,6 @@ from ingestion.adsblol.diagnostics import count
 
 RESERVE_BYTES = 2**30
 MAX_BUDGET_BYTES = 20 * 2**30
-MAX_TRACE_BYTES = 32 * 1024**2
 
 
 def archive_groups(paths):
@@ -87,7 +85,7 @@ class JoinedFiles:
 
 
 def _stream_traces(paths, *, diagnostics=None):
-    """Yield one bounded aircraft member at a time; never extract tar paths to disk."""
+    """Yield one aircraft member at a time; never extract tar paths to disk."""
     with ExitStack() as stack:
         files = [stack.enter_context(path.open("rb")) for path in paths]
         archive = stack.enter_context(tarfile.open(fileobj=JoinedFiles(files), mode="r|"))
@@ -103,24 +101,16 @@ def _stream_traces(paths, *, diagnostics=None):
 
 
 def _read_trace(archive, member, *, diagnostics=None):
-    if member.size > MAX_TRACE_BYTES:
-        count(diagnostics, "invalid_records", "oversized_compressed_member")
-        raise ValueError("Trace exceeds compressed size limit; day not committed")
-    with archive.extractfile(member) as source:
-        compressed = source.read()
     try:
-        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
-            raw = source.read(MAX_TRACE_BYTES + 1)
+        with archive.extractfile(member) as compressed:
+            with gzip.GzipFile(fileobj=compressed) as source:
+                try:
+                    data = json.load(source)
+                except (ValueError, UnicodeError):
+                    count(diagnostics, "invalid_records", "invalid_json_member")
+                    raise
     except (OSError, EOFError, zlib.error):
         count(diagnostics, "invalid_records", "invalid_gzip_member")
-        raise
-    if len(raw) > MAX_TRACE_BYTES:
-        count(diagnostics, "invalid_records", "oversized_decompressed_member")
-        raise ValueError("Trace exceeds decompressed size limit; day not committed")
-    try:
-        data = json.loads(raw)
-    except (ValueError, UnicodeError):
-        count(diagnostics, "invalid_records", "invalid_json_member")
         raise
     if not isinstance(data, dict):
         count(diagnostics, "invalid_records", "invalid_member_shape")
@@ -220,9 +210,6 @@ def archive_traces(paths, *, diagnostics=None):
                     count(diagnostics, "invalid_records", "duplicate_aircraft_member")
                     raise ValueError("Duplicate aircraft member; day not committed")
                 names.add(name)
-                if member.size > MAX_TRACE_BYTES:
-                    count(diagnostics, "invalid_records", "oversized_compressed_member")
-                    raise ValueError("Trace exceeds compressed size limit; day not committed")
                 members.setdefault(name, []).append((archive, member))
         for entries in members.values():
             records = []
