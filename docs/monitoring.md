@@ -15,7 +15,7 @@ starts no installed apps or user jobs.
 - Instrumentation outside the installed app's host/body middleware, so its 400/413
   rejections are counted. Uvicorn/Cloudflare rejections before ASGI are outside it.
 - Background authenticated delivery, bounded retry and no request-path telemetry IO.
-- Idempotent local registration/token provisioning during installation and updates.
+- Idempotent local registration/token provisioning at startup and explicit runtime reconfiguration.
 - Live BoboWatch inventory reload and client endpoint/token/interval reload.
 - No adapter package download or new application runtime dependency. The wheel
   contains eight pinned standard-library BoboWatch source modules. It excludes
@@ -32,14 +32,14 @@ python -m pip install -e '.[dev]'
 ```
 
 The installer also initializes the recorded submodule before building its wheel.
-A normal install without monitoring configuration keeps monitoring disabled:
+Installation builds the app and its pinned adapter without accessing BoboWatch's runtime, registry, credentials or API. It preserves existing monitoring settings:
 
 ```sh
 python3 installation/install.py
 ```
 
-Install the private non-demo BoboWatch runtime first (normal user, macOS,
-Python 3.11+). After merging the matching BoboWatch runtime PR:
+Before first monitoring-enabled startup, install the private non-demo BoboWatch
+runtime (normal user, macOS, Python 3.11+):
 
 ```sh
 cd ~/p/bobowatch
@@ -57,7 +57,7 @@ The admin token opens `http://127.0.0.1:8720`. From a phone on the same trusted 
 use the Mac's private IPv4 address and port 8720. The installed listener binds all
 IPv4 interfaces; `127.0.0.1` on a phone is the phone itself.
 
-Return to Flightrepo for opt-in installation:
+Return to Flightrepo to install or update its code:
 
 ```sh
 cd ~/p/flightrepo
@@ -66,27 +66,33 @@ git pull --ff-only
 git submodule update --init vendor/bobowatch
 ```
 
-To reinstall while stopped, the installation interface is:
+Installation and monitoring-enabled startup are separate:
 
 ```sh
-python3 installation/install.py \
+python3 installation/install.py
+./deployment/flyji start \
   --bobowatch-runtime-dir "$HOME/Library/Application Support/fyi.boboji.watch"
 ```
 
-This provisions credentials but starts neither Flightrepo nor BoboWatch. An
-existing enabled registration is re-provisioned automatically on later installs,
-reusing its identity/token. For the existing hosted installation, the single-command deployment interface is:
+The installer needs no BoboWatch runtime. Startup registers locally, obtains/reuses
+its scoped producer token, saves the endpoint and starts the app/tunnel. BoboWatch
+can be stopped: registration uses private local files, not its HTTP API. Later
+starts reuse the saved registration when monitoring is enabled. Explicit
+connection settings without a local registration record are left untouched.
+
+For an existing hosted installation, the combined command remains:
 
 ```sh
 ./deployment/flyji deploy \
   --bobowatch-runtime-dir "$HOME/Library/Application Support/fyi.boboji.watch"
 ```
 
-It initializes the pinned submodule, stops loaded Flightrepo jobs, installs and
-provisions, starts the app/tunnel and checks local operation. It uses the existing
+It initializes the pinned submodule, stops loaded Flightrepo jobs, installs,
+registers at startup, starts the app/tunnel and checks local operation. It uses the existing
 private tunnel token; first-time public tunnel setup is still required. A failed
 update retains the installer's existing incomplete-marker behavior and leaves the
-app stopped. It never starts/restarts BoboWatch. Existing `start`, `stop`, `status`
+app stopped. A failed startup or final check unloads serving jobs; cleanup failure
+is reported explicitly. It never starts/restarts BoboWatch. Existing `start`, `stop`, `status`
 and `check` commands remain available. Installer preflight checks suppress
 telemetry so test requests do not become hosted measurements.
 
@@ -112,7 +118,7 @@ configuration/registration files; it does not require a running API or a mounted
 monitoring database. The non-demo registry must already exist. It is not an
 unauthenticated network registration endpoint.
 
-The first installation chooses a stable host-derived replica identity, then saves
+The first registration chooses a stable host-derived replica identity, then saves
 it for reuse even if the host name later changes. Set explicit IDs in
 `monitoring_registration` before provisioning if needed. Concurrent workers or
 independent installations need distinct replica IDs.
@@ -124,11 +130,28 @@ the background; surviving cumulative counters can recover totals after a gap,
 but not exact timing. An app restart can lose unsent counters/events. There is no
 local telemetry database or durable queue in Flightrepo.
 
-Edit the app's private `monitoring.endpoint` or `token_file` to change the delivery
-target. The sender validates/reloads settings before its next delivery and keeps
-the same counters/run UUID; invalid changes retain the prior target. A replica-ID
-change requires an app restart. If monitoring was disabled at startup, enabling it
-requires a restart. A running sender can suspend delivery with `enabled=false`.
+Switch an already-enabled sender to another local BoboWatch without stopping it:
+
+```sh
+./deployment/flyji monitoring \
+  --bobowatch-runtime-dir "/absolute/path/to/other-watch-runtime"
+```
+
+This idempotently registers with the new runtime and updates both the saved
+registration target and endpoint/token settings, so future starts/deployments
+retain the choice. The sender picks it up before its next delivery and keeps the
+same counters/run UUID. This command uses the installed controller; reinstall once
+after upgrading from a release that lacks it. Monitoring initially disabled at
+process startup still needs a restart to become active; the command explains this.
+A replica-ID change also requires an app restart. Switching targets does not copy
+historical SQL data between monitoring servers.
+
+For an operator-provisioned destination, edit the private `monitoring.endpoint`
+and `token_file`; remote endpoints require HTTPS. Omit the local
+`monitoring_registration` record to keep startup from re-provisioning this manual
+connection. Invalid live settings retain the prior destination. A running sender
+can suspend delivery with `enabled=false`. Remote registration automation is not
+implemented.
 
 BoboWatch reloads its inventory and credential files every two seconds. Invalid
 changes retain the last valid configuration; listening address/database changes
@@ -145,7 +168,7 @@ separate provisioning/transport design.
    again and refresh the dashboard. The first snapshot in fresh RAM history is
    a zero-delta baseline; later snapshots show new HTTP traffic.
 
-Later Flightrepo reinstalls/deployments reuse the saved registration and token
+Later Flightrepo starts/deployments reuse the saved registration and token
 without needing the flag again. Configuration, selected database, data mode and
 existing tunnel credentials are preserved. Deployment stops the serving app/tunnel
 but does not restart the independent ingestion worker or resize its RAM disk.

@@ -67,7 +67,17 @@ installing in a different directory.
 The installer initializes the pinned `vendor/bobowatch` submodule and includes
 only its standard-library adapter/provisioning modules in the wheel. Monitoring
 remains disabled unless explicitly configured. See [monitoring integration](../docs/monitoring.md)
-for the optional `--bobowatch-runtime-dir` interface, private configuration paths
-and the complete BoboWatch-first rollout. The pinned revision includes its RAM
-storage, quota administration and manual lifecycle scripts. No monitoring process
-starts during Flightrepo installation.
+for the optional startup `--bobowatch-runtime-dir` interface and private
+configuration paths. Installation does not read BoboWatch's runtime, provision
+credentials or contact its API. It preserves existing monitoring settings.
+
+After installation, opt in at startup:
+
+```sh
+./deployment/flyji start \
+  --bobowatch-runtime-dir "$HOME/Library/Application Support/fyi.boboji.watch"
+```
+
+`./deployment/flyji deploy` combines stop/install/start/check and accepts the same
+startup option. An enabled sender can switch targets live with
+`./deployment/flyji monitoring --bobowatch-runtime-dir PATH`.
