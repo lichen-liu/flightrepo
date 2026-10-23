@@ -61,3 +61,11 @@ using that directory by setting `FLYJI_RUNTIME_DIR` to its absolute path for bot
 installation and deployment commands. The new default does not move existing
 settings or tunnel tokens automatically. Stop the existing instance before
 installing in a different directory.
+
+## Optional BoboWatch integration
+
+The installer initializes the pinned `vendor/bobowatch` submodule and includes
+only its standard-library adapter/provisioning modules in the wheel. Monitoring
+remains disabled unless explicitly configured. See [monitoring integration](../docs/monitoring.md)
+for the optional `--bobowatch-runtime-dir` interface, private configuration paths
+and the RAM-storage deployment gate. No monitoring service starts during install.

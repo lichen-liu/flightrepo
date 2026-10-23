@@ -135,3 +135,12 @@ readiness and ordinary HTTP probes retain a 20-second timeout. The catalog probe
 allows three minutes for a cold statistics refresh, including when ingestion
 publishes between checks and invalidates the cache. A catalog timeout still
 fails the deployment check; it does not shorten or truncate user searches.
+
+## Single-command deployment and optional monitoring
+
+`./deployment/flyji deploy` combines the existing stop/install/start/local-check
+sequence using the pinned submodule. The optional `--bobowatch-runtime-dir PATH`
+provisions monitoring credentials during installation, and subsequent deployments
+reuse the saved registration. It never starts BoboWatch. Hosted monitoring remains
+opt-in and gated on BoboWatch's RAM-disk quota/lifecycle controls; see
+[the integration notes](../docs/monitoring.md) before activation.
