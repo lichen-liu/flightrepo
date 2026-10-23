@@ -1178,7 +1178,11 @@ def test_single_command_deploy_orders_stop_install_provision_start_and_check(
     monkeypatch.setattr(module.subprocess, "run", lambda *args, **kw: calls.append("submodule"))
     monkeypatch.setattr(module, "loaded", lambda job: True)
     monkeypatch.setattr(module, "stop", lambda: calls.append("stop"))
-    monkeypatch.setattr(module, "start", lambda root: calls.append("start"))
+    monkeypatch.setattr(
+        module,
+        "start",
+        lambda root, **kw: calls.append(("start-and-provision", kw["watch_runtime"])),
+    )
     monkeypatch.setattr(module, "check", lambda root: calls.append("check"))
     original = module.importlib.util.spec_from_file_location
 
@@ -1186,9 +1190,7 @@ def test_single_command_deploy_orders_stop_install_provision_start_and_check(
         spec = original(name, path)
 
         def execute(installer):
-            installer.install = lambda root, repo, watch_runtime=None: calls.append(
-                ("install-and-provision", root, watch_runtime)
-            )
+            installer.install = lambda root, repo: calls.append(("install", root))
 
         spec.loader.exec_module = execute
         return spec
@@ -1196,7 +1198,13 @@ def test_single_command_deploy_orders_stop_install_provision_start_and_check(
     monkeypatch.setattr(module.importlib.util, "spec_from_file_location", specification)
     root, watch = tmp_path / "flight", tmp_path / "watch"
     module.deploy(root, watch)
-    assert calls == ["submodule", "stop", ("install-and-provision", root, watch), "start", "check"]
+    assert calls == [
+        "submodule",
+        "stop",
+        ("install", root),
+        ("start-and-provision", watch),
+        "check",
+    ]
 
 
 @pytest.mark.parametrize("monitoring", [False, [], {"enabled": "true"}])
@@ -1217,3 +1225,146 @@ def test_bad_monitoring_settings_refuse_install_before_build(
         scripts.install.install(root, checkout)
     assert not (root / "installing").exists()
     assert not (checkout / "var/hosted").exists()
+
+
+def test_install_does_not_need_registered_bobowatch_runtime(
+    tmp_path, checkout, scripts, monkeypatch
+):
+    root = runtime(tmp_path / "runtime", checkout / "var/hosted/flights.db")
+    data = json.loads((root / "settings.json").read_text())
+    data.update(
+        monitoring={
+            "enabled": True,
+            "endpoint": "http://127.0.0.1:8720/v1/ingest",
+            "token_file": "tokens/watch.token",
+            "replica": "test-r01",
+        },
+        monitoring_registration={"runtime_dir": str(tmp_path / "watch-not-installed")},
+    )
+    private_file(root / "settings.json", json.dumps(data).encode())
+    before = (root / "settings.json").read_bytes()
+    commands = install_boundary(monkeypatch, scripts)
+    scripts.install.install(root, checkout)
+    assert (root / "settings.json").read_bytes() == before
+    assert not (tmp_path / "watch-not-installed").exists()
+    assert not any("server.monitoring" in command for command in commands)
+
+
+def test_runtime_registration_works_offline_and_can_switch_targets(tmp_path, scripts):
+    from bobowatch.config import initialize
+
+    root = runtime(tmp_path / "flight", tmp_path / "flights.db")
+    (root / "venv/bin").mkdir(parents=True)
+    (root / "venv/bin/python").symlink_to(sys.executable)
+    first = initialize(tmp_path / "watch-first", port=9123)
+    second = initialize(tmp_path / "watch-second", port=9124)
+    original = json.loads((root / "settings.json").read_text())
+    assert scripts.manage.configure_monitoring(root, first.path.parent)
+    token = (root / "tokens/bobowatch.token").read_bytes()
+    scripts.manage.configure_monitoring(root)
+    assert (root / "tokens/bobowatch.token").read_bytes() == token
+    scripts.manage.configure_monitoring(root, second.path.parent)
+    data = json.loads((root / "settings.json").read_text())
+    assert data["monitoring"]["endpoint"] == "http://127.0.0.1:9124/v1/ingest"
+    assert data["monitoring_registration"]["runtime_dir"] == str(second.path.parent)
+    assert (root / "tokens/bobowatch.token").read_bytes() != token
+    assert all(data[key] == value for key, value in original.items())
+    assert not first.database.exists() and not second.database.exists()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_unmanaged_connection_settings_are_not_reprovisioned(
+    tmp_path, scripts, monkeypatch, enabled
+):
+    root = runtime(tmp_path / "flight", tmp_path / "flights.db")
+    data = json.loads((root / "settings.json").read_text())
+    data["monitoring"] = {"enabled": enabled, "endpoint": "https://watch.example.invalid/v1/ingest"}
+    private_file(root / "settings.json", json.dumps(data).encode())
+    before = (root / "settings.json").read_bytes()
+    monkeypatch.setattr(
+        scripts.manage.subprocess, "run", lambda *a, **kw: pytest.fail("No local registration")
+    )
+    assert not scripts.manage.configure_monitoring(root)
+    assert (root / "settings.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("fail_registration", [False, True])
+def test_start_registers_before_loading_any_job(tmp_path, scripts, monkeypatch, fail_registration):
+    root = runtime(tmp_path / "flight", tmp_path / "flights.db", controls=True)
+    calls = []
+    monkeypatch.setattr(scripts.manage, "loaded", lambda job: False)
+    monkeypatch.setattr(scripts.manage, "connector_binary", lambda: "/fake/cloudflared")
+    monkeypatch.setattr(
+        scripts.manage.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0)
+    )
+    monkeypatch.setattr(scripts.manage, "wait_for_server", lambda port: None)
+
+    def register(root, watch):
+        calls.append("register")
+        if fail_registration:
+            raise ValueError("Registration failed")
+
+    monkeypatch.setattr(scripts.manage, "configure_monitoring", register)
+
+    class Port:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bind(self, address):
+            pass
+
+    monkeypatch.setattr(scripts.manage.socket, "socket", Port)
+    monkeypatch.setattr(
+        scripts.manage,
+        "launchctl",
+        lambda *args: calls.append("bootstrap") or subprocess.CompletedProcess(args, 0),
+    )
+    if fail_registration:
+        with pytest.raises(ValueError, match="Registration failed"):
+            scripts.manage.start(root, watch_runtime=tmp_path / "watch")
+        assert calls == ["register"]
+    else:
+        scripts.manage.start(root, watch_runtime=tmp_path / "watch")
+        assert calls == ["register", "bootstrap", "bootstrap"]
+
+
+@pytest.mark.parametrize("failure", ["stop", "install", "start", "check"])
+def test_deploy_stops_at_failure_and_unloads_failed_start_or_check(
+    tmp_path, scripts, monkeypatch, failure
+):
+    spec = importlib.util.spec_from_file_location(
+        "flyji_deploy_failure", REPO / "deployment/deploy.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+
+    def stage(name):
+        calls.append(name)
+        if name == failure:
+            raise ValueError("failed " + name)
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "loaded", lambda job: True)
+    monkeypatch.setattr(module, "stop", lambda: stage("stop"))
+    monkeypatch.setattr(module, "start", lambda *a, **kw: stage("start"))
+    monkeypatch.setattr(module, "check", lambda *a: stage("check"))
+
+    def execute_installer(target):
+        target.install = lambda *a: stage("install")
+
+    installer_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=execute_installer))
+    monkeypatch.setattr(module.importlib.util, "spec_from_file_location", lambda *a: installer_spec)
+    monkeypatch.setattr(module.importlib.util, "module_from_spec", lambda spec: SimpleNamespace())
+    with pytest.raises(ValueError, match="failed " + failure):
+        module.deploy(tmp_path / "runtime")
+    expected = {
+        "stop": ["stop"],
+        "install": ["stop", "install"],
+        "start": ["stop", "install", "start", "stop"],
+        "check": ["stop", "install", "start", "check", "stop"],
+    }
+    assert calls == expected[failure]

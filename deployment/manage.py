@@ -151,9 +151,40 @@ def connector_binary() -> str:
     return str(Path(binary).resolve())
 
 
-def start(root: Path):
+def configure_monitoring(root: Path, watch_runtime: Path | None = None):
+    """Register at runtime, using the installed adapter; never needs a live API."""
+    require_private(root, directory=True)
+    require_private(root / "settings.json")
+    data = json.loads((root / "settings.json").read_text())
+    monitoring = data.get("monitoring", {})
+    if not isinstance(monitoring, dict) or type(monitoring.get("enabled", False)) is not bool:
+        raise ValueError("monitoring.enabled must be a boolean")
+    registration = data.get("monitoring_registration", {})
+    if not isinstance(registration, dict):
+        raise ValueError("monitoring_registration must be an object")
+    # Explicit endpoints/credentials without local registration are operator-owned.
+    # Disabled monitoring stays disabled unless an explicit target is selected.
+    if watch_runtime is None and not (
+        monitoring.get("enabled") and registration.get("runtime_dir")
+    ):
+        return False
+    command = [str(root / "venv/bin/python"), "-m", "server.monitoring", "--runtime-dir", str(root)]
+    if watch_runtime is not None:
+        selected = Path(watch_runtime).expanduser()
+        if not selected.is_absolute():
+            raise ValueError("BoboWatch runtime directory must be absolute")
+        command += ["--bobowatch-runtime-dir", str(selected)]
+    subprocess.run(command, check=True, timeout=30)
+    return True
+
+
+def start(root: Path, *, watch_runtime: Path | None = None):
     state = {job: loaded(job) for job in LABELS}
     if all(state.values()):
+        if watch_runtime is not None:
+            raise ValueError(
+                "Use monitoring --bobowatch-runtime-dir to change a running sender, or stop then start."
+            )
         print("Already loaded. Use status and check --public to verify it.")
         return
     if any(state.values()):
@@ -178,6 +209,7 @@ def start(root: Path):
     )
     if checked.returncode:
         raise RuntimeError("Installation check failed. Rerun the installer while stopped.")
+    configure_monitoring(root, watch_runtime)
     with socket.socket() as probe:
         try:
             probe.bind(("127.0.0.1", settings["port"]))
@@ -405,26 +437,38 @@ def check(root: Path, *, public: bool = False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Manually control Flyji on this Mac.")
-    parser.add_argument("command", choices=["start", "stop", "status", "tunnel", "check"])
+    parser.add_argument(
+        "command", choices=["start", "stop", "status", "tunnel", "check", "monitoring"]
+    )
     parser.add_argument("--public", action="store_true", help="verify the configured HTTPS domain")
     parser.add_argument("--runtime-dir", type=Path)
+    parser.add_argument("--bobowatch-runtime-dir", type=Path)
     args = parser.parse_args(argv)
     if sys.platform != "darwin" or os.getuid() == 0:
         parser.error("Run on macOS as your normal user, without sudo.")
     if args.public and args.command != "check":
         parser.error("--public is only used with check.")
+    if args.bobowatch_runtime_dir is not None and args.command not in ("start", "monitoring"):
+        parser.error("--bobowatch-runtime-dir is used with start or monitoring")
+    if args.command == "monitoring" and args.bobowatch_runtime_dir is None:
+        parser.error("monitoring requires --bobowatch-runtime-dir")
     os.umask(0o077)
     try:
         root = args.runtime_dir.expanduser() if args.runtime_dir else runtime_root()
         if not root.is_absolute():
             raise ValueError("The runtime directory must be an absolute path.")
         {
-            "start": lambda: start(root),
+            "start": lambda: start(root, watch_runtime=args.bobowatch_runtime_dir),
+            "monitoring": lambda: configure_monitoring(root, args.bobowatch_runtime_dir),
             "stop": stop,
             "status": lambda: status(root),
             "tunnel": lambda: save_token(root),
             "check": lambda: check(root, public=args.public),
         }[args.command]()
+        if args.command == "monitoring":
+            print(
+                "Monitoring target saved. An enabled sender reloads it on its next delivery; restart if monitoring was disabled at startup."
+            )
     except (
         OSError,
         ValueError,
