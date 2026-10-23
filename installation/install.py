@@ -18,7 +18,7 @@ from manage import LABELS, loaded, private_write, require_private, runtime_root 
 from serve import read_settings  # noqa: E402
 
 
-def install(root: Path, repo: Path = REPO):
+def install(root: Path, repo: Path = REPO, *, watch_runtime: Path | None = None):
     if any(loaded(job) for job in LABELS):
         raise ValueError("Stop Flyji before installing or updating it.")
     if root.exists() or root.is_symlink():
@@ -49,6 +49,9 @@ def install(root: Path, repo: Path = REPO):
             + b"\n",
         )
     config = read_settings(root)
+    monitoring = json.loads(settings.read_text()).get("monitoring", {})
+    if not isinstance(monitoring, dict) or type(monitoring.get("enabled", False)) is not bool:
+        raise ValueError("monitoring.enabled must be a boolean")
     database = Path(config["database_path"])
     if not database.resolve().is_relative_to((repo / "var").resolve()):
         raise ValueError("Keep the hosted database under this project's ignored var directory.")
@@ -64,6 +67,10 @@ def install(root: Path, repo: Path = REPO):
     require_private(database.parent, directory=True)
     if database.exists() or database.is_symlink():
         require_private(database)
+    # Initialize the exact recorded adapter revision before building the wheel.
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "vendor/bobowatch"], cwd=repo, check=True
+    )
     # A failed update stays stopped until a successful install clears this marker.
     private_write(root / "installing", b"Installation in progress; do not start.\n")
     with tempfile.TemporaryDirectory(prefix="flyji-wheel-") as temporary:
@@ -108,6 +115,11 @@ def install(root: Path, repo: Path = REPO):
         content = source.read_bytes()
         private_write(root / name, content)
         copied[name] = hashlib.sha256(content).hexdigest()
+    if watch_runtime is not None or monitoring.get("enabled", False):
+        command = [str(python), "-m", "server.monitoring", "--runtime-dir", str(root)]
+        if watch_runtime is not None:
+            command += ["--bobowatch-runtime-dir", str(watch_runtime)]
+        subprocess.run(command, check=True)
     subprocess.run([str(python), str(root / "serve.py"), "--seed"], check=True)
     subprocess.run([str(python), str(root / "serve.py"), "--check"], check=True)
     commit = subprocess.run(
@@ -174,6 +186,9 @@ def install(root: Path, repo: Path = REPO):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Install Flyji without starting or publishing it.")
     parser.add_argument("--runtime-dir", type=Path)
+    parser.add_argument(
+        "--bobowatch-runtime-dir", type=Path, help="opt in to local BoboWatch registration"
+    )
     args = parser.parse_args(argv)
     if sys.platform != "darwin" or os.getuid() == 0 or sys.version_info < (3, 11):
         parser.error("Use Python 3.11+ on macOS as your normal user, without sudo.")
@@ -182,7 +197,7 @@ def main(argv=None):
         root = args.runtime_dir.expanduser() if args.runtime_dir else runtime_root()
         if not root.is_absolute():
             raise ValueError("The runtime directory must be an absolute path.")
-        install(root)
+        install(root, watch_runtime=args.bobowatch_runtime_dir)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f"Installation failed: {error}\n")
 

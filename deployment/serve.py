@@ -209,7 +209,7 @@ class BoundedBody:
         await self.app(scope, buffered_receive, send)
 
 
-def create_server(root: Path, *, verify_receipt=True):
+def create_server(root: Path, *, verify_receipt=True, monitoring=True):
     from fastapi import FastAPI
     from starlette.middleware.trustedhost import TrustedHostMiddleware
     from starlette.routing import Mount
@@ -236,6 +236,21 @@ def create_server(root: Path, *, verify_receipt=True):
         allowed_hosts=[settings["hostname"], "localhost", "127.0.0.1", "::1", "[::1]"],
         www_redirect=False,
     )
+    if monitoring:
+        from server.monitoring import wrap_application
+
+        routes = tuple(route.path for route in original.routes if hasattr(route, "response_model"))
+        # The adapter deliberately bounds endpoint dimensions; remaining templates
+        # and unknown routes still count toward the aggregate unmatched category.
+        receipt = root / "installation.json"
+        revision = (
+            json.loads(receipt.read_text()).get("source_commit", "unknown")
+            if receipt.exists()
+            else "unknown"
+        )
+        wrapped = wrap_application(
+            wrapped, root / "settings.json", routes=routes[:20], revision=revision
+        )
     options = {
         "host": "127.0.0.1",
         "port": settings["port"],
@@ -259,7 +274,9 @@ async def check_installation(root: Path) -> None:
     import httpx
 
     # The installer validates its new wheel before replacing the prior receipt.
-    app, _ = create_server(root, verify_receipt=not (root / "installing").exists())
+    app, _ = create_server(
+        root, verify_receipt=not (root / "installing").exists(), monitoring=False
+    )
     settings = read_settings(root)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"

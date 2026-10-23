@@ -1,0 +1,3 @@
+[submodule "vendor/bobowatch"]
+	path = vendor/bobowatch
+	url = https://github.com/lichen-liu/bobowatch.git

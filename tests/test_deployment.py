@@ -1126,3 +1126,94 @@ def test_installer_can_check_new_wheel_before_replacing_old_overlay_receipt(inst
     (installed / "installing").unlink()
     with pytest.raises(ValueError, match="differs from its deployment receipt"):
         asyncio.run(scripts.serve.check_installation(installed))
+
+
+def test_installed_monitoring_wraps_outer_rejections_and_preflight_is_quiet(
+    installed, scripts, tmp_path, monkeypatch
+):
+    from bobowatch.config import initialize
+
+    from server.monitoring import provision
+
+    initialize(tmp_path / "watch")
+    provision(installed, tmp_path / "watch")
+    app, _ = scripts.serve.create_server(installed)
+    monkeypatch.setattr("bobowatch.adapter.Monitor.start", lambda self: None)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/", headers={"Host": "unrelated.invalid"}).status_code == 400
+        assert client.post("/v1/plans/rebuild", content=b"x" * 128001).status_code == 413
+        metrics = app.monitor.snapshot()
+        assert metrics["requests"] == 3
+        assert metrics["http"]["status_classes"][3] == 2
+        assert metrics["http"]["in_flight"] == 0
+    monkeypatch.setattr(
+        "server.monitoring.wrap_application",
+        lambda *args, **kwargs: pytest.fail("Installation checks must not start telemetry"),
+    )
+    asyncio.run(scripts.serve.check_installation(installed))
+
+
+def test_deployment_wrapper_routes_help_without_starting_jobs(tmp_path):
+    import os
+
+    result = subprocess.run(
+        [str(REPO / "deployment/flyji"), "deploy", "--help"],
+        env=os.environ | {"FLYJI_RUNTIME_DIR": str(tmp_path / "not-installed")},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "--bobowatch-runtime-dir" in result.stdout
+    assert not (tmp_path / "not-installed").exists()
+
+
+def test_single_command_deploy_orders_stop_install_provision_start_and_check(
+    tmp_path, scripts, monkeypatch
+):
+    spec = importlib.util.spec_from_file_location("flyji_deploy", REPO / "deployment/deploy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kw: calls.append("submodule"))
+    monkeypatch.setattr(module, "loaded", lambda job: True)
+    monkeypatch.setattr(module, "stop", lambda: calls.append("stop"))
+    monkeypatch.setattr(module, "start", lambda root: calls.append("start"))
+    monkeypatch.setattr(module, "check", lambda root: calls.append("check"))
+    original = module.importlib.util.spec_from_file_location
+
+    def specification(name, path):
+        spec = original(name, path)
+
+        def execute(installer):
+            installer.install = lambda root, repo, watch_runtime=None: calls.append(
+                ("install-and-provision", root, watch_runtime)
+            )
+
+        spec.loader.exec_module = execute
+        return spec
+
+    monkeypatch.setattr(module.importlib.util, "spec_from_file_location", specification)
+    root, watch = tmp_path / "flight", tmp_path / "watch"
+    module.deploy(root, watch)
+    assert calls == ["submodule", "stop", ("install-and-provision", root, watch), "start", "check"]
+
+
+@pytest.mark.parametrize("monitoring", [False, [], {"enabled": "true"}])
+def test_bad_monitoring_settings_refuse_install_before_build(
+    tmp_path, checkout, scripts, monkeypatch, monitoring
+):
+    root = runtime(tmp_path / "runtime", checkout / "var/hosted/flights.db")
+    data = json.loads((root / "settings.json").read_text())
+    data["monitoring"] = monitoring
+    private_file(root / "settings.json", json.dumps(data).encode())
+    monkeypatch.setattr(scripts.install, "loaded", lambda job: False)
+    monkeypatch.setattr(
+        scripts.install.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("Invalid monitoring must precede build/install"),
+    )
+    with pytest.raises(ValueError, match="monitoring.enabled"):
+        scripts.install.install(root, checkout)
+    assert not (root / "installing").exists()
+    assert not (checkout / "var/hosted").exists()
