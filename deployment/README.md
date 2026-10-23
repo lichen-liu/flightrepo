@@ -140,10 +140,23 @@ fails the deployment check; it does not shorten or truncate user searches.
 
 `./deployment/flyji deploy` combines the existing stop/install/start/local-check
 sequence using the pinned submodule. The optional `--bobowatch-runtime-dir PATH`
-provisions monitoring credentials during installation, and subsequent deployments
+provisions monitoring credentials at startup, and subsequent deployments
 reuse the saved registration. It never starts BoboWatch. Hosted monitoring remains
 opt-in. The pinned BoboWatch revision includes the RAM-disk quota/lifecycle controls;
 install its private runtime first, then enable this integration. See
 [the install/reinstall and rollout guide](../docs/monitoring.md) for the exact
 commands. This deployment restarts serving jobs, not the independent ingestion
 worker.
+
+
+Installation no longer reads BoboWatch runtime files or requires its API. The
+`--bobowatch-runtime-dir` option belongs to `start`, `deploy`, or `monitoring`,
+rather than the installer. Use `monitoring --bobowatch-runtime-dir PATH` to change
+an already-enabled sender live; enabling one that was disabled at process startup
+requires a restart. Saved local registrations are reused at later starts. Explicit
+endpoint/credential settings without a local registration are preserved.
+
+A failed install leaves the app stopped. A failed start or final deployment check
+unloads both jobs, preserving configuration, credentials and databases. Cleanup
+failures are reported rather than claiming the app is stopped. Deployment uses
+the current checkout; update it separately with `git pull`.
