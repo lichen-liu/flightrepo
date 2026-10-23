@@ -23,11 +23,14 @@ PROBE = """
 import sys
 from pathlib import Path
 import admin.client, core.config, ingestion.updater, server.api
+import bobowatch.adapter, bobowatch.asgi, bobowatch.provision
 from fastapi.testclient import TestClient
 from ingestion.adsblol.policy import ExtractionPolicy
 
-for module in (admin.client, core.config, ingestion.updater, server.api):
+for module in (admin.client, core.config, ingestion.updater, server.api,
+               bobowatch.adapter, bobowatch.asgi, bobowatch.provision):
     assert Path(module.__file__).is_relative_to(Path(sys.prefix)), module.__file__
+assert "waitress" not in sys.modules and "bobowatch.storage" not in sys.modules
 assert not hasattr(ExtractionPolicy(), 'fixed_wing_types')
 assert not hasattr(ExtractionPolicy(), 'callsign_prefixes')
 with TestClient(server.api.app) as client:

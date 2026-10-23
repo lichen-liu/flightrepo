@@ -34,3 +34,15 @@ select = ["E4", "E7", "E9", "F", "I"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/core", "src/ingestion", "src/server", "src/admin"]
 
+[tool.hatch.build]
+dev-mode-dirs = ["src", "vendor/bobowatch"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"vendor/bobowatch/bobowatch/__init__.py" = "bobowatch/__init__.py"
+"vendor/bobowatch/bobowatch/adapter.py" = "bobowatch/adapter.py"
+"vendor/bobowatch/bobowatch/protocol.py" = "bobowatch/protocol.py"
+"vendor/bobowatch/bobowatch/asgi.py" = "bobowatch/asgi.py"
+"vendor/bobowatch/bobowatch/client.py" = "bobowatch/client.py"
+"vendor/bobowatch/bobowatch/config.py" = "bobowatch/config.py"
+"vendor/bobowatch/bobowatch/paths.py" = "bobowatch/paths.py"
+"vendor/bobowatch/bobowatch/provision.py" = "bobowatch/provision.py"
