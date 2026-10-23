@@ -30,6 +30,7 @@ from core.routing.results import RouteSearchResult
 from core.routing.snapshot import RoutingSnapshot, flight_key
 from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
+from server.archive_queries import AIRPORT_PAIRS_CTE, has_airport_pair_index
 from server.reachability import TimeEdge, reverse_reachable_flights
 from server.routing_projection import calculate_database_routes, project_routes
 from server.web_models import (
@@ -48,13 +49,28 @@ class ReadQueryTimeout(sqlite3.OperationalError):
     """The serving read exceeded its configured SQLite work deadline."""
 
 
+LIVE_LEG_SQL = """NOT EXISTS (SELECT 1 FROM flight_tombstones t
+    WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)"""
+TIME_BASES = {
+    "scheduled": (
+        "departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL",
+        "departure_scheduled_us",
+    ),
+    "observed": ("departure_observed_lower_us IS NOT NULL", "departure_observed_lower_us"),
+    "actual": (
+        "departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL",
+        "departure_actual_us",
+    ),
+}
+
+
 class FlightReader(SQLiteConnection):
     def __init__(self, path: Path, *, serving_only=False, query_timeout_seconds=None):
         super().__init__(path, read_only=True)
         self._catalog_lock = Lock()
         self._catalog_cache = {}
         self._bootstrap_lock = Lock()
-        self._bootstrap_cache = None
+        self._bootstrap_cache = {}
         self.serving_only = serving_only
         self.query_timeout_seconds = (
             get_settings().read_query_timeout_seconds
@@ -133,12 +149,9 @@ class FlightReader(SQLiteConnection):
 
     def stats(self) -> dict:
         with self.connect() as connection:
-            count = connection.execute("SELECT COUNT(*) FROM flights").fetchone()[0]
-            providers = dict(
-                connection.execute(
-                    "SELECT provider, COUNT(*) FROM flights GROUP BY provider"
-                ).fetchall()
-            )
+            connection.execute("BEGIN")
+            providers = self._provider_counts(connection)
+            count = sum(providers.values())
             mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
             contract, version = connection.execute(
                 "SELECT contract,version FROM schema_metadata WHERE id=1"
@@ -153,6 +166,37 @@ class FlightReader(SQLiteConnection):
             "schema_version": version,
             "time_bases": bases,
         }
+
+    @staticmethod
+    def _provider_counts(connection):
+        return dict(
+            connection.execute(f"""SELECT s.code,COUNT(*)
+            FROM data_sources s JOIN flight_legs f ON f.source_id=s.id
+            WHERE {LIVE_LEG_SQL} GROUP BY s.code""")
+        )
+
+    @staticmethod
+    def _providers(connection):
+        return [
+            row[0]
+            for row in connection.execute(f"""SELECT s.code FROM data_sources s
+            WHERE EXISTS (SELECT 1 FROM flight_legs f
+                WHERE f.source_id=s.id AND {LIVE_LEG_SQL}) ORDER BY s.code""")
+        ]
+
+    def validate_dataset(self, *, data_mode, count=True):
+        """Validate all source identities without computing routing/quality statistics."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            self._readiness(connection)
+            providers = self._provider_counts(connection) if count else self._providers(connection)
+            if data_mode == "synthetic" and set(providers) != {"demo"}:
+                raise ValueError(
+                    "Hosted preview requires a nonempty database containing only demo providers."
+                )
+            if data_mode == "real" and "demo" in providers:
+                raise ValueError("Real serving mode cannot contain demo flight records")
+            return sum(providers.values()) if count else None
 
     _record = staticmethod(flight_record)
 
@@ -532,14 +576,30 @@ class FlightReader(SQLiteConnection):
         )
 
     @staticmethod
-    def _time_bases(connection):
-        counts = {
-            basis: connection.execute(
-                "SELECT COUNT(*) FROM searchable_legs WHERE time_basis=?", (basis,)
-            ).fetchone()[0]
-            for basis in ("scheduled", "observed", "actual")
-        }
-        return counts
+    def _time_summary(connection):
+        # Bulk aggregation must read in storage order. Following departure indexes
+        # hydrates wide facts in time order, causing random reads on published archives.
+        aggregates = []
+        for basis, (condition, column) in TIME_BASES.items():
+            aggregates.extend(
+                f"{expression} FILTER (WHERE {condition}) AS {basis}_{name}"
+                for name, expression in (
+                    ("count", "COUNT(*)"),
+                    ("first", f"MIN({column})"),
+                    ("last", f"MAX({column})"),
+                )
+            )
+        return dict(
+            connection.execute(
+                f"SELECT {','.join(aggregates)} FROM flight_legs f NOT INDEXED "
+                f"WHERE status <> 'cancelled' AND {LIVE_LEG_SQL} AND {ADMITTED_SQL}"
+            ).fetchone()
+        )
+
+    @classmethod
+    def _time_bases(cls, connection):
+        summary = cls._time_summary(connection)
+        return {basis: summary[f"{basis}_count"] for basis in TIME_BASES}
 
     @classmethod
     def _default_basis(cls, connection):
@@ -813,20 +873,22 @@ class FlightReader(SQLiteConnection):
         """Check readable storage and the serving contract without scanning flight facts."""
         with self.connect() as connection:
             connection.execute("BEGIN")
-            require_serving(connection)
-            contract = connection.execute(
-                "SELECT contract,version FROM schema_metadata WHERE id=1"
-            ).fetchone()
-            if tuple(contract or ()) != ("flight-legs", 1):
-                raise sqlite3.DatabaseError("Unsupported flight schema contract")
-            # Preparing the public read view verifies its tables and columns.
-            # Dataset counts and default time basis belong to the catalog API.
-            connection.execute("SELECT leg_id,time_basis FROM searchable_legs LIMIT 0")
+            self._readiness(connection)
         return dict(
             status="ready",
             schema_contract="flight-legs",
             schema_version=1,
         )
+
+    @staticmethod
+    def _readiness(connection):
+        require_serving(connection)
+        contract = connection.execute(
+            "SELECT contract,version FROM schema_metadata WHERE id=1"
+        ).fetchone()
+        if tuple(contract or ()) != ("flight-legs", 1):
+            raise sqlite3.DatabaseError("Unsupported flight schema contract")
+        connection.execute("SELECT leg_id,time_basis FROM searchable_legs LIMIT 0")
 
     def web_catalog(self, *, include_airports=True) -> WebCatalog:
         """Reuse unchanged statistics; writers invalidate through DB/WAL file metadata."""
@@ -852,17 +914,8 @@ class FlightReader(SQLiteConnection):
             connection.execute("BEGIN")
             # Aggregate typed storage directly. The compatibility view formats
             # every timestamp; doing that for a whole archive delays startup.
-            conditions = {
-                "scheduled": "departure_scheduled_us IS NOT NULL AND arrival_scheduled_us IS NOT NULL",
-                "observed": "departure_observed_lower_us IS NOT NULL",
-                "actual": "departure_actual_us IS NOT NULL AND arrival_actual_us IS NOT NULL",
-            }
-            columns = {
-                basis: "departure_observed_lower_us"
-                if basis == "observed"
-                else f"departure_{basis}_us"
-                for basis in conditions
-            }
+            conditions = {basis: values[0] for basis, values in TIME_BASES.items()}
+            columns = {basis: values[1] for basis, values in TIME_BASES.items()}
             # Check admission a bounded number of times per fact. Repeating a
             # flattened eligibility expression in each aggregate multiplies JSON
             # evidence checks across every time basis on multi-million-row files.
@@ -878,24 +931,11 @@ class FlightReader(SQLiteConnection):
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key
                 )""").fetchone()
             )
-            for basis in conditions:
-                row = connection.execute(
-                    "SELECT COUNT(*),MIN(departure_lower_us),MAX(departure_lower_us) FROM searchable_legs WHERE time_basis=?",
-                    (basis,),
-                ).fetchone()
-                facts[f"{basis}_count"], facts[f"{basis}_first"], facts[f"{basis}_last"] = row
+            facts.update(self._time_summary(connection))
             for key in ("oldest_fact_refresh", "newest_fact_refresh"):
                 if facts[key] is not None:
                     facts[key] = EPOCH + timedelta(microseconds=facts[key])
-            facts["providers"] = [
-                r[0]
-                for r in connection.execute(
-                    "SELECT s.code FROM data_sources s WHERE EXISTS "
-                    "(SELECT 1 FROM flight_legs f WHERE f.source_id=s.id AND NOT EXISTS "
-                    "(SELECT 1 FROM flight_tombstones t WHERE t.source_id=f.source_id "
-                    "AND t.source_record_key=f.source_record_key)) ORDER BY s.code"
-                )
-            ]
+            facts["providers"] = self._providers(connection)
             facts["time_bases"] = {basis: facts.pop(f"{basis}_count") for basis in conditions}
             facts["default_time_basis"] = next(
                 (basis for basis, count in facts["time_bases"].items() if count), "scheduled"
@@ -923,16 +963,7 @@ class FlightReader(SQLiteConnection):
                     WHERE t.source_id=f.source_id AND t.source_record_key=f.source_record_key)
                 ORDER BY {columns[basis]},source_id,source_record_key LIMIT 1""",
             ).fetchone()
-            rows = (
-                list(
-                    connection.execute("""WITH active_codes(iata) AS (
-                SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
-                SELECT a.*
-                FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""")
-                )
-                if include_airports
-                else []
-            )
+            rows = self._active_airports(connection) if include_airports else []
         return WebCatalog(
             airports=sorted((dict(r) for r in rows[:1000]), key=lambda row: row["iata"]),
             airports_truncated=len(rows) > 1000,
@@ -940,32 +971,52 @@ class FlightReader(SQLiteConnection):
             suggested_route=dict(suggestion) if suggestion else None,
         )
 
-    def web_bootstrap(self) -> WebBootstrap:
+    def web_bootstrap(self, *, include_airports=True) -> WebBootstrap:
         """Load search defaults and suggestions without archive-wide statistics."""
         with self._bootstrap_lock:
             revision = self._catalog_revision()
-            if self._bootstrap_cache and self._bootstrap_cache[0] == revision:
-                return self._bootstrap_cache[1].model_copy(deep=True)
-            result = self._read_web_bootstrap()
+            cached = self._bootstrap_cache.get(include_airports)
+            if cached and cached[0] == revision:
+                return cached[1].model_copy(deep=True)
+            result = (
+                self._read_web_bootstrap()
+                if include_airports
+                else self._read_web_bootstrap(include_airports=False)
+            )
             if revision == self._catalog_revision():
-                self._bootstrap_cache = (revision, result.model_copy(deep=True))
+                self._bootstrap_cache[include_airports] = (revision, result.model_copy(deep=True))
             return result
 
-    def _read_web_bootstrap(self) -> WebBootstrap:
+    @staticmethod
+    def _active_airports(connection):
+        # Enumerate distinct pairs by seeks, then test whether each pair has any
+        # live fact. The small materialization is per pair, never per flight.
+        if has_airport_pair_index(connection):
+            live_pair = ""
+            if connection.execute("SELECT 1 FROM flight_tombstones LIMIT 1").fetchone():
+                live_pair = f"""AND EXISTS (SELECT 1 FROM flight_legs f
+                    WHERE f.origin_iata=p.origin AND f.destination_iata=p.destination
+                    AND {LIVE_LEG_SQL})"""
+            return connection.execute(
+                AIRPORT_PAIRS_CTE
+                + f""", active_pairs AS MATERIALIZED (
+                    SELECT origin,destination FROM pairs p WHERE destination IS NOT NULL
+                    {live_pair}
+                ), active_codes(iata) AS (
+                    SELECT origin FROM active_pairs UNION SELECT destination FROM active_pairs)
+                SELECT a.* FROM airports a
+                ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001"""
+            ).fetchall()
+        return connection.execute("""WITH active_codes(iata) AS (
+            SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)
+            SELECT a.* FROM airports a
+            ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata LIMIT 1001""").fetchall()
+
+    def _read_web_bootstrap(self, *, include_airports=True) -> WebBootstrap:
         with self.connect() as connection:
             connection.execute("BEGIN")
             first = {}
-            for basis in ("scheduled", "observed", "actual"):
-                column = (
-                    "departure_observed_lower_us"
-                    if basis == "observed"
-                    else f"departure_{basis}_us"
-                )
-                condition = (
-                    "departure_observed_lower_us IS NOT NULL"
-                    if basis == "observed"
-                    else f"departure_{basis}_us IS NOT NULL AND arrival_{basis}_us IS NOT NULL"
-                )
+            for basis, (condition, column) in TIME_BASES.items():
                 row = connection.execute(
                     f"SELECT origin_iata,destination_iata,{column} FROM flight_legs f "
                     f"WHERE status <> 'cancelled' AND ({condition}) "
@@ -978,14 +1029,17 @@ class FlightReader(SQLiteConnection):
                     first[basis] = row
             basis = next(iter(first), "scheduled")
             suggested = first.get(basis)
-            rows = connection.execute("""WITH active_codes(iata) AS (
-                SELECT origin_iata FROM flight_legs UNION SELECT destination_iata FROM flight_legs)
-                SELECT a.*
-                FROM airports a ORDER BY CASE WHEN a.iata IN active_codes THEN 0 ELSE 1 END,a.iata
-                LIMIT 1001""").fetchall()
+            rows = self._active_airports(connection) if include_airports else []
+            providers = self._providers(connection)
         return WebBootstrap(
             airports=sorted((dict(row) for row in rows[:1000]), key=lambda row: row["iata"]),
             airports_truncated=len(rows) > 1000,
+            data_mode="mixed"
+            if "demo" in providers and len(providers) > 1
+            else "synthetic"
+            if providers == ["demo"]
+            else "real",
+            has_records=bool(providers),
             default_time_basis=basis,
             available_time_bases=list(first),
             first_departure=(EPOCH + timedelta(microseconds=suggested[2])) if suggested else None,

@@ -133,8 +133,8 @@ def catalog(include_airports: bool = True, store: FlightReader = Depends(get_sto
 
 
 @app.get("/v1/bootstrap", response_model=WebBootstrap)
-def bootstrap(store: FlightReader = Depends(get_store)):
-    return store.web_bootstrap()
+def bootstrap(include_airports: bool = True, store: FlightReader = Depends(get_store)):
+    return store.web_bootstrap(include_airports=include_airports)
 
 
 @app.get("/v1/search-availability", response_model=SearchAvailability)

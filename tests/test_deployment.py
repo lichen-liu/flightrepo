@@ -1012,6 +1012,112 @@ def test_real_mode_requires_an_initialized_database_and_rejects_demo(tmp_path, s
         scripts.serve.create_server(root)
 
 
+def test_real_preflight_retains_search_and_rebuild_without_archive_statistics(
+    installed, scripts, monkeypatch, capsys
+):
+    from server.reader import FlightReader
+
+    settings = json.loads((installed / "settings.json").read_text())
+    settings["data_mode"] = "real"
+    (installed / "settings.json").write_text(json.dumps(settings))
+    with sqlite3.connect(settings["database_path"]) as connection:
+        connection.execute("UPDATE data_sources SET code='real-fixture' WHERE code='demo'")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Real preflight must not aggregate archive statistics")
+
+    monkeypatch.setattr(FlightReader, "stats", forbidden)
+    monkeypatch.setattr(FlightReader, "web_catalog", forbidden)
+    calls = []
+    for method in ("search_itineraries", "rebuild"):
+        original = getattr(FlightReader, method)
+
+        def counted(self, request, original=original, method=method):
+            calls.append(method)
+            return original(self, request)
+
+        monkeypatch.setattr(FlightReader, method, counted)
+    assert scripts.serve.seed_database(installed)["flight_count"] == 12
+    asyncio.run(scripts.serve.check_installation(installed))
+    assert calls == ["search_itineraries", "rebuild"]
+    assert "real routing and rebuild passed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("phase", ["seed", "check"])
+def test_installer_bounds_database_phases_and_preserves_failed_state(
+    tmp_path, checkout, scripts, monkeypatch, phase
+):
+    root = tmp_path / "runtime"
+    install_boundary(monkeypatch, scripts)
+    run = scripts.install.subprocess.run
+
+    def timeout(command, **kwargs):
+        if f"--{phase}" in command:
+            assert kwargs["timeout"] == scripts.manage.INSTALLATION_CHECK_TIMEOUT
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return run(command, **kwargs)
+
+    monkeypatch.setattr(scripts.install.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match=f"Installed {phase} exceeded"):
+        scripts.install.install(root, checkout)
+    assert (root / "installing").exists() and not (root / "installation.json").exists()
+
+
+@pytest.mark.parametrize(
+    "has_records,bases,expected",
+    [
+        (False, [], "empty dataset"),
+        (True, [], "no complete time evidence"),
+        (True, ["observed"], "passed"),
+    ],
+)
+def test_real_public_probe_uses_summary_and_preserves_end_to_end_search(
+    scripts, monkeypatch, has_records, bases, expected
+):
+    bodies = public_responses()
+    bodies["/v1/bootstrap"] = {
+        "data_mode": "real",
+        "has_records": has_records,
+        "available_time_bases": bases,
+        "default_time_basis": "observed",
+        "first_departure": "2026-10-17T18:00:00Z",
+        "suggested_route": {"origin_iata": "YYZ", "destination_iata": "CDG"},
+    }
+    calls = []
+
+    def open_url(request, timeout):
+        url = urlsplit(request.full_url)
+        calls.append(url.path)
+        assert url.path != "/v1/catalog" and timeout == 20
+        if url.path == "/v1/bootstrap":
+            assert url.query == "include_airports=false"
+        value = bodies[url.path]
+        return Response(
+            value if isinstance(value, bytes) else json.dumps(value).encode(), request.full_url
+        )
+
+    stub_requests(scripts, monkeypatch, open_url)
+    result = scripts.manage.probe("https://fly.boboji.fyi", data_mode="real")
+    assert result["route_search"] == expected
+    assert ("/v1/itineraries/search" in calls) == bool(bases)
+    assert result["flight_count"] == (None if has_records else 0)
+
+
+@pytest.mark.parametrize("mode", ["mixed", "synthetic"])
+def test_real_public_probe_rejects_demo_sources(scripts, mode):
+    with pytest.raises(ValueError, match="without demo"):
+        scripts.manage.probe_real(
+            "https://fixture.example",
+            {"status": "ready"},
+            {
+                "data_mode": mode,
+                "has_records": True,
+                "available_time_bases": ["observed"],
+            },
+            lambda *args: pytest.fail("Must reject demo data before routing"),
+        )
+
+
 def test_startup_readiness_allows_archive_aggregation_without_request_flood(scripts, monkeypatch):
     clock = [0.0]
     timeouts = []

@@ -44,6 +44,18 @@ Updates preserve the token and existing hosted data. Installation refuses to
 update a loaded job. A failed update leaves the runtime marked incomplete and
 blocks startup until a successful installer rerun; it is not an atomic rollback.
 
+Database verification prints phase progress. The seed/preservation check and
+installed application check each have a three-minute subprocess deadline. The
+preservation phase reports an exact record count once. Application startup checks
+the serving schema and source identities without recomputing archive statistics.
+In real mode, preflight selects admitted time evidence through bootstrap, then
+exercises the real search and rebuild endpoints. Empty or unsearchable real
+datasets are reported explicitly. A timeout leaves the incomplete marker and
+previous receipt in place; review the named phase before retrying.
+
+See [archive query measurements](../docs/archive-query-performance.md) for the
+query plans, fixture timings and bounded measurements on the large archive.
+
 For a custom runtime outside the checkout, set the same absolute directory for
 installation and later commands:
 

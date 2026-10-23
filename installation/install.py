@@ -14,7 +14,14 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "deployment"))
-from manage import LABELS, loaded, private_write, require_private, runtime_root  # noqa: E402
+from manage import (  # noqa: E402
+    INSTALLATION_CHECK_TIMEOUT,
+    LABELS,
+    loaded,
+    private_write,
+    require_private,
+    runtime_root,
+)
 from serve import read_settings  # noqa: E402
 
 
@@ -115,8 +122,21 @@ def install(root: Path, repo: Path = REPO):
         content = source.read_bytes()
         private_write(root / name, content)
         copied[name] = hashlib.sha256(content).hexdigest()
-    subprocess.run([str(python), str(root / "serve.py"), "--seed"], check=True)
-    subprocess.run([str(python), str(root / "serve.py"), "--check"], check=True)
+    for phase in ("seed", "check"):
+        print(
+            f"Verifying installed database/application: {phase} (limit {INSTALLATION_CHECK_TIMEOUT}s)",
+            flush=True,
+        )
+        try:
+            subprocess.run(
+                [str(python), str(root / "serve.py"), f"--{phase}"],
+                check=True,
+                timeout=INSTALLATION_CHECK_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"Installed {phase} exceeded {INSTALLATION_CHECK_TIMEOUT}s; installation remains incomplete. Review this phase before retrying."
+            ) from error
     commit = subprocess.run(
         [
             "git",
