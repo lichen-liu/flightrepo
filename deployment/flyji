@@ -14,7 +14,7 @@ for flyji_argument in "$@"; do
         --runtime-dir) flyji_need_runtime=true ;;
         --runtime-dir=*) flyji_runtime="${flyji_argument#--runtime-dir=}" ;;
         deploy) flyji_deploy=true ; flyji_command=deploy ;;
-        start|stop|status|tunnel|check|-h|--help) flyji_command="$flyji_argument" ;;
+        start|stop|status|tunnel|check|monitoring|-h|--help) flyji_command="$flyji_argument" ;;
     esac
 done
 if [ "$flyji_need_runtime" = true ]; then

@@ -23,9 +23,16 @@ def deploy(root, watch_runtime=None):
     spec.loader.exec_module(installer)
     if any(loaded(job) for job in LABELS):
         stop()
-    installer.install(root, REPO, watch_runtime=watch_runtime)
-    start(root)
-    check(root)
+    installer.install(root, REPO)
+    try:
+        start(root, watch_runtime=watch_runtime)
+        check(root)
+    except BaseException as error:
+        try:
+            stop()
+        except Exception as cleanup_error:
+            raise RuntimeError(f"Deployment failed; cleanup incomplete: {cleanup_error}") from error
+        raise
 
 
 def main():
