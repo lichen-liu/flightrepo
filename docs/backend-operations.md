@@ -95,6 +95,15 @@ Public search and continuation responses do not compute replay graph fingerprint
 which their response contracts exclude. Private calculations and explicit traces
 still retain stable replay identities.
 
+Installation/startup and real local/public verification use schema/source probes
+and bootstrap route evidence instead of rebuilding archive statistics. Full
+catalog statistics remain exact and invalidate after publication. Bulk time-basis
+aggregation reads facts sequentially; airport dimensions and the relaxed routing
+graph seek between distinct pairs using the existing airport-pair index. No new
+schema/index upgrade is required for these query changes. See the
+[archive query measurements](archive-query-performance.md) for plans, reproducible
+fixture benchmarks and limits of the live-archive measurements.
+
 ## Index and publication maintenance
 
 The table contract remains version 1. A covering airport-pair index supports

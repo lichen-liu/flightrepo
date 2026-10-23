@@ -14,6 +14,7 @@ from core.routing.projection import ProjectedSnapshot, RoutingEdge
 from core.routing.search import RouteCalculation, calculate_routes, route_score
 from core.routing.snapshot import digest, flight_key
 from core.storage import EPOCH, utc_us
+from server.archive_queries import airport_pairs
 from server.reachability import TimeEdge, reverse_reachable_flights
 
 
@@ -37,9 +38,7 @@ class DatabaseFlightIndex(FlightIndex):
         self.origins = set()
         self.airport_count = connection.execute("SELECT count(*) FROM airports").fetchone()[0]
         self.reverse = defaultdict(set)
-        for origin, destination in connection.execute(
-            "SELECT DISTINCT origin_iata,destination_iata FROM flight_legs"
-        ):
+        for origin, destination in airport_pairs(connection):
             if origin in policy.avoid or destination in policy.avoid:
                 continue
             self.reverse[destination].add(origin)

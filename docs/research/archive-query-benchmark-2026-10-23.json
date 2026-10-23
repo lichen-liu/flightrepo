@@ -1,0 +1,372 @@
+{
+  "date": "2026-10-23",
+  "timezone": "America/Toronto",
+  "python": "3.14.7",
+  "notes": [
+    "Final fixture benchmarks ran sequentially after tests. Fresh reader means cold application cache; OS caches were not purged.",
+    "Fixture contains 676 distinct airport pairs, shuffled observed departure times, cancelled and blocked facts; graph cardinality is much smaller than the live archive.",
+    "Live reads used mode=ro, query_only and a two-second SQLite work deadline after the deployment check exited. No live app end-to-end benchmark or full count/catalog timing was completed."
+  ],
+  "fixtures": [
+    {
+      "rows": 250000,
+      "bytes": 65560576,
+      "sqlite": "3.53.4",
+      "baseline": "6897542",
+      "cache_note": "OS caches uncontrolled; fresh reader twice, then same-reader cache hit",
+      "measurements": {
+        "before": {
+          "stats": {
+            "fresh_readers": [
+              0.416956,
+              0.409977
+            ],
+            "same_reader": 0.399442
+          },
+          "web_catalog": {
+            "fresh_readers": [
+              0.832439,
+              0.823918
+            ],
+            "same_reader": 0.00175
+          },
+          "web_bootstrap": {
+            "fresh_readers": [
+              0.049489,
+              0.050452
+            ],
+            "same_reader": 0.001721
+          },
+          "validate_count": [
+            0.408465,
+            0.409866
+          ],
+          "validate_sources": [
+            0.38911,
+            0.396737
+          ],
+          "offline_preflight": [
+            1.47283,
+            1.322164
+          ],
+          "preflight_progress": []
+        },
+        "after": {
+          "stats": {
+            "fresh_readers": [
+              0.11606,
+              0.118154
+            ],
+            "same_reader": 0.121735
+          },
+          "web_catalog": {
+            "fresh_readers": [
+              0.226316,
+              0.233689
+            ],
+            "same_reader": 0.001843
+          },
+          "web_bootstrap": {
+            "fresh_readers": [
+              0.008213,
+              0.007656
+            ],
+            "same_reader": 0.001743
+          },
+          "validate_count": [
+            0.025716,
+            0.024675
+          ],
+          "validate_sources": [
+            0.001219,
+            0.000932
+          ],
+          "offline_preflight": [
+            0.056814,
+            0.055767
+          ],
+          "preflight_progress": [
+            "Installation check (0.0s): validating schema, serving role and source identities",
+            "Installation check (0.0s): checking application assets and database readiness",
+            "Installation check (0.0s): selecting an admitted real route through bootstrap",
+            "Installation check (0.0s): searching the real route",
+            "Installation check (0.1s): rebuilding the real itinerary from its selected flight",
+            "Installation check (0.1s): real routing and rebuild passed",
+            "Installation check (0.0s): validating schema, serving role and source identities",
+            "Installation check (0.0s): checking application assets and database readiness",
+            "Installation check (0.0s): selecting an admitted real route through bootstrap",
+            "Installation check (0.0s): searching the real route",
+            "Installation check (0.0s): rebuilding the real itinerary from its selected flight",
+            "Installation check (0.1s): real routing and rebuild passed"
+          ]
+        }
+      },
+      "plans": {
+        "before_time_basis": [
+          "CO-ROUTINE searchable_legs",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH f USING INDEX flight_legs_scheduled_departure (departure_scheduled_us>?)",
+          "CORRELATED SCALAR SUBQUERY 9",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 10",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "UNION ALL",
+          "SEARCH f USING INDEX flight_legs_actual_departure (departure_actual_us>?)",
+          "CORRELATED SCALAR SUBQUERY 6",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 7",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "UNION ALL",
+          "SEARCH f USING INDEX flight_legs_observed_departure (departure_observed_lower_us>?)",
+          "CORRELATED SCALAR SUBQUERY 3",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 4",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "SCAN searchable_legs"
+        ],
+        "before_pairs": [
+          "SCAN flight_legs USING COVERING INDEX flight_legs_airport_pair"
+        ],
+        "after_pairs": [
+          "CO-ROUTINE pairs",
+          "SETUP",
+          "CO-ROUTINE origins",
+          "SETUP",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair",
+          "RECURSIVE STEP",
+          "SCAN o",
+          "CORRELATED SCALAR SUBQUERY 2",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata>?)",
+          "SCAN o",
+          "CORRELATED SCALAR SUBQUERY 4",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata=?)",
+          "RECURSIVE STEP",
+          "SCAN p",
+          "CORRELATED SCALAR SUBQUERY 6",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata=? AND destination_iata>?)",
+          "SCAN pairs"
+        ],
+        "after_time_summary": [
+          "SCAN f",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "CORRELATED SCALAR SUBQUERY 2",
+          "SCAN reason VIRTUAL TABLE INDEX 1:"
+        ]
+      }
+    },
+    {
+      "rows": 1000000,
+      "bytes": 262795264,
+      "sqlite": "3.53.4",
+      "baseline": "6897542",
+      "cache_note": "OS caches uncontrolled; fresh reader twice, then same-reader cache hit",
+      "measurements": {
+        "before": {
+          "stats": {
+            "fresh_readers": [
+              1.698919,
+              1.761163
+            ],
+            "same_reader": 1.719387
+          },
+          "web_catalog": {
+            "fresh_readers": [
+              3.474321,
+              3.666658
+            ],
+            "same_reader": 0.001791
+          },
+          "web_bootstrap": {
+            "fresh_readers": [
+              0.19054,
+              0.194596
+            ],
+            "same_reader": 0.001726
+          },
+          "validate_count": [
+            1.84487,
+            1.915826
+          ],
+          "validate_sources": [
+            1.877628,
+            1.892676
+          ],
+          "offline_preflight": [
+            6.013116,
+            5.943977
+          ],
+          "preflight_progress": []
+        },
+        "after": {
+          "stats": {
+            "fresh_readers": [
+              0.483584,
+              0.475134
+            ],
+            "same_reader": 0.480669
+          },
+          "web_catalog": {
+            "fresh_readers": [
+              0.913671,
+              0.916583
+            ],
+            "same_reader": 0.001783
+          },
+          "web_bootstrap": {
+            "fresh_readers": [
+              0.007621,
+              0.008031
+            ],
+            "same_reader": 0.001693
+          },
+          "validate_count": [
+            0.090918,
+            0.091498
+          ],
+          "validate_sources": [
+            0.001147,
+            0.000903
+          ],
+          "offline_preflight": [
+            0.058773,
+            0.063829
+          ],
+          "preflight_progress": [
+            "Installation check (0.0s): validating schema, serving role and source identities",
+            "Installation check (0.0s): checking application assets and database readiness",
+            "Installation check (0.0s): selecting an admitted real route through bootstrap",
+            "Installation check (0.0s): searching the real route",
+            "Installation check (0.1s): rebuilding the real itinerary from its selected flight",
+            "Installation check (0.1s): real routing and rebuild passed",
+            "Installation check (0.0s): validating schema, serving role and source identities",
+            "Installation check (0.0s): checking application assets and database readiness",
+            "Installation check (0.0s): selecting an admitted real route through bootstrap",
+            "Installation check (0.0s): searching the real route",
+            "Installation check (0.1s): rebuilding the real itinerary from its selected flight",
+            "Installation check (0.1s): real routing and rebuild passed"
+          ]
+        }
+      },
+      "plans": {
+        "before_time_basis": [
+          "CO-ROUTINE searchable_legs",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH f USING INDEX flight_legs_scheduled_departure (departure_scheduled_us>?)",
+          "CORRELATED SCALAR SUBQUERY 9",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 10",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "UNION ALL",
+          "SEARCH f USING INDEX flight_legs_actual_departure (departure_actual_us>?)",
+          "CORRELATED SCALAR SUBQUERY 6",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 7",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "UNION ALL",
+          "SEARCH f USING INDEX flight_legs_observed_departure (departure_observed_lower_us>?)",
+          "CORRELATED SCALAR SUBQUERY 3",
+          "SCAN reason VIRTUAL TABLE INDEX 1:",
+          "CORRELATED SCALAR SUBQUERY 4",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "SCAN searchable_legs"
+        ],
+        "before_pairs": [
+          "SCAN flight_legs USING COVERING INDEX flight_legs_airport_pair"
+        ],
+        "after_pairs": [
+          "CO-ROUTINE pairs",
+          "SETUP",
+          "CO-ROUTINE origins",
+          "SETUP",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair",
+          "RECURSIVE STEP",
+          "SCAN o",
+          "CORRELATED SCALAR SUBQUERY 2",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata>?)",
+          "SCAN o",
+          "CORRELATED SCALAR SUBQUERY 4",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata=?)",
+          "RECURSIVE STEP",
+          "SCAN p",
+          "CORRELATED SCALAR SUBQUERY 6",
+          "SEARCH flight_legs USING COVERING INDEX flight_legs_airport_pair (origin_iata=? AND destination_iata>?)",
+          "SCAN pairs"
+        ],
+        "after_time_summary": [
+          "SCAN f",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH t USING PRIMARY KEY (source_id=? AND source_record_key=?)",
+          "CORRELATED SCALAR SUBQUERY 2",
+          "SCAN reason VIRTUAL TABLE INDEX 1:"
+        ]
+      }
+    }
+  ],
+  "bounded_live_reads": [
+    {
+      "operation": "before.stats",
+      "run": 0,
+      "seconds": 2.01015,
+      "error": "Database read exceeded its time limit"
+    },
+    {
+      "operation": "before.catalog",
+      "run": 0,
+      "seconds": 2.00078,
+      "error": "Database read exceeded its time limit"
+    },
+    {
+      "operation": "after.validate_count",
+      "run": 0,
+      "seconds": 2.00068,
+      "error": "Database read exceeded its time limit"
+    },
+    {
+      "operation": "after.validate_sources",
+      "run": 0,
+      "seconds": 0.00155
+    },
+    {
+      "operation": "after.validate_sources",
+      "run": 1,
+      "seconds": 0.00135
+    },
+    {
+      "operation": "after.bootstrap_summary",
+      "run": 0,
+      "seconds": 0.00169
+    },
+    {
+      "operation": "after.bootstrap_summary",
+      "run": 1,
+      "seconds": 0.00149
+    },
+    {
+      "operation": "after.catalog",
+      "run": 0,
+      "seconds": 2.00065,
+      "error": "Database read exceeded its time limit"
+    },
+    {
+      "operation": "before.pairs",
+      "run": 0,
+      "seconds": 2.00451,
+      "error": "Database read exceeded its time limit"
+    },
+    {
+      "operation": "after.pairs",
+      "run": 0,
+      "seconds": 1.67287,
+      "pairs": 307660
+    },
+    {
+      "operation": "after.pairs",
+      "run": 1,
+      "seconds": 1.19476,
+      "pairs": 307660
+    }
+  ]
+}

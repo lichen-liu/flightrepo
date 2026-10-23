@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import monotonic
 
 REPO = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path.home() / "Library" / "Application Support" / "fyi.boboji.fly"
@@ -72,23 +73,12 @@ def verify_application_overlay(root: Path):
             )
 
 
-def validate_database(database: Path, *, data_mode="synthetic") -> int:
+def validate_database(database: Path, *, data_mode="synthetic", count=True) -> int | None:
     from server.reader import FlightReader
 
-    stats = FlightReader(database, serving_only=True).stats()
-    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
-        schema = connection.execute(
-            "SELECT contract,version FROM schema_metadata WHERE id=1"
-        ).fetchone()
-    if schema != ("flight-legs", 1):
-        raise ValueError("Hosted database requires the shared flight-legs schema version 1")
-    if data_mode == "synthetic" and (not stats["flights"] or set(stats["providers"]) != {"demo"}):
-        raise ValueError(
-            "Hosted preview requires a nonempty database containing only demo providers."
-        )
-    if data_mode == "real" and "demo" in stats["providers"]:
-        raise ValueError("Real serving mode cannot contain demo flight records")
-    return stats["flights"]
+    return FlightReader(database, serving_only=True).validate_dataset(
+        data_mode=data_mode, count=count
+    )
 
 
 def seed_database(root: Path) -> dict:
@@ -222,7 +212,7 @@ def create_server(root: Path, *, verify_receipt=True, monitoring=True):
         verify_application_overlay(root)
     settings = read_settings(root)
     database = Path(settings["database_path"])
-    validate_database(database, data_mode=settings["data_mode"])
+    validate_database(database, data_mode=settings["data_mode"], count=False)
     app = FastAPI(title=original.title, description=original.description, version=original.version)
     app.user_middleware = list(original.user_middleware)
     app.exception_handlers = dict(original.exception_handlers)
@@ -273,6 +263,12 @@ def create_server(root: Path, *, verify_receipt=True, monitoring=True):
 async def check_installation(root: Path) -> None:
     import httpx
 
+    started = monotonic()
+
+    def progress(phase):
+        print(f"Installation check ({monotonic() - started:.1f}s): {phase}", flush=True)
+
+    progress("validating schema, serving role and source identities")
     # The installer validates its new wheel before replacing the prior receipt.
     app, _ = create_server(
         root, verify_receipt=not (root / "installing").exists(), monitoring=False
@@ -281,6 +277,7 @@ async def check_installation(root: Path) -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
+        progress("checking application assets and database readiness")
         for path in (
             "/",
             "/assets/app.css",
@@ -295,14 +292,19 @@ async def check_installation(root: Path) -> None:
             if response.status_code != 200:
                 raise RuntimeError("The installed application, database or assets are unavailable.")
         if settings["data_mode"] == "real":
-            catalog = (await client.get("/v1/catalog")).json()
-            dataset = catalog["dataset"]
-            if not any(dataset["time_bases"].values()):
+            progress("selecting an admitted real route through bootstrap")
+            response = await client.get("/v1/bootstrap?include_airports=false")
+            if response.status_code != 200:
+                raise RuntimeError("The installed real bootstrap failed")
+            bootstrap = response.json()
+            if not bootstrap["available_time_bases"]:
+                progress("ready; no complete admitted time evidence for routing")
                 return
-            route = catalog["suggested_route"]
-            first = datetime.fromisoformat(dataset["first_departure"].replace("Z", "+00:00"))
+            route = bootstrap["suggested_route"]
+            first = datetime.fromisoformat(bootstrap["first_departure"].replace("Z", "+00:00"))
             start = first.replace(hour=0, minute=0, second=0, microsecond=0)
             horizon = (start + timedelta(days=7)).isoformat()
+            progress("searching the real route")
             response = await client.post(
                 "/v1/itineraries/search",
                 json={
@@ -311,24 +313,27 @@ async def check_installation(root: Path) -> None:
                     "departure_start": start.isoformat(),
                     "departure_end": (start + timedelta(days=2)).isoformat(),
                     "horizon_end": horizon,
-                    "time_basis": dataset["default_time_basis"],
+                    "time_basis": bootstrap["default_time_basis"],
                 },
             )
             if response.status_code != 200 or not response.json().get("items"):
                 raise RuntimeError("The installed real itinerary search failed")
             leg = response.json()["items"][0]["legs"][0]
+            progress("rebuilding the real itinerary from its selected flight")
             response = await client.post(
                 "/v1/plans/rebuild",
                 json={
                     "prefix": [{"flight_id": leg["flight_id"]}],
                     "destination": route["destination_iata"],
                     "horizon_end": horizon,
-                    "time_basis": dataset["default_time_basis"],
+                    "time_basis": bootstrap["default_time_basis"],
                 },
             )
             if response.status_code != 200 or not response.json().get("complete"):
                 raise RuntimeError("The installed real itinerary rebuild failed")
+            progress("real routing and rebuild passed")
             return
+        progress("searching the constrained synthetic route")
         response = await client.post(
             "/v1/itineraries/search",
             json={
@@ -352,6 +357,7 @@ async def check_installation(root: Path) -> None:
         ):
             raise RuntimeError("The installed route search did not retain its required airport.")
         first = items[0]["legs"][0]
+        progress("rebuilding the synthetic itinerary")
         response = await client.post(
             "/v1/plans/rebuild",
             json={
@@ -374,6 +380,7 @@ async def check_installation(root: Path) -> None:
             raise RuntimeError(
                 "The installed connection calculation did not retain its flight choices."
             )
+        progress("synthetic routing and rebuild passed")
 
 
 def main(argv=None):
@@ -396,6 +403,7 @@ def main(argv=None):
     os.umask(0o077)
     try:
         if args.seed:
+            print("Validating database sources and counting preserved records...", flush=True)
             result = seed_database(args.root)
             print(f"Database ready: {result['flight_count']} flights; existing facts preserved.")
         if args.check:

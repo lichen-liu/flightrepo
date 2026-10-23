@@ -6,6 +6,7 @@
 - [Ingestion pipeline](ingestion.md): sources/licences, RAM workspace, daily extraction, reference audit, cohort review, publication and recovery.
 - [Database and public API contracts](database-schema.md): typed facts, identity, time semantics, confidence, store boundaries and public data credits.
 - [Backend operations](backend-operations.md): read budgets, index upgrades, ingestion write costs and repeatable load probes.
+- [Archive query performance](archive-query-performance.md): installation verification, exact aggregate/dimension queries, timings and measurement limits.
 - [Source research](flight-data-sources.md): evaluated alternatives, access/licence limits, measured probes and storage/coverage results.
 - [Routing engine](engine/routing.md): ranking, constraints, computation limits and internal replay.
 - [Development checks](../README.md#development-checks): Python, frontend, installed-package and browser verification.

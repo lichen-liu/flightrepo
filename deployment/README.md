@@ -128,13 +128,20 @@ that history; an older page that has not finished loading may need a refresh.
 No manual version bump is required.
 
 The startup installation check has a three-minute deadline because it validates
-real catalog aggregates and an end-to-end search before loading either job.
+the serving schema/source identities and an end-to-end search and rebuild before
+loading either job. It prints each phase and elapsed time. Real checks select a
+route through `/v1/bootstrap?include_airports=false`, without requesting full
+archive aggregates. Local/public real probes use that same summary and verify
+route search; their output reports routing status. Exact counts remain available
+through `/v1/catalog`. Synthetic checks retain the demo catalog and constrained
+route validation. The installer also bounds each seed/check subprocess to three
+minutes; the preservation phase counts existing facts once.
 A failed or timed-out check leaves both jobs unloaded. This deadline applies to
 the deployment preflight, not to user route searches or their coverage. Startup
 readiness and ordinary HTTP probes retain a 20-second timeout. The catalog probe
 allows three minutes for a cold statistics refresh, including when ingestion
 publishes between checks and invalidates the cache. A catalog timeout still
-fails the deployment check; it does not shorten or truncate user searches.
+fails a synthetic deployment check; it does not shorten or truncate user searches.
 
 ## Single-command deployment and optional monitoring
 

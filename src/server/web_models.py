@@ -232,6 +232,8 @@ class WebBootstrap(BaseModel):
     available_time_bases: list[TimeBasis]
     first_departure: datetime | None
     suggested_route: dict | None
+    data_mode: Literal["synthetic", "real", "mixed"]
+    has_records: bool
 
 
 class AvailableDates(BaseModel):
