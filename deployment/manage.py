@@ -30,6 +30,8 @@ HTTP_PROBE_TIMEOUT = 20
 CATALOG_PROBE_TIMEOUT = 180
 # The offline preflight aggregates catalogs and exercises routing on real data.
 INSTALLATION_CHECK_TIMEOUT = 180
+# launchctl can acknowledge bootout before the job disappears from its domain.
+STOP_TIMEOUT = 20
 
 
 def runtime_root() -> Path:
@@ -127,14 +129,34 @@ def wait_for_server(port: int):
 
 def stop():
     failures = []
+    waiting = []
     for job in ("tunnel", "server"):
         try:
             if loaded(job):
                 result = launchctl("bootout", target(job))
                 if result.returncode and loaded(job):
                     failures.append(job)
+                else:
+                    waiting.append(job)
         except (OSError, subprocess.SubprocessError):
             failures.append(job)
+    deadline = time.monotonic() + STOP_TIMEOUT
+    while waiting:
+        pending = []
+        for job in waiting:
+            try:
+                if loaded(job):
+                    pending.append(job)
+            except (OSError, subprocess.SubprocessError):
+                failures.append(job)
+        waiting = pending
+        if not waiting:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            failures.extend(waiting)
+            break
+        time.sleep(min(0.1, remaining))
     if failures:
         raise RuntimeError("Could not unload: " + ", ".join(failures))
     print("Stopped. Both jobs are unloaded and will not restart.")
