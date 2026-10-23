@@ -3,6 +3,7 @@ set -eu
 flyji_runtime="${FLYJI_RUNTIME_DIR-$HOME/Library/Application Support/fyi.boboji.fly}"
 flyji_need_runtime=false
 flyji_command=""
+flyji_deploy=false
 for flyji_argument in "$@"; do
     if [ "$flyji_need_runtime" = true ]; then
         flyji_runtime="$flyji_argument"
@@ -12,6 +13,7 @@ for flyji_argument in "$@"; do
     case "$flyji_argument" in
         --runtime-dir) flyji_need_runtime=true ;;
         --runtime-dir=*) flyji_runtime="${flyji_argument#--runtime-dir=}" ;;
+        deploy) flyji_deploy=true ; flyji_command=deploy ;;
         start|stop|status|tunnel|check|-h|--help) flyji_command="$flyji_argument" ;;
     esac
 done
@@ -27,6 +29,9 @@ case "$flyji_runtime" in
     /*) ;;
     *) echo "Error: the runtime directory must be an absolute path." >&2; exit 1 ;;
 esac
+if [ "$flyji_deploy" = true ]; then
+    exec python3 "$(dirname "$0")/deploy.py" "$@"
+fi
 if [ ! -x "$flyji_runtime/venv/bin/python" ] || [ ! -f "$flyji_runtime/manage.py" ]; then
     case "$flyji_command" in
         stop|status|-h|--help) exec python3 "$(dirname "$0")/manage.py" "$@" ;;
