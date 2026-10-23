@@ -1,11 +1,11 @@
-# BoboWatch integration preparation
+# BoboWatch integration and rollout
 
 Flightrepo now has an opt-in HTTP integration with the public
 [BoboWatch repository](https://github.com/lichen-liu/bobowatch), pinned as the
-`vendor/bobowatch` Git submodule. This is preparation for a controlled pilot.
-The hosted application and ingestion worker are not enabled or changed by this
-branch. BoboWatch's RAM-disk lifecycle, five-GiB family quota, circular retention
-and interactive admin controls remain the deployment gate before hosted activation.
+`vendor/bobowatch` Git submodule. The pin includes its macOS installer, verified
+five-GiB RAM-only storage, circular retention, live quota admin and on-demand
+supervision. Enabling it remains an explicit operator deployment; this branch
+starts no installed apps or user jobs.
 
 ## What is included
 
@@ -38,8 +38,35 @@ A normal install without monitoring configuration keeps monitoring disabled:
 python3 installation/install.py
 ```
 
-Once the BoboWatch runtime/storage deployment gate is complete and its private
-non-demo runtime is initialized, the opt-in installation interface is:
+Install the private non-demo BoboWatch runtime first (normal user, macOS,
+Python 3.11+). After merging the matching BoboWatch runtime PR:
+
+```sh
+cd ~/p/bobowatch
+git switch main
+git pull --ff-only
+python3 installation/install.py
+./deployment/watch start
+./deployment/watch check
+./deployment/watch token
+```
+
+Installation starts nothing. `start` explicitly loads a crash-restarted session;
+`stop` unloads it; `serve` is a foreground alternative. No login/boot auto-start.
+The admin token opens `http://127.0.0.1:8720`. From a phone on the same trusted LAN,
+use the Mac's private IPv4 address and port 8720. The installed listener binds all
+IPv4 interfaces; `127.0.0.1` on a phone is the phone itself.
+
+Return to Flightrepo for opt-in installation:
+
+```sh
+cd ~/p/flightrepo
+git switch main
+git pull --ff-only
+git submodule update --init vendor/bobowatch
+```
+
+To reinstall while stopped, the installation interface is:
 
 ```sh
 python3 installation/install.py \
@@ -48,7 +75,7 @@ python3 installation/install.py \
 
 This provisions credentials but starts neither Flightrepo nor BoboWatch. An
 existing enabled registration is re-provisioned automatically on later installs,
-reusing its identity/token. The prepared single-command deployment interface is:
+reusing its identity/token. For the existing hosted installation, the single-command deployment interface is:
 
 ```sh
 ./deployment/flyji deploy \
@@ -109,14 +136,28 @@ require its restart. Tokens are scoped to one producer and cannot read admin
 metrics. Same-machine delivery uses loopback; other hosts require HTTPS and a
 separate provisioning/transport design.
 
-## Activation sequence
+## Review and update sequence
 
-1. Review/merge BoboWatch's instrumentation/provisioning foundation.
-2. Implement and validate its `fyi.boboji.watch` installer, RAM-only five-GiB
-   circular storage, quota administration and explicitly started supervision.
-3. Refresh this submodule pin to the reviewed compatible revision.
-4. Use the existing deployment command with monitoring explicitly enabled, then
-   verify real counters and failure recovery before treating it as monitoring.
+1. Merge the BoboWatch runtime PR, then the Flightrepo pin/rollout PR.
+2. Install/start/check BoboWatch with the commands above.
+3. Deploy Flightrepo with `--bobowatch-runtime-dir` to register and enable it.
+4. Exercise Flightrepo, wait a delivery interval (about 15 seconds), exercise it
+   again and refresh the dashboard. The first snapshot in fresh RAM history is
+   a zero-delta baseline; later snapshots show new HTTP traffic.
+
+Later Flightrepo reinstalls/deployments reuse the saved registration and token
+without needing the flag again. Configuration, selected database, data mode and
+existing tunnel credentials are preserved. Deployment stops the serving app/tunnel
+but does not restart the independent ingestion worker or resize its RAM disk.
+
+For a BoboWatch update, stop it, update its checkout, rerun its installer, then
+start and check it. Surviving RAM history, credentials and quota are preserved.
+Use `./deployment/watch admin storage quota 5GiB` for a live policy change.
+The physical volume size is separate; increasing beyond it requires a stopped,
+explicit release/reallocation, which loses history. Reboot or power loss may also
+erase history; there are no automatic disk snapshots. See the complete
+[BoboWatch operator guide](https://github.com/lichen-liu/bobowatch/blob/main/docs/runtime.md).
 
 This integration does not sample CPU/memory, implement external uptime checks,
-export database health or measure ingestion progress yet.
+export database health or measure ingestion progress yet. It is a local
+HTTP-monitoring pilot rather than a complete alerting system.
