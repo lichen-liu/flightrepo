@@ -66,6 +66,31 @@ def test_each_day_is_verified_and_visible_before_next_input_and_rerun_is_noop(se
         assert c.execute("SELECT count(*) FROM publication_runs").fetchone()[0] <= runs + 1
 
 
+def test_cached_day_publishes_timezone_refresh_without_flight_audit(setup, monkeypatch):
+    from test_airport_timezones import Lookup
+
+    from ingestion import airport_timezones
+
+    private, serving, ingest = setup
+    monkeypatch.setattr(airport_timezones, "resolver", lambda: Lookup())
+    list(daily.daily_range(private, serving, DAY, DAY, ingest_day=ingest))
+    with sqlite3.connect(serving) as c:
+        before = c.execute("SELECT id,revision FROM flight_legs ORDER BY id").fetchall()
+        runs = c.execute("SELECT COUNT(*) FROM publication_runs").fetchone()[0]
+    monkeypatch.setattr(airport_timezones, "resolver", lambda: Lookup(["Asia/Tokyo"], 2))
+
+    def unexpected(*a, **kw):
+        raise AssertionError("A metadata refresh must not rerun the flight audit")
+
+    monkeypatch.setattr(daily, "audit_database", unexpected)
+    repeated = list(daily.daily_range(private, serving, DAY, DAY, ingest_day=ingest))
+    assert repeated[0]["event"] == "daily_already_published"
+    with sqlite3.connect(serving) as c:
+        assert c.execute("SELECT id,revision FROM flight_legs ORDER BY id").fetchall() == before
+        assert c.execute("SELECT COUNT(*) FROM publication_runs").fetchone()[0] == runs
+        assert c.execute("SELECT DISTINCT timezone FROM airports").fetchall() == [("Asia/Tokyo",)]
+
+
 def test_audit_failure_stops_publication_and_next_input_then_resumes(setup, monkeypatch):
     private, serving, ingest = setup
     original = daily.audit_database

@@ -65,6 +65,23 @@ CREATE TABLE IF NOT EXISTS reference_snapshots (
     PRIMARY KEY(source_id,kind)
 ) STRICT, WITHOUT ROWID;
 
+-- Field-specific timezone provenance. Never exposed as public flight evidence.
+CREATE TABLE IF NOT EXISTS airport_timezone_snapshots (
+    id TEXT PRIMARY KEY,
+    manifest TEXT NOT NULL CHECK(json_valid(manifest))
+) STRICT, WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS airport_timezone_state (
+    iata TEXT PRIMARY KEY REFERENCES airports(iata) ON DELETE CASCADE,
+    owner TEXT NOT NULL CHECK(owner IN ('reference','manual','legacy')),
+    applied_zone TEXT,
+    latitude REAL,
+    longitude REAL,
+    snapshot_id TEXT REFERENCES airport_timezone_snapshots(id),
+    status TEXT NOT NULL CHECK(status IN ('resolved','missing_coordinates','no_match','ambiguous','invalid','protected')),
+    candidates TEXT NOT NULL CHECK(json_valid(candidates)),
+    CHECK((owner='reference') = (snapshot_id IS NOT NULL))
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS airport_transfers (
     arrival_iata TEXT NOT NULL REFERENCES airports(iata),
     departure_iata TEXT NOT NULL REFERENCES airports(iata),

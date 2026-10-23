@@ -263,7 +263,7 @@ def hydrate_window(path, start, end):
             source.execute("BEGIN")
             for row in source.execute("SELECT * FROM data_sources"):
                 copy_source(row, c)
-            copy_catalog(source, c)
+            copy_catalog(source, c, refresh_timezones=False)
         keys = c.execute(
             f"SELECT s.code,f.source_record_key FROM canonical.flight_legs f JOIN canonical.data_sources s ON s.id=f.source_id JOIN canonical.publication_membership m ON m.source_code=s.code AND m.source_record_key=f.source_record_key WHERE m.store_id=? AND ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<?",
             (config["store_id"], lower, upper),

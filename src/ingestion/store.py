@@ -183,6 +183,8 @@ class IngestionStore(FlightUpdater):
                     "ingestion_documents",
                     "ingestion_batches",
                     "airport_transfers",
+                    "airport_timezone_state",
+                    "airport_timezone_snapshots",
                     "airports",
                     "carriers",
                     "reference_snapshots",

@@ -195,6 +195,13 @@ tables are available through SELECT inspection. See [bulk review](ingestion.md#a
 Manual edits/imports, approvals, creation, admission-policy and quota updates are
 rejected for ingestion stores. SQL inspection remains SELECT-only.
 
+Serving airport imports preserve timezone when the field is omitted. Supplying
+it explicitly pins a manual override, even when the value is unchanged or NULL.
+`airports release-timezone YYZ` clears that override so the next explicit producer
+reference publication may supply a generated zone. This action is rejected on
+private ingestion stores; their producer equivalent is
+`references timezones --release-override YYZ`. Overview reports timezone coverage.
+
 Source jobs run through separate `python -m ingestion` / `flyji-ingest`, or the
 Python `IngestionStore` / `IngestionService` APIs. The producer tool supports
 `adsblol prepare/workspace/configure/run/status`, `csv configure/run/status` and

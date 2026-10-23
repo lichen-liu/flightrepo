@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
+from core.airport_timezones import protect
 from core.connections import Airport, AirportTransfer
 from core.database_roles import require_serving
 from core.models import FlightRecord
@@ -59,6 +60,8 @@ class FlightUpdater(SQLiteConnection):
             connection.execute("DELETE FROM flight_tombstones")
             connection.execute("DELETE FROM ingestion_batches")
             connection.execute("DELETE FROM airport_transfers")
+            connection.execute("DELETE FROM airport_timezone_state")
+            connection.execute("DELETE FROM airport_timezone_snapshots")
             connection.execute("DELETE FROM airports")
             connection.execute("DELETE FROM carriers")
             connection.execute("DELETE FROM reference_snapshots")
@@ -96,6 +99,8 @@ class FlightUpdater(SQLiteConnection):
                 airport.model_dump(),
             )
             self._update_airport_reference(connection, airport)
+            if "timezone" in airport.model_fields_set:
+                protect(connection, airport.iata)
             if cursor.rowcount == 0:
                 raise ValueError(
                     f"Airport {airport.iata} already exists; use airports import to update it"
@@ -125,14 +130,43 @@ class FlightUpdater(SQLiteConnection):
         ]
         transfers = [AirportTransfer.model_validate(t.model_dump()) for t in transfers]
         with self.connect() as connection:
-            connection.executemany(
-                """INSERT INTO airports (iata,name,city_id,timezone,latitude,longitude) VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
-                ON CONFLICT(iata) DO UPDATE SET name=excluded.name, city_id=excluded.city_id,
-                timezone=excluded.timezone, latitude=excluded.latitude, longitude=excluded.longitude""",
-                [a.model_dump() for a in airports],
-            )
             for airport in airports:
+                fields = ("name", "city_id", "timezone", "latitude", "longitude")
+                supplied = [key for key in fields if key in airport.model_fields_set]
+                connection.execute(
+                    "INSERT INTO airports(iata," + ",".join(fields) + ") VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(iata) DO "
+                    + (
+                        "UPDATE SET " + ",".join(f"{key}=excluded.{key}" for key in supplied)
+                        if supplied
+                        else "NOTHING"
+                    ),
+                    [airport.iata] + [getattr(airport, key) for key in fields],
+                )
                 self._update_airport_reference(connection, airport)
+                if "timezone" in airport.model_fields_set:
+                    protect(connection, airport.iata)
+                elif {"latitude", "longitude"} & airport.model_fields_set:
+                    # A generated zone is tied to the exact coordinates resolved.
+                    previous = connection.execute(
+                        "SELECT * FROM airport_timezone_state WHERE iata=? AND owner='reference'",
+                        (airport.iata,),
+                    ).fetchone()
+                    current = connection.execute(
+                        "SELECT timezone,latitude,longitude FROM airports WHERE iata=?",
+                        (airport.iata,),
+                    ).fetchone()
+                    if previous and (previous["latitude"], previous["longitude"]) != (
+                        current["latitude"],
+                        current["longitude"],
+                    ):
+                        if current["timezone"] == previous["applied_zone"]:
+                            connection.execute(
+                                "UPDATE airports SET timezone=NULL WHERE iata=?", (airport.iata,)
+                            )
+                            connection.execute(
+                                "DELETE FROM airport_timezone_state WHERE iata=?", (airport.iata,)
+                            )
             invalid = connection.execute("""SELECT 1 FROM airport_transfers t
                 JOIN airports a ON a.iata=t.arrival_iata JOIN airports b ON b.iata=t.departure_iata
                 WHERE a.city_id IS NULL OR b.city_id IS NULL OR a.city_id != b.city_id LIMIT 1""").fetchone()
@@ -156,6 +190,14 @@ class FlightUpdater(SQLiteConnection):
                 minimum_minutes=excluded.minimum_minutes, source=excluded.source""",
                 [t.model_dump() for t in transfers],
             )
+
+    def release_airport_timezone(self, code):
+        """Explicitly allow the next producer publication to replace this override."""
+        with self.connect() as connection:
+            if not connection.execute("SELECT 1 FROM airports WHERE iata=?", (code,)).fetchone():
+                raise ValueError(f"Unknown airport: {code}")
+            connection.execute("UPDATE airports SET timezone=NULL WHERE iata=?", (code,))
+            connection.execute("DELETE FROM airport_timezone_state WHERE iata=?", (code,))
 
     def delete(
         self, provider: str, provider_id: str, *, expected: FlightRecord | None = None

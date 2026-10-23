@@ -1,0 +1,28 @@
+{
+  "resolver": "timezonefinder",
+  "version": "8.2.4",
+  "variant": "comprehensive-with-oceans",
+  "algorithm": "all-containing-polygons-v1",
+  "source_url": "https://pypi.org/project/timezonefinder/8.2.4/",
+  "source_sha256": "d80fae37adf1497729cc3e69826c22f3b2fec16db07932bf389b6ae545400b42",
+  "license": "ODbL-1.0",
+  "license_url": "https://github.com/evansiroky/timezone-boundary-builder/blob/master/DATA_LICENSE",
+  "attribution": "Timezone Boundary Builder; OpenStreetMap contributors",
+  "files": {
+    "boundaries/coordinates.fbs": "f0705d8ff7322ee6d3eacf2af63e6b97467acb6d3453651af638c91681e99388",
+    "boundaries/xmax.npy": "dd66a594792c062ea9a2aad5119c96e1c336ca0bbe6073f8dda077e947bdbe08",
+    "boundaries/xmin.npy": "82523e273b447df33c6d9a7c270a95b6790aae48079db5a83c2d2750819faf6c",
+    "boundaries/ymax.npy": "e2b77bcca4f59fbb6ea9e509b750972137caaeb8ab87452b14b5191554e88a60",
+    "boundaries/ymin.npy": "3f3f33438fa6c691d9b51f1f294bedee1326fbdaf664d5c13c37df9aa3fef568",
+    "hole_registry.json": "07d14c9bc0b0199e7c87740571a46ec6932d38758e94cc3e6ea92ab09153e688",
+    "holes/coordinates.fbs": "a6f206819ed1910273c3b644a5b9059177c586f3589316809c72a3428e36eaae",
+    "holes/xmax.npy": "a53066b74cff09ebad0e52b901deb33cf185ca75c077705b1838d0b25b564ea2",
+    "holes/xmin.npy": "1be71964ed68bd264c61e90de6225d3289b5a7fc3060098d9265ee3a2f2addd0",
+    "holes/ymax.npy": "e9386160e0d4d3a1cf6ed780805faa094553f616fd21dd5930d1b7fd95d7a470",
+    "holes/ymin.npy": "5d359fae21271a512b398c46614c3953067db245f23af95a0a86846b420ba46d",
+    "hybrid_shortcuts_uint16.fbs": "a19faec7914eadbafc8dbe4d2c0416152242352834f1b01309a66bae6eda4994",
+    "timezone_names.txt": "8625e551d30b2b56842c5d4bcb461ca2d3254dd04ba3c4e4b243e93f2594cda6",
+    "zone_ids.npy": "9b42b700a554fa8e5424699807993e631d0cc7acfde977708336d107416e2de6",
+    "zone_positions.npy": "534ae36ff5406b1d70917e3d482da1d5025af935a109757808d130fd7ac9056a"
+  }
+}

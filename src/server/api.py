@@ -321,6 +321,11 @@ def airports(
     )
 
 
+@app.get("/v1/airport-timezones")
+def timezone_reference(store: FlightReader = Depends(get_store)):
+    return store.timezone_reference()
+
+
 @app.get("/v1/flights", response_model=list[PublicFlight])
 def flights(
     request: Request,
@@ -441,5 +446,5 @@ def data_sources(store: FlightReader = Depends(get_store)):
     return HTMLResponse(
         '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Data sources &amp; licences · Flyji</title><link rel="stylesheet" href="/assets/app.css"></head><body><main><h1>Data sources &amp; licences</h1><p>Contains information derived from the databases below. Their licences apply to the data; the application has its own licence.</p><ul>'
         + "".join(entries)
-        + '</ul><p>Historical itineraries and time ranges are best-effort reconstructions. Data may be incomplete or incorrect; route references do not verify historical operation or exact timing.</p><p><a href="/">Back to flight search</a></p></main></body></html>'
+        + '</ul><p><a href="/v1/airport-timezones">Download derived airport timezone mappings (ODbL)</a></p><p>Historical itineraries and time ranges are best-effort reconstructions. Data may be incomplete or incorrect; route references do not verify historical operation or exact timing.</p><p><a href="/">Back to flight search</a></p></main></body></html>'
     )

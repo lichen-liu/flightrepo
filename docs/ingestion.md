@@ -19,6 +19,7 @@ results, [schema/API contracts](database-schema.md) for data semantics, and
 | [OurAirports CSV](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport identity, names, geography, coordinates and extraction elevation | [Public domain](https://ourairports.com/data/) |
 | [VRS routes](https://vrs-standing-data.adsb.lol/routes.csv) and [airport mappings](https://vrs-standing-data.adsb.lol/airports.csv) | Undated directed route plausibility | [CC0-1.0](https://github.com/vradarserver/standing-data/blob/main/LICENSE) |
 | [VRS airlines CSV](https://raw.githubusercontent.com/vradarserver/standing-data/main/airlines/schema-01/airlines.csv) | ICAO operator names and IATA references | CC0-1.0 |
+| [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder), bundled in timezonefinder 8.2.4 | Offline coordinate-to-IANA-zone reference | ODbL-1.0; lookup code MIT |
 
 Extracted ADSB records are treated as a derivative database. Preserve attribution,
 ODbL notices/share-alike and applicable database-access requirements. Public source
@@ -280,6 +281,14 @@ speed and tracks are discarded; improved inference later requires redownloading.
 
 ## Reference catalogs and VRS audit
 
+Install the producer extra with `python -m pip install -e '.[producer]'` (the dev
+extra also includes it). Serving uses the stored values and pinned tzdata 2026.2;
+it does not load timezonefinder. Resolver version, comprehensive geometry payload
+hashes and attribution are pinned in `src/ingestion/timezone-data.json`.
+All containing polygons are checked; overlapping civil zones, ocean-only matches
+and missing coordinates remain unresolved. Geometry describes current boundaries;
+IANA rules provide historical offsets, not historical airport boundary evidence.
+
 ```sh
 flyji-ingest --db var/ingestion/ingestion.db references refresh
 flyji-ingest --db var/ingestion/ingestion.db vrs import
@@ -319,10 +328,41 @@ flyji-ingest --db var/ingestion/ingestion.db references publish \
   --serving-db var/hosted/flights.db
 ```
 
-Airport imports fill missing fields while preserving manual metadata. Carrier
-snapshots withdraw stale source-owned mappings. Neither changes flight revisions,
-manual decisions, timing or aircraft types. Timezone population is tracked in
-[#21](https://github.com/lichen-liu/flightrepo/issues/21).
+Airport imports fill missing fields while preserving manual metadata and enrich
+effective retained coordinates with timezone reference data. Carrier snapshots
+withdraw stale source-owned mappings. Neither changes flight revisions, manual
+decisions, timing or aircraft types.
+
+Backfill existing airports without flight downloads/re-extraction:
+
+```sh
+flyji-ingest --db var/ingestion/ingestion.db references timezones --dry-run
+flyji-ingest --db var/ingestion/ingestion.db references timezones
+flyji-ingest --db var/ingestion/ingestion.db references publish --serving-db var/hosted/flights.db
+```
+
+Dry-run is read-only and requires an existing private database. Reports contain
+coverage, changed/protected/unresolved counts, candidate mappings, a result hash
+and source identities. Actual writes reject an active external producer; nested
+daily stages reuse their existing job lock. Reference refresh and daily cached-day
+resume automatically ensure timezone metadata. Cached flight receipts remain valid.
+
+Generated zones update on data/coordinate changes; existing legacy/manual values
+are protected. Explicit admin timezone imports pin even an unchanged value;
+omitting timezone preserves it. For a private override, use producer
+`references timezones --release-override YYZ`. For serving, use admin
+`airports release-timezone YYZ`, then explicitly republish reference metadata.
+Release clears the effective value until a new mapping is applied. A serving
+coordinate override prevents publication of a mapping for different coordinates.
+
+Pause writers and take a verified metadata backup before upgrading/backfilling;
+install compatible producer/admin code together. Preview first and inspect
+unresolved/changed cohorts, then apply and publish. Repeating unchanged enrichment
+does not rewrite state. Retain reports and the metadata backup for rollback;
+restore only values still owned by the rolled-back operation to protect later edits.
+Source credits are published on `/data-sources`, with the derived reference-owned
+mapping available under ODbL at `/v1/airport-timezones`. Private ownership and
+per-flight audit evidence are not part of that export.
 
 ## Audit, review and publication
 

@@ -171,6 +171,11 @@ def daily_range(
             # Re-running extraction validates source selection/policy and cleans
             # leftover raw copies, but never redownloads committed inputs.
             ingest_day(day, departure_year)
+            # Reference-only work must also run before the cached-day fast path.
+            from ingestion.airport_timezones import enrich
+            from ingestion.references import publish_catalog
+
+            enrich(path)
             identity, before = fingerprint(path, day, first, final, departure_year)
             key = f"{VERSION}:{identity[1]}:{hashlib.sha256(str(serving).encode()).hexdigest()}:{start}:{end}:{day}"
             with store.connect() as c:
@@ -192,6 +197,7 @@ def daily_range(
                 and proofs
                 and previous["serving_receipts"] == proofs
             ):
+                publish_catalog(path, serving)
                 yield dict(
                     event="daily_already_published",
                     input_day=str(day),

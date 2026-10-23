@@ -160,6 +160,11 @@ def parser():
     )
     refresh.add_argument("--airports-csv", type=Path)
     refresh.add_argument("--carriers-csv", type=Path)
+    timezones = actions.add_parser(
+        "timezones", help="enrich stored airport timezones without flight reprocessing"
+    )
+    timezones.add_argument("--dry-run", action="store_true")
+    timezones.add_argument("--release-override", action="append", default=[], metavar="IATA")
     publish_ref = actions.add_parser(
         "publish", help="publish names/reference metadata without reprocessing flight facts"
     )
@@ -310,6 +315,17 @@ def run(arguments, *, database_path=None, interactive=False):
     elif args.source == "references":
         from ingestion.references import publish_catalog, refresh
 
+        if args.reference_action == "timezones":
+            from ingestion.airport_timezones import enrich
+
+            output(
+                enrich(
+                    path,
+                    dry_run=args.dry_run,
+                    release=[code.upper() for code in args.release_override],
+                )
+            )
+            return
         output(
             refresh(path, airports_path=args.airports_csv, carriers_path=args.carriers_csv)
             if args.reference_action == "refresh"

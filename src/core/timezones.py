@@ -1,9 +1,9 @@
 """Resolve local wall clocks with explicit DST semantics; no persistence or I/O."""
 
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from core.routing.models import RoutingError
+from core.tzdb import zone as ZoneInfo
 
 
 def resolve_local(

@@ -126,6 +126,23 @@ def test_hydration_keeps_provenance_and_fingerprint_stable(pipeline):
         authority.release_window(private, serving, DAY, DAY, [])
 
 
+def test_hydration_cannot_roll_back_a_new_producer_timezone_dataset(pipeline, monkeypatch):
+    from test_airport_timezones import Lookup
+
+    from ingestion import airport_timezones
+
+    private, serving, _ = pipeline
+    monkeypatch.setattr(airport_timezones, "resolver", lambda: Lookup())
+    daily_run(pipeline)
+    airport_timezones.enrich(private, lookup=Lookup(["Asia/Tokyo"], 2))
+    authority.hydrate_window(private, DAY, DAY)
+    with sqlite3.connect(private) as c:
+        assert c.execute("SELECT DISTINCT timezone FROM airports").fetchall() == [("Asia/Tokyo",)]
+    references.publish_catalog(private, serving)
+    with sqlite3.connect(serving) as c:
+        assert c.execute("SELECT DISTINCT timezone FROM airports").fetchall() == [("Asia/Tokyo",)]
+
+
 def test_backfill_uses_canonical_quality_instead_of_accepting_weaker_reconstruction(pipeline):
     private, _, _ = pipeline
     daily_run(pipeline)

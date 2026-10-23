@@ -10,7 +10,6 @@ from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from threading import Lock
 from time import monotonic
-from zoneinfo import ZoneInfo
 
 from core.admission import ADMITTED_SQL
 from core.config import get_settings
@@ -30,6 +29,7 @@ from core.routing.results import RouteSearchResult
 from core.routing.snapshot import RoutingSnapshot, flight_key
 from core.storage import EPOCH, SQLiteConnection, flight_record, utc_text, utc_us
 from core.timezones import resolve_local
+from core.tzdb import zone as ZoneInfo
 from server.archive_queries import AIRPORT_PAIRS_CTE, has_airport_pair_index
 from server.reachability import TimeEdge, reverse_reachable_flights
 from server.routing_projection import calculate_database_routes, project_routes
@@ -302,6 +302,7 @@ class FlightReader(SQLiteConnection):
                 "routes": "SELECT COUNT(*) FROM (SELECT DISTINCT origin_iata, destination_iata FROM flights)",
                 "flight_airports": "SELECT COUNT(*) FROM (SELECT origin_iata FROM flights UNION SELECT destination_iata FROM flights)",
                 "named_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL",
+                "timezone_airports": "SELECT COUNT(*) FROM airports WHERE timezone IS NOT NULL",
                 "catalog_airports": "SELECT COUNT(*) FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL",
                 "transfers": "SELECT COUNT(*) FROM airport_transfers",
                 "missing_airports": "SELECT COUNT(*) FROM (SELECT origin_iata AS iata FROM flights UNION SELECT destination_iata FROM flights) WHERE iata NOT IN (SELECT iata FROM airports WHERE name IS NOT NULL AND city_id IS NOT NULL AND timezone IS NOT NULL AND latitude IS NOT NULL AND longitude IS NOT NULL)",
@@ -878,6 +879,34 @@ class FlightReader(SQLiteConnection):
             status="ready",
             schema_contract="flight-legs",
             schema_version=1,
+        )
+
+    def timezone_reference(self):
+        """Small, separately licensed derived mapping; no private flight evidence."""
+        from core.airport_timezones import has_state
+
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            mappings = (
+                [
+                    dict(row)
+                    for row in connection.execute(
+                        "SELECT a.iata,a.timezone,a.latitude,a.longitude FROM airports a "
+                        "JOIN airport_timezone_state t ON t.iata=a.iata "
+                        "WHERE t.owner='reference' AND t.status='resolved' "
+                        "AND a.timezone=t.applied_zone AND a.latitude=t.latitude AND a.longitude=t.longitude "
+                        "ORDER BY a.iata"
+                    )
+                ]
+                if has_state(connection)
+                else []
+            )
+        return dict(
+            license="ODbL-1.0",
+            license_url="https://opendatacommons.org/licenses/odbl/1-0/",
+            attribution="Timezone Boundary Builder; OpenStreetMap contributors",
+            reproduction="https://github.com/lichen-liu/flightrepo/blob/main/docs/ingestion.md",
+            mappings=mappings,
         )
 
     @staticmethod

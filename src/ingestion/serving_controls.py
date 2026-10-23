@@ -36,11 +36,19 @@ def controls(connection):
         ("airports", "iata"),
         ("carriers", "code"),
         ("reference_snapshots", "source_id,kind"),
+        ("airport_timezone_snapshots", "id"),
+        ("airport_timezone_state", "iata"),
         ("airport_transfers", "arrival_iata,departure_iata"),
         ("flight_tombstones", "source_id,source_record_key"),
     ]:
         if (
-            name in {"carriers", "reference_snapshots"}
+            name
+            in {
+                "carriers",
+                "reference_snapshots",
+                "airport_timezone_snapshots",
+                "airport_timezone_state",
+            }
             and not connection.execute(
                 "SELECT 1 FROM sqlite_schema WHERE name=?", (name,)
             ).fetchone()
@@ -125,6 +133,14 @@ def prepare_serving(canonical, destination):
                             row["row_count"],
                         ),
                     )
+                for table in ("airport_timezone_snapshots", "airport_timezone_state"):
+                    for row in snapshot[table]:
+                        fields = list(row)
+                        output.execute(
+                            f"INSERT INTO {table}({','.join(fields)}) "
+                            f"VALUES({','.join(':' + key for key in fields)})",
+                            row,
+                        )
                 for row in snapshot["airport_transfers"]:
                     output.execute(
                         "INSERT INTO airport_transfers VALUES(:arrival_iata,:departure_iata,:minimum_minutes,:source)",
