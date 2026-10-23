@@ -49,6 +49,9 @@ def install(root: Path, repo: Path = REPO, *, watch_runtime: Path | None = None)
             + b"\n",
         )
     config = read_settings(root)
+    monitoring = json.loads(settings.read_text()).get("monitoring", {})
+    if not isinstance(monitoring, dict) or type(monitoring.get("enabled", False)) is not bool:
+        raise ValueError("monitoring.enabled must be a boolean")
     database = Path(config["database_path"])
     if not database.resolve().is_relative_to((repo / "var").resolve()):
         raise ValueError("Keep the hosted database under this project's ignored var directory.")
@@ -112,10 +115,7 @@ def install(root: Path, repo: Path = REPO, *, watch_runtime: Path | None = None)
         content = source.read_bytes()
         private_write(root / name, content)
         copied[name] = hashlib.sha256(content).hexdigest()
-    configured_monitoring = (
-        json.loads(settings.read_text()).get("monitoring", {}).get("enabled", False)
-    )
-    if watch_runtime is not None or configured_monitoring:
+    if watch_runtime is not None or monitoring.get("enabled", False):
         command = [str(python), "-m", "server.monitoring", "--runtime-dir", str(root)]
         if watch_runtime is not None:
             command += ["--bobowatch-runtime-dir", str(watch_runtime)]

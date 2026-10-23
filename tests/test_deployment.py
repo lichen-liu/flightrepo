@@ -1197,3 +1197,23 @@ def test_single_command_deploy_orders_stop_install_provision_start_and_check(
     root, watch = tmp_path / "flight", tmp_path / "watch"
     module.deploy(root, watch)
     assert calls == ["submodule", "stop", ("install-and-provision", root, watch), "start", "check"]
+
+
+@pytest.mark.parametrize("monitoring", [False, [], {"enabled": "true"}])
+def test_bad_monitoring_settings_refuse_install_before_build(
+    tmp_path, checkout, scripts, monkeypatch, monitoring
+):
+    root = runtime(tmp_path / "runtime", checkout / "var/hosted/flights.db")
+    data = json.loads((root / "settings.json").read_text())
+    data["monitoring"] = monitoring
+    private_file(root / "settings.json", json.dumps(data).encode())
+    monkeypatch.setattr(scripts.install, "loaded", lambda job: False)
+    monkeypatch.setattr(
+        scripts.install.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("Invalid monitoring must precede build/install"),
+    )
+    with pytest.raises(ValueError, match="monitoring.enabled"):
+        scripts.install.install(root, checkout)
+    assert not (root / "installing").exists()
+    assert not (checkout / "var/hosted").exists()

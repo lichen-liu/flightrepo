@@ -1,20 +1,40 @@
 """Deployment registration and actual HTTP telemetry without installed user jobs."""
 
+import importlib
+import importlib.util
 import json
+import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
-from bobowatch.application import Application
 from bobowatch.config import initialize
-from bobowatch.storage import SQLiteStore
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.monitoring import provision, wrap_application
+
+
+@pytest.fixture(scope="session")
+def watch_backend():
+    # Editable installs intentionally expose only the bundled adapter. Load the
+    # full test receiver in a separate namespace from the pinned source checkout.
+    source = Path(__file__).resolve().parents[1] / "vendor/bobowatch/bobowatch"
+    name = "_watch_receiver_tests"
+    spec = importlib.util.spec_from_file_location(
+        name, source / "__init__.py", submodule_search_locations=[str(source)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return SimpleNamespace(
+        Application=importlib.import_module(name + ".application").Application,
+        SQLiteStore=importlib.import_module(name + ".storage").SQLiteStore,
+    )
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -60,12 +80,12 @@ def test_disabled_app_has_no_monitoring_side_effects(tmp_path):
         assert wrap_application(app, settings) is app
 
 
-def test_real_http_delivery_recovers_after_monitoring_server_stops(tmp_path):
+def test_real_http_delivery_recovers_after_monitoring_server_stops(tmp_path, watch_backend):
     server = make_server("127.0.0.1", 0, lambda e, s: [], handler_class=QuietHandler)
     port = server.server_port
     config = initialize(tmp_path / "watch", port=port)
-    store = SQLiteStore(config)
-    application = Application(config, store)
+    store = watch_backend.SQLiteStore(config)
+    application = watch_backend.Application(config, store)
     server.set_app(application)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
