@@ -142,5 +142,8 @@ fails the deployment check; it does not shorten or truncate user searches.
 sequence using the pinned submodule. The optional `--bobowatch-runtime-dir PATH`
 provisions monitoring credentials during installation, and subsequent deployments
 reuse the saved registration. It never starts BoboWatch. Hosted monitoring remains
-opt-in and gated on BoboWatch's RAM-disk quota/lifecycle controls; see
-[the integration notes](../docs/monitoring.md) before activation.
+opt-in. The pinned BoboWatch revision includes the RAM-disk quota/lifecycle controls;
+install its private runtime first, then enable this integration. See
+[the install/reinstall and rollout guide](../docs/monitoring.md) for the exact
+commands. This deployment restarts serving jobs, not the independent ingestion
+worker.

@@ -68,4 +68,6 @@ The installer initializes the pinned `vendor/bobowatch` submodule and includes
 only its standard-library adapter/provisioning modules in the wheel. Monitoring
 remains disabled unless explicitly configured. See [monitoring integration](../docs/monitoring.md)
 for the optional `--bobowatch-runtime-dir` interface, private configuration paths
-and the RAM-storage deployment gate. No monitoring service starts during install.
+and the complete BoboWatch-first rollout. The pinned revision includes its RAM
+storage, quota administration and manual lifecycle scripts. No monitoring process
+starts during Flightrepo installation.
