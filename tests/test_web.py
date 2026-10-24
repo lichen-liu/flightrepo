@@ -222,6 +222,26 @@ def test_bootstrap_shares_one_read_for_concurrent_calls_and_returns_independent_
     assert reader.web_bootstrap().airports and results[1].airports
 
 
+def test_bootstrap_reports_timezone_capability_without_loading_airport_list(client, demo):
+    full = client.get("/v1/bootstrap?include_airports=false").json()
+    assert full["airports"] == []
+    assert full["local_date_coverage"]["resolved"] > 0
+    assert full["departure_timezone"] == "America/Toronto"
+    with demo[0].connect() as c:
+        c.execute(
+            "UPDATE airports SET timezone=NULL WHERE iata=?",
+            (full["suggested_route"]["origin_iata"],),
+        )
+    missing = client.get("/v1/bootstrap?include_airports=false").json()
+    assert missing["departure_timezone"] is None
+    assert missing["local_date_coverage"]["resolved"] == full["local_date_coverage"]["resolved"] - 1
+    assert client.get("/health/ready").status_code == 200
+    assert (
+        client.get("/v1/search-availability?origin=YYZ&destination=CDG&clock=UTC").status_code
+        == 200
+    )
+
+
 def test_bootstrap_invalidates_after_wal_commit_and_database_replacement(demo, tmp_path):
     reader = demo[1]
     reader.web_bootstrap()

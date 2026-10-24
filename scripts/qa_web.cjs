@@ -336,6 +336,7 @@ check("date availability failures remain disabled until a retry succeeds", async
     : route.continue());
   await page.goto(demoSearch);
   await expect(page.locator("#date-availability")).toContainText("Date data unavailable");
+  await expect(page.getByRole("button", { name: "Use UTC dates", exact: true })).toBeHidden();
   await expect(page.locator("#search-button")).toBeDisabled();
   fail = false;
   await page.getByRole("button", { name: "Retry departure dates" }).click();
@@ -343,6 +344,89 @@ check("date availability failures remain disabled until a retry succeeds", async
   await expect(page.locator("#search-button")).toBeEnabled();
   await expect(page.locator("#retry-dates")).toBeHidden();
   await expect(page.getByLabel("Input clock")).toHaveValue("local");
+});
+
+for (const phone of [false, true]) check(
+  `${phone ? "phone" : "desktop"} calendar recovers missing timezone through explicit UTC dates`,
+  async (page) => {
+    const searches = [], utcRequests = [];
+    page.on("request", request => {
+      if (request.method() === "POST" && searchPath.test(new URL(request.url()).pathname)) searches.push(request.url());
+    });
+    await page.route("**/v1/search-availability?*", async route => {
+      const params = new URL(route.request().url()).searchParams;
+      if (params.get("clock") === "local") return route.fulfill({status:422, json:{detail:{
+        code:"airport_metadata_missing", message:"Load airport timezone metadata or choose UTC.",
+      }}});
+      utcRequests.push(params);
+      await route.continue();
+    });
+    await page.goto(demoSearch + "&last-date=2026-10-19&minimum=45&ranking=shortest_elapsed");
+    const recovery = page.getByRole("button", { name: "Use UTC dates", exact: true });
+    await expect(recovery).toBeVisible();
+    await expect(page.locator("#date-recovery-message")).toContainText("Local dates are unavailable");
+    await expect(page.getByLabel("Input clock")).toHaveValue("local");
+    await expect(page.locator("#date")).toBeDisabled();
+    assert.equal(searches.length, 0);
+    await recovery.click();
+    await expect(page.getByLabel("Input clock")).toHaveValue("UTC");
+    await expect(page.locator("#search-button")).toBeEnabled();
+    await expect(page.locator("#date-clock-notice")).toContainText("Review the departure date");
+    await expect(page.getByLabel("From", {exact:true})).toHaveValue("YYZ");
+    await expect(page.getByLabel("To", {exact:true})).toHaveValue("CDG");
+    await expect(page.locator('[name="ranking"]')).toHaveValue("shortest_elapsed");
+    await expect(page.locator('[name="last-date"]')).toHaveValue("");
+    await expect(recovery).toBeHidden();
+    assert.ok(utcRequests.length > 0);
+    assert.ok(utcRequests.every(params => !params.has("departure_date") && !params.has("departure_last_date")),
+      "local dates cannot be silently reinterpreted as UTC");
+    assert.equal(searches.length, 0, "recovery requires reviewing the refreshed date before search");
+    const data = await search(page);
+    assert.equal(data.query.origin, "YYZ");
+    assert.equal(searches.length, 1);
+  },
+  phone ? {viewport:{width:390,height:844},isMobile:true,hasTouch:true} : {},
+);
+
+check("calendar recovery clears when a different origin has local dates", async page => {
+  await page.route("**/v1/search-availability?*", async route => {
+    if (new URL(route.request().url()).searchParams.get("origin") === "YYZ")
+      return route.fulfill({status:422,json:{detail:{code:"airport_metadata_missing",message:"Missing timezone"}}});
+    await route.continue();
+  });
+  await page.goto(demoSearch);
+  await expect(page.locator("#date-recovery")).toBeVisible();
+  await page.getByLabel("From", {exact:true}).fill("LHR");
+  await expect(page.locator("#date")).toBeEnabled();
+  await expect(page.locator("#date-recovery")).toBeHidden();
+  await expect(page.getByLabel("Input clock")).toHaveValue("local");
+});
+
+check("calendar UTC review survives delayed bootstrap without submitting a search", async page => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const searches = [];
+  page.on("request", request => {
+    if (request.method() === "POST" && searchPath.test(new URL(request.url()).pathname)) searches.push(request.url());
+  });
+  await page.route("**/v1/bootstrap", async route => { await gate; await route.continue(); });
+  await page.route("**/v1/search-availability?*", async route => {
+    if (new URL(route.request().url()).searchParams.get("clock") === "local")
+      return route.fulfill({status:422,json:{detail:{code:"airport_metadata_missing",message:"Missing timezone"}}});
+    await route.continue();
+  });
+  try {
+    await page.goto(demoSearch.replace("&date=2026-10-17", ""));
+    await page.getByRole("button", {name:"Use UTC dates", exact:true}).click();
+    await expect(page.locator("#date-clock-notice")).toContainText("Review the departure date");
+    const bootstrap = page.waitForResponse("**/v1/bootstrap");
+    release();
+    await bootstrap;
+    await expect(page.locator("#search-button")).toBeEnabled();
+    await expect(page.locator("#date-clock-notice")).toBeVisible();
+    await expect(page.getByLabel("Input clock")).toHaveValue("UTC");
+    assert.equal(searches.length, 0);
+  } finally { release(); }
 });
 
 check("calendar month controls stay open across sparse months and years", async (page) => {

@@ -58,3 +58,24 @@ A read-only preview of the current 8,801-airport catalog took 2.91 seconds:
 8,767 new values, two protected existing values, 31 ambiguous overlaps and one
 other unresolved mapping. This measured preview is not a production backfill.
 No implementation migration or enrichment has been applied to the live stores.
+
+## Calendar and capability audit
+
+The companion implementation exposes an explicit UTC action only for the missing
+timezone error. It clears local first/last dates, retains route filters, refreshes
+the data-filtered calendar and requires user review before search. Network/storage
+errors keep their retry behavior. A delayed bootstrap must neither erase the UTC
+review notice nor auto-submit the search; a dedicated race regression covers this.
+
+Bootstrap reports airport-only timezone coverage and the sample origin's zone.
+Deployment verifies the sample's local calendar when resolvable; otherwise it
+reports explicit UTC is required, without making storage readiness fail. It rejects
+inconsistent coverage or an availability response for the wrong timezone.
+
+Browser checks used an isolated fixture built by the actual reference importer
+and publisher: all eight fixture airports obtained generated zones. The final
+Chromium run passed 56 tests; WebKit passed all 12 selected calendar/recovery tests,
+including phone use. Thirteen frontend unit tests, style checks, and installed-wheel
+application/ingestion probes passed. Screenshots of generated local dates and
+explicit UTC recovery are retained under ignored `var/timezone-qa/`.
+The complete combined Python suite passed 1,403 tests after the final changes.

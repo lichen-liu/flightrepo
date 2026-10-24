@@ -225,6 +225,12 @@ class SearchAvailability(BaseModel):
     arrival_end: datetime | None
 
 
+class TimezoneCoverage(BaseModel):
+    airports: int = Field(ge=0)
+    resolved: int = Field(ge=0)
+    unresolved: int = Field(ge=0)
+
+
 class WebBootstrap(BaseModel):
     airports: list[CatalogAirport]
     airports_truncated: bool
@@ -234,6 +240,8 @@ class WebBootstrap(BaseModel):
     suggested_route: dict | None
     data_mode: Literal["synthetic", "real", "mixed"]
     has_records: bool
+    local_date_coverage: TimezoneCoverage | None = None
+    departure_timezone: str | None = None
 
 
 class AvailableDates(BaseModel):

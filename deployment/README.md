@@ -92,6 +92,14 @@ database. Fares and booking are outside the explorer. Anyone with access to the
 published hostname can query these demo records; customer validation and real-data
 deployment are later work.
 
+Real probes also report the bootstrap's airport timezone coverage. When the
+sample route's origin has a timezone, the probe checks its airport-local calendar
+availability and verifies the returned timezone. Otherwise it reports that the
+sample requires explicit UTC dates. Storage readiness remains independent of
+local-date coverage; the browser offers **Use UTC dates** for unresolved origins.
+Coverage comes from the airport dimension only, without an archive-wide flight
+count. Older servers without capability fields are reported as unknown.
+
 ## Real itinerary serving
 
 Set `"data_mode": "real"` in the installed private `settings.json` and select an
