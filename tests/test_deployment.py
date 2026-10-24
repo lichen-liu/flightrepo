@@ -1103,6 +1103,81 @@ def test_real_public_probe_uses_summary_and_preserves_end_to_end_search(
     assert result["flight_count"] == (None if has_records else 0)
 
 
+@pytest.mark.parametrize("resolved", [0, 1])
+def test_real_probe_reports_local_date_capability_and_checks_resolved_calendar(scripts, resolved):
+    bootstrap = dict(
+        data_mode="real",
+        has_records=True,
+        available_time_bases=["observed"],
+        default_time_basis="observed",
+        first_departure="2023-07-01T12:00:00Z",
+        suggested_route={"origin_iata": "YYZ", "destination_iata": "NRT"},
+        local_date_coverage={"airports": 2, "resolved": resolved, "unresolved": 2 - resolved},
+        departure_timezone="America/Toronto" if resolved else None,
+    )
+    calls = []
+
+    def fetch(path, payload=None):
+        calls.append(path)
+        if path.startswith("/v1/search-availability?"):
+            from urllib.parse import parse_qs
+
+            params = parse_qs(urlsplit(path).query)
+            assert params == {
+                "origin": ["YYZ"],
+                "destination": ["NRT"],
+                "clock": ["local"],
+                "time_basis": ["observed"],
+            }
+            return json.dumps(
+                dict(
+                    origin="YYZ",
+                    destination="NRT",
+                    timezone="America/Toronto",
+                    dates=["2023-07-01"],
+                )
+            )
+        return json.dumps(
+            {"items": [{"legs": [{"origin_iata": "YYZ", "destination_iata": "NRT"}]}]}
+        )
+
+    result = scripts.manage.probe_real(
+        "https://fixture.example", {"status": "ready"}, bootstrap, fetch
+    )
+    assert result["route_search"] == "passed"
+    assert f"{resolved}/2 airports" in result["local_dates"]
+    assert ("sample calendar passed" in result["local_dates"]) == bool(resolved)
+    assert len(calls) == 1 + resolved
+
+
+def test_real_probe_rejects_invalid_coverage_or_wrong_calendar_zone(scripts):
+    bootstrap = dict(
+        data_mode="real",
+        has_records=True,
+        available_time_bases=["observed"],
+        default_time_basis="observed",
+        first_departure="2023-07-01T12:00:00Z",
+        suggested_route={"origin_iata": "YYZ", "destination_iata": "NRT"},
+        local_date_coverage={"airports": 2, "resolved": 3, "unresolved": 0},
+        departure_timezone="America/Toronto",
+    )
+
+    def fetch(path, payload=None):
+        if path.startswith("/v1/search-availability?"):
+            return json.dumps(
+                dict(origin="YYZ", destination="NRT", timezone="UTC", dates=["2023-07-01"])
+            )
+        return json.dumps(
+            {"items": [{"legs": [{"origin_iata": "YYZ", "destination_iata": "NRT"}]}]}
+        )
+
+    with pytest.raises(ValueError, match="coverage"):
+        scripts.manage.probe_real("https://fixture.example", {"status": "ready"}, bootstrap, fetch)
+    bootstrap["local_date_coverage"] = {"airports": 2, "resolved": 2, "unresolved": 0}
+    with pytest.raises(ValueError, match="calendar availability"):
+        scripts.manage.probe_real("https://fixture.example", {"status": "ready"}, bootstrap, fetch)
+
+
 @pytest.mark.parametrize("mode", ["mixed", "synthetic"])
 def test_real_public_probe_rejects_demo_sources(scripts, mode):
     with pytest.raises(ValueError, match="without demo"):

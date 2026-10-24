@@ -44,6 +44,7 @@ const firstCalendar = new DataCalendar(field("date")),
 let datesKey = null,
   availableDates = new Set(),
   userEdited = false,
+  utcReviewPending = false,
   timeBasisEdited = false;
 let availability = null;
 const map = new RouteMap($("route-map"), $("map-info"));
@@ -324,6 +325,8 @@ async function loadDates() {
   datesLane.cancel();
   availability = null;
   availableDates = new Set();
+  $("date-recovery").hidden = true;
+  $("date-clock-notice").hidden = true;
   $("retry-dates").hidden = true;
   $("coverage-warning").hidden = true;
   $("coverage-scope").hidden = false;
@@ -425,6 +428,12 @@ async function loadDates() {
           : "No eligible departure dates for this search.";
       }
       updateSearchButton();
+      if (utcReviewPending && clock === "UTC") {
+        $("date-clock-notice").textContent = result.dates.length
+          ? "Dates now use UTC. Review the departure date before searching."
+          : "Dates now use UTC. No departure dates are available for this search.";
+        $("date-clock-notice").hidden = false;
+      }
     },
     (error) => {
       datesKey = null;
@@ -433,10 +442,30 @@ async function loadDates() {
       for (const name of ["origin", "destination"])
         $(`${name}-coverage`).textContent = "Flight counts unavailable.";
       $("retry-dates").hidden = false;
+      if (clock === "local" && error?.detail?.code === "airport_metadata_missing") {
+        $("date-recovery-message").textContent =
+          "Local dates are unavailable for this airport. Use UTC dates to continue.";
+        $("date-recovery").hidden = false;
+        $("status").textContent = "Choose UTC dates to continue, or retry after airport details are updated.";
+      }
     },
   );
 }
 $("retry-dates").addEventListener("click", loadDates);
+$("use-utc-dates").addEventListener("click", async () => {
+  userEdited = true;
+  utcReviewPending = true;
+  field("input-clock").value = "UTC";
+  // A local calendar date is not a UTC date. Get a fresh selection explicitly.
+  field("date").value = field("last-date").value = "";
+  datesKey = null;
+  updateZones();
+  closeEditor();
+  await loadDates();
+  if (field("input-clock").value === "UTC" && availability && datesKey === dateKey()) {
+    if (!field("date").disabled) field("date").focus();
+  }
+});
 function commonQuery() {
   const via = airportList(field("via").value);
   return {
@@ -969,6 +998,7 @@ form.addEventListener("input", (event) => {
 });
 form.addEventListener("change", (event) => {
   userEdited = true;
+  utcReviewPending = false;
   updateZones();
   if (event.target === field("date")) updateLastDates();
   if (event.target === field("time-basis")) {

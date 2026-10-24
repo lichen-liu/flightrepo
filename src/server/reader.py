@@ -1060,6 +1060,19 @@ class FlightReader(SQLiteConnection):
             suggested = first.get(basis)
             rows = self._active_airports(connection) if include_airports else []
             providers = self._providers(connection)
+            timezone_counts = dict(
+                connection.execute(
+                    "SELECT COUNT(*) AS airports,COUNT(timezone) AS resolved, "
+                    "COUNT(*)-COUNT(timezone) AS unresolved FROM airports"
+                ).fetchone()
+            )
+            departure_zone = (
+                connection.execute(
+                    "SELECT timezone FROM airports WHERE iata=?", (suggested[0],)
+                ).fetchone()
+                if suggested
+                else None
+            )
         return WebBootstrap(
             airports=sorted((dict(row) for row in rows[:1000]), key=lambda row: row["iata"]),
             airports_truncated=len(rows) > 1000,
@@ -1069,6 +1082,8 @@ class FlightReader(SQLiteConnection):
             if providers == ["demo"]
             else "real",
             has_records=bool(providers),
+            local_date_coverage=timezone_counts,
+            departure_timezone=departure_zone[0] if departure_zone else None,
             default_time_basis=basis,
             available_time_bases=list(first),
             first_departure=(EPOCH + timedelta(microseconds=suggested[2])) if suggested else None,

@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from serve import read_settings
@@ -395,11 +395,27 @@ def probe_real(base_url, ready, bootstrap, fetch):
     ):
         raise ValueError("Real bootstrap is missing its time evidence")
     status = "empty dataset" if not bootstrap["has_records"] else "no complete time evidence"
+    coverage = bootstrap.get("local_date_coverage")
+    local_dates = "unknown (older server)"
+    if coverage is not None:
+        if (
+            not isinstance(coverage, dict)
+            or any(
+                type(coverage.get(key)) is not int or coverage[key] < 0
+                for key in ("airports", "resolved", "unresolved")
+            )
+            or coverage["resolved"] + coverage["unresolved"] != coverage["airports"]
+        ):
+            raise ValueError("Invalid airport-local date coverage")
+        local_dates = (
+            f"{coverage['resolved']}/{coverage['airports']} airports have timezone metadata"
+        )
     if not bases:
         return {
             "url": base_url,
             "flight_count": 0 if not bootstrap["has_records"] else None,
             "route_search": status,
+            "local_dates": local_dates,
         }
     route, departure = bootstrap.get("suggested_route"), bootstrap.get("first_departure")
     basis = bootstrap.get("default_time_basis")
@@ -429,7 +445,34 @@ def probe_real(base_url, ready, bootstrap, fetch):
         or legs[-1].get("destination_iata") != route.get("destination_iata")
     ):
         raise ValueError("Real dataset route search returned the wrong route")
-    return {"url": base_url, "flight_count": None, "route_search": "passed"}
+    if coverage is not None:
+        if bootstrap.get("departure_timezone"):
+            params = urlencode(
+                dict(
+                    origin=route["origin_iata"],
+                    destination=route["destination_iata"],
+                    clock="local",
+                    time_basis=basis,
+                )
+            )
+            available = json.loads(fetch("/v1/search-availability?" + params))
+            if (
+                not isinstance(available, dict)
+                or not available.get("dates")
+                or available.get("timezone") != bootstrap["departure_timezone"]
+                or available.get("origin") != route["origin_iata"]
+                or available.get("destination") != route["destination_iata"]
+            ):
+                raise ValueError("Airport-local calendar availability failed")
+            local_dates += "; sample calendar passed"
+        else:
+            local_dates += "; sample origin requires explicit UTC dates"
+    return {
+        "url": base_url,
+        "flight_count": None,
+        "route_search": "passed",
+        "local_dates": local_dates,
+    }
 
 
 def check(root: Path, *, public: bool = False):
@@ -446,6 +489,8 @@ def check(root: Path, *, public: bool = False):
     print(
         f"Verified {'live' if public else 'locally'}: {base}/ · {settings['data_mode']} data · {evidence}"
     )
+    if "local_dates" in result:
+        print(f"Airport-local dates: {result['local_dates']}")
 
 
 def main(argv=None):
