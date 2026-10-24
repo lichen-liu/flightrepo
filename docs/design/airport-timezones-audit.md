@@ -46,6 +46,9 @@ The local audit found and corrected these behaviors before the backend PR:
 - A direct producer coordinate/value edit could make stored state stale. Value
   divergence becomes protected legacy ownership; stale reference coordinates
   are reported as a publication conflict instead of being copied.
+- Completing a partial airport through the create path could erase an omitted
+  timezone. Creation now shares the same ownership/invalidation helper as imports
+  and updates only supplied fields, with a dedicated regression test.
 
 Evidence: full Python run passed 1,398 tests; the subsequent focused audit run
 passed 60 tests. Installed-wheel application/ingestion probes and Python style

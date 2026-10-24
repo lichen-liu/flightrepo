@@ -275,3 +275,19 @@ def test_publication_rejects_source_coordinate_change_before_enrichment(store, t
     target = tmp_path / "serving.db"
     assert publish_catalog(store.path, target)["timezones"]["source_conflicts"] == 1
     assert facts(target)[0][0]["timezone"] is None
+
+
+def test_partial_airport_creation_preserves_or_invalidates_generated_zone_correctly(
+    store, tmp_path
+):
+    enrich(store.path, lookup=Lookup())
+    target = tmp_path / "serving.db"
+    publish_catalog(store.path, target)
+    writer = FlightUpdater(target)
+    writer.create_airport(Airport(iata="YYZ", name="Completed name"))
+    assert facts(target)[0][0]["timezone"] == "America/Toronto"
+    assert facts(target)[1]["YYZ"]["owner"] == "reference"
+    writer.create_airport(Airport(iata="YYZ", latitude=40, longitude=-75))
+    assert facts(target)[0][0]["timezone"] is None
+    writer.create_airport(Airport(iata="YYZ", timezone="America/New_York"))
+    assert facts(target)[1]["YYZ"]["owner"] == "manual"

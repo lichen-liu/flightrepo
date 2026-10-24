@@ -88,19 +88,23 @@ class FlightUpdater(SQLiteConnection):
             {key: getattr(airport, key) for key in airport.model_fields_set}
         )
         with self.connect() as connection:
+            supplied = [
+                key
+                for key in ("name", "city_id", "timezone", "latitude", "longitude")
+                if key in airport.model_fields_set
+            ]
+            updates = [f"{key}=excluded.{key}" for key in supplied] + ["metadata_source_id=NULL"]
             cursor = connection.execute(
-                """INSERT INTO airports (iata, name, city_id, timezone, latitude, longitude)
-                VALUES (:iata, :name, :city_id, :timezone, :latitude, :longitude)
-                ON CONFLICT(iata) DO UPDATE SET name=excluded.name,city_id=excluded.city_id,
-                timezone=excluded.timezone,latitude=excluded.latitude,longitude=excluded.longitude,
-                metadata_source_id=NULL
-                WHERE airports.name IS NULL OR airports.city_id IS NULL OR airports.timezone IS NULL
-                OR airports.latitude IS NULL OR airports.longitude IS NULL""",
+                "INSERT INTO airports (iata,name,city_id,timezone,latitude,longitude) "
+                "VALUES (:iata,:name,:city_id,:timezone,:latitude,:longitude) "
+                "ON CONFLICT(iata) DO UPDATE SET "
+                + ",".join(updates)
+                + " WHERE airports.name IS NULL OR airports.city_id IS NULL OR airports.timezone IS NULL "
+                "OR airports.latitude IS NULL OR airports.longitude IS NULL",
                 airport.model_dump(),
             )
             self._update_airport_reference(connection, airport)
-            if "timezone" in airport.model_fields_set:
-                protect(connection, airport.iata)
+            self._update_airport_timezone(connection, airport)
             if cursor.rowcount == 0:
                 raise ValueError(
                     f"Airport {airport.iata} already exists; use airports import to update it"
@@ -119,6 +123,32 @@ class FlightUpdater(SQLiteConnection):
                 "UPDATE airports SET " + ",".join(key + "=?" for key in fields) + " WHERE iata=?",
                 [getattr(airport, key) for key in fields] + [airport.iata],
             )
+
+    @staticmethod
+    def _update_airport_timezone(connection, airport):
+        if "timezone" in airport.model_fields_set:
+            protect(connection, airport.iata)
+        elif {"latitude", "longitude"} & airport.model_fields_set:
+            # A generated zone is tied to the exact coordinates resolved.
+            previous = connection.execute(
+                "SELECT * FROM airport_timezone_state WHERE iata=? AND owner='reference'",
+                (airport.iata,),
+            ).fetchone()
+            current = connection.execute(
+                "SELECT timezone,latitude,longitude FROM airports WHERE iata=?",
+                (airport.iata,),
+            ).fetchone()
+            if previous and (previous["latitude"], previous["longitude"]) != (
+                current["latitude"],
+                current["longitude"],
+            ):
+                if current["timezone"] == previous["applied_zone"]:
+                    connection.execute(
+                        "UPDATE airports SET timezone=NULL WHERE iata=?", (airport.iata,)
+                    )
+                    connection.execute(
+                        "DELETE FROM airport_timezone_state WHERE iata=?", (airport.iata,)
+                    )
 
     def update_airports(
         self, airports: Iterable[Airport], transfers: Iterable[AirportTransfer]
@@ -144,29 +174,7 @@ class FlightUpdater(SQLiteConnection):
                     [airport.iata] + [getattr(airport, key) for key in fields],
                 )
                 self._update_airport_reference(connection, airport)
-                if "timezone" in airport.model_fields_set:
-                    protect(connection, airport.iata)
-                elif {"latitude", "longitude"} & airport.model_fields_set:
-                    # A generated zone is tied to the exact coordinates resolved.
-                    previous = connection.execute(
-                        "SELECT * FROM airport_timezone_state WHERE iata=? AND owner='reference'",
-                        (airport.iata,),
-                    ).fetchone()
-                    current = connection.execute(
-                        "SELECT timezone,latitude,longitude FROM airports WHERE iata=?",
-                        (airport.iata,),
-                    ).fetchone()
-                    if previous and (previous["latitude"], previous["longitude"]) != (
-                        current["latitude"],
-                        current["longitude"],
-                    ):
-                        if current["timezone"] == previous["applied_zone"]:
-                            connection.execute(
-                                "UPDATE airports SET timezone=NULL WHERE iata=?", (airport.iata,)
-                            )
-                            connection.execute(
-                                "DELETE FROM airport_timezone_state WHERE iata=?", (airport.iata,)
-                            )
+                self._update_airport_timezone(connection, airport)
             invalid = connection.execute("""SELECT 1 FROM airport_transfers t
                 JOIN airports a ON a.iata=t.arrival_iata JOIN airports b ON b.iata=t.departure_iata
                 WHERE a.city_id IS NULL OR b.city_id IS NULL OR a.city_id != b.city_id LIMIT 1""").fetchone()
