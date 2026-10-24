@@ -91,7 +91,10 @@ def test_search_flags_and_request_file_preserve_ranking_and_order(local_db, tmp_
     source = tmp_path / "request.json"
     source.write_text(json.dumps(result["query"]))
     client.run(["search", "--request", str(source)])
-    assert json.loads(capsys.readouterr().out) == result
+    repeated = json.loads(capsys.readouterr().out)
+    assert result.pop("search_time_seconds") >= 0
+    assert repeated.pop("search_time_seconds") >= 0
+    assert repeated == result
     data = result["query"]
     data["limits"]["max_candidates"] = 1
     source.write_text(json.dumps(data))

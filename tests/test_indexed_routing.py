@@ -4,10 +4,12 @@ import pytest
 from test_routing import BASE, flight, identity, oracle_paths, oracle_score, query
 
 from core.connections import RebuildRequest
+from core.models import FlightStatus
 from core.routing.models import ENGINE_VERSION
 from core.routing.snapshot import digest
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
+from server.routing_projection import project_routes
 
 
 @pytest.fixture
@@ -15,6 +17,90 @@ def store(tmp_path):
     writer = FlightUpdater(tmp_path / "flights.db")
     writer.initialize()
     return writer, FlightReader(writer.path)
+
+
+@pytest.mark.parametrize("basis", ["scheduled", "actual", "observed"])
+@pytest.mark.parametrize("inclusive", [False, True])
+def test_terminal_route_seek_matches_view_with_less_sql_work(store, basis, inclusive):
+    from datetime import timedelta
+
+    writer, reader = store
+
+    def timed(key, destination="EEE", out=10, arrival=50, **updates):
+        record = flight(key, "AAA", destination, out, arrival)
+        return record.model_copy(
+            update={
+                "departure_actual": record.departure_scheduled,
+                "arrival_actual": record.arrival_scheduled,
+                "departure_observed_lower": record.departure_scheduled,
+                "departure_observed_upper": record.departure_scheduled + timedelta(minutes=1),
+                "arrival_observed_lower": record.arrival_scheduled,
+                "arrival_observed_upper": record.arrival_scheduled + timedelta(minutes=1),
+                **updates,
+            }
+        )
+
+    writer.upsert(
+        [
+            timed("good"),
+            timed("boundary", out=60, arrival=100),
+            timed("late-arrival", arrival=3000),
+            timed("cancelled", status=FlightStatus.CANCELLED),
+            timed("blocked"),
+            timed("reviewed", itinerary_reviewed=True),
+            timed("uncertain", review_reasons=["observation_gap"]),
+            timed("deleted"),
+            *(timed(f"unrelated-{i}", "FFF") for i in range(1000)),
+        ]
+    )
+    writer.delete("test", "deleted")
+    with writer.connect() as connection:
+        connection.execute(
+            "UPDATE flight_legs SET review_reasons='[\"future_unknown_reason\"]' "
+            "WHERE source_record_key IN ('blocked','reviewed')"
+        )
+    request = query(time_basis=basis)
+    with reader.connect() as connection:
+        index = project_routes(connection, request, (), (), basis).index
+        steps = [0]
+
+        def progress():
+            steps[0] += 1
+            return 0
+
+        def read():
+            return list(
+                index.window(
+                    "AAA",
+                    BASE,
+                    BASE + timedelta(minutes=60),
+                    upper_inclusive=inclusive,
+                    destinations=frozenset(["EEE"]),
+                    arrival_horizon=request.horizon_end,
+                )[0]
+            )
+
+        statements = []
+        connection.set_trace_callback(statements.append)
+        connection.set_progress_handler(progress, 100)
+        optimized = read()
+        optimized_work = steps[0]
+        connection.set_trace_callback(None)
+        steps[0] = 0
+        index.has_pair_index = False
+        reference = read()
+        connection.set_progress_handler(None, 0)
+        assert optimized == reference
+        assert {edge.provider_id for edge in optimized} >= {"good", "reviewed", "uncertain"}
+        assert not {"blocked", "cancelled", "deleted", "late-arrival"} & {
+            edge.provider_id for edge in optimized
+        }
+        assert steps[0] > 5 * optimized_work
+        plan = connection.execute("EXPLAIN QUERY PLAN " + statements[0]).fetchall()
+        assert any(
+            "flight_legs_airport_pair (origin_iata=? AND destination_iata=?)" in row[3]
+            for row in plan
+        )
 
 
 @pytest.mark.parametrize("ranking", ["fewest_legs", "earliest_arrival", "shortest_elapsed"])

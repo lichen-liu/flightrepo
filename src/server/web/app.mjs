@@ -617,6 +617,9 @@ async function moreRoutes() {
     (page) => {
       state.result = {
         ...previous,
+        query: page.query,
+        search_time_seconds: page.search_time_seconds,
+        diagnostics: page.diagnostics,
         next_offset: page.next_offset,
         items: [...previous.items, ...page.items],
         airports: [...new Map([...previous.airports, ...page.airports].map(a => [a.iata, a])).values()],
@@ -640,6 +643,8 @@ function renderOptions() {
   $("more-routes").disabled = false;
   updateWorkspaceState(!result.items.length);
   $("result-count").textContent = `${result.items.length}${result.next_offset != null ? "+" : ""}`;
+  $("search-time").hidden = false;
+  $("search-time").textContent = `Search time: ${result.search_time_seconds.toFixed(2)} s${result.query.offset ? " · latest page" : ""}`;
   const v = state.queryValues,
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;

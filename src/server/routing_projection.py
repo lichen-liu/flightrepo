@@ -6,6 +6,7 @@ from datetime import timedelta
 from math import inf, nextafter
 from sys import intern
 
+from core.admission import search_blocked_sql
 from core.connections import ConnectionWindow
 from core.routing.index import FlightIndex
 from core.routing.models import ENGINE_VERSION
@@ -14,7 +15,7 @@ from core.routing.projection import ProjectedSnapshot, RoutingEdge
 from core.routing.search import RouteCalculation, calculate_routes, route_score
 from core.routing.snapshot import digest, flight_key
 from core.storage import EPOCH, utc_us
-from server.archive_queries import airport_pairs
+from server.archive_queries import airport_pairs, has_airport_pair_index
 from server.reachability import TimeEdge, reverse_reachable_flights
 
 
@@ -44,6 +45,7 @@ class DatabaseFlightIndex(FlightIndex):
             self.reverse[destination].add(origin)
             self.reverse[destination].update(policy.arrivals_by_departure.get(origin, ()))
         self.avoid = policy.avoid
+        self.has_pair_index = has_airport_pair_index(connection)
 
     def for_horizon(self, horizon, window, *, start=None):
         start = max(self.start, start) if start is not None else self.start
@@ -111,10 +113,48 @@ class DatabaseFlightIndex(FlightIndex):
             if destinations is not None
             else ""
         )
+        source = "searchable_legs"
+        if self.has_pair_index and destinations is not None and len(destinations) == 1:
+            # Terminal checks otherwise scan every departure from a hub through
+            # the archive horizon before filtering for one destination. Seek
+            # that route first, preserving searchable_legs' admission rules.
+            params["only_destination"] = next(iter(destinations))
+            if self.basis == "observed":
+                columns = (
+                    "departure_observed_lower_us",
+                    "departure_observed_upper_us",
+                    "arrival_observed_lower_us",
+                    "arrival_observed_upper_us",
+                )
+                complete = "f.departure_observed_lower_us IS NOT NULL"
+            else:
+                columns = (f"departure_{self.basis}_us",) * 2 + (f"arrival_{self.basis}_us",) * 2
+                complete = f"f.{columns[0]} IS NOT NULL AND f.{columns[2]} IS NOT NULL"
+            projection = ",".join(
+                f"f.{column} AS {alias}"
+                for column, alias in zip(
+                    columns,
+                    (
+                        "departure_lower_us",
+                        "departure_upper_us",
+                        "arrival_lower_us",
+                        "arrival_upper_us",
+                    ),
+                )
+            )
+            source = f"""(SELECT f.source_id,f.source_record_key,f.origin_iata,f.destination_iata,
+                                  :basis AS time_basis,{projection}
+                           FROM flight_legs f INDEXED BY flight_legs_airport_pair
+                           WHERE f.origin_iata=:origin AND f.destination_iata=:only_destination
+                             AND f.status<>'cancelled' AND {complete}
+                             AND NOT {search_blocked_sql("f")}
+                             AND NOT EXISTS (SELECT 1 FROM flight_tombstones t
+                                 WHERE t.source_id=f.source_id
+                                   AND t.source_record_key=f.source_record_key))"""
         query = f"""SELECT s.code,l.source_record_key,l.origin_iata,l.destination_iata,
                           l.departure_lower_us,l.departure_upper_us,
                           l.arrival_lower_us,l.arrival_upper_us
-                   FROM searchable_legs l JOIN data_sources s ON s.id=l.source_id
+                   FROM {source} l JOIN data_sources s ON s.id=l.source_id
                    WHERE l.time_basis=:basis AND l.origin_iata=:origin
                      AND l.departure_lower_us>=:lower
                      AND l.departure_lower_us{operator}:upper

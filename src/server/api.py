@@ -410,6 +410,7 @@ def itineraries(
         if not result.diagnostics.exhaustive:
             raise IncompleteSearchError(result.diagnostics)
         response.headers["X-Data-Revision"] = result.data_revision
+        response.headers["X-Search-Time-Seconds"] = str(result.search_time_seconds)
         if result.next_offset is not None:
             response.headers["X-Next-Offset"] = str(result.next_offset)
             url = request.url.include_query_params(

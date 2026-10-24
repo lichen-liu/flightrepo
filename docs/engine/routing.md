@@ -78,6 +78,19 @@ Itinerary IDs hash the exact provider/ID sequence. SQL-projection digests cover 
 
 `POST /v1/itineraries/search` accepts `RouteSearchRequest` and returns the allowlisted public `{query, items, diagnostics}` contract. Items contain opaque flight IDs, itinerary timing and assessed connections. Public diagnostics contain only completion/limit status and route counts; the replay hashes, events and provider identities described above remain internal/admin-only. `POST /v1/plans/rebuild` accepts `flight_id` references and returns the same public flight model with option-page metadata. Both remain read-only calculations. See [public API boundaries](../database-schema.md#public-api-boundary).
 
+UTC and local-date search responses include `search_time_seconds`, measured with
+a monotonic clock from revision/catalog lookup through result hydration. It
+excludes HTTP transport and public serialization. Empty, partial and paginated
+results each carry their own duration. The browser keeps this time beneath the
+results; loading more journeys replaces it with the latest page's search time.
+The legacy list endpoint exposes the duration in `X-Search-Time-Seconds`.
+Snapshot replay remains deterministic and does not measure execution time.
+
+Single-destination database windows seek the existing
+`flight_legs_airport_pair` index before checking times and admission, avoiding
+year-long scans of unrelated hub departures during final-leg checks. Databases
+without that additive index retain the original searchable-view query.
+
 The search, local-time search and rebuild endpoints accept `via_airport` as either a single IATA code or an ordered array such as `["LHR", "AMS"]`. Scalars remain scalars in the echoed query; arrays retain their normalized order. `null` and `[]` impose no via requirement. Every listed airport must be visited in order across the retained prefix and suffix. Arrival and permitted transfer-departure airports count chronologically; an ordinary departure from the previous arrival does not count twice. Repeated codes, endpoints, avoided vias and lists exceeding the flight-leg capacity are rejected. Four flight legs support up to three ordinary vias, or up to six distinct vias with permitted airport changes. There is no SQLite schema change.
 
 The browser resolves departure dates in the origin's timezone and uses all available destination arrivals by default. Its optional arrival-window field sends `onward_days`, measured after the resolved departure-window end. Destination timezone metadata is optional for these cases. Explicit `arrival_by_local` remains supported by the local API and requires destination timezone metadata. Departure ranges have no fixed day ceiling and remain valid across DST changes.
