@@ -83,6 +83,8 @@ async function open(page, routes = true) {
     page.getByRole("button", { name: "Search flights", exact: true }),
   ).toBeEnabled();
   if (routes) await expect(page.locator("[data-option]").first()).toBeVisible();
+  assert.ok(Number.isFinite(data.search_time_seconds));
+  await expect(page.locator("#search-time")).toHaveText(`Search time: ${data.search_time_seconds.toFixed(2)} s`);
   return data;
 }
 async function search(
@@ -94,6 +96,8 @@ async function search(
   await expect(
     page.getByRole("button", { name: "Search flights", exact: true }),
   ).toBeEnabled();
+  assert.ok(Number.isFinite(data.search_time_seconds));
+  await expect(page.locator("#search-time")).toHaveText(`Search time: ${data.search_time_seconds.toFixed(2)} s`);
   return data;
 }
 async function chooseDate(page, name, date) {
@@ -136,8 +140,9 @@ check("journey pages append results and preserve the selected journey", async (p
   assert.equal(first.items.length, 2);
   const selected = await page.locator('[data-option][aria-pressed="true"]').innerText();
   await expect(page.locator("#more-routes")).toBeVisible();
-  await result(page, searchPath, () => page.locator("#more-routes").click());
+  const nextPage = await result(page, searchPath, () => page.locator("#more-routes").click());
   await expect(page.locator("[data-option]")).toHaveCount(4);
+  await expect(page.locator("#search-time")).toHaveText(`Search time: ${nextPage.search_time_seconds.toFixed(2)} s · latest page`);
   assert.equal(requests.at(-1).offset, 2);
   assert.equal(requests.at(-1).data_revision, first.data_revision);
   assert.equal(await page.locator('[data-option][aria-pressed="true"]').innerText(), selected);

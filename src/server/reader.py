@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timedelta
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from threading import Lock
-from time import monotonic
+from time import monotonic, perf_counter
 
 from core.admission import ADMITTED_SQL
 from core.config import get_settings
@@ -716,13 +716,16 @@ class FlightReader(SQLiteConnection):
             return self._routing_rows(connection, request, airports, transfers)
 
     def search_itineraries(self, request: RouteSearchRequest) -> RouteSearchResult:
+        started = perf_counter()
         revision = self.check_page_revision(request.data_revision)
         with self.connect() as connection:
             connection.execute("BEGIN")
             airports, transfers = self._routing_catalog(connection, request)
-            return self._projected_search(
+            result = self._projected_search(
                 connection, request, airports, transfers, revision=revision
             )
+        result.search_time_seconds = perf_counter() - started
+        return result
 
     @staticmethod
     def _routing_catalog(connection, request):
@@ -821,6 +824,7 @@ class FlightReader(SQLiteConnection):
         return result
 
     def search_local(self, request: LocalRouteSearchRequest) -> LocalRouteSearchResult:
+        started = perf_counter()
         revision = self.check_page_revision(request.data_revision)
         with self.connect() as connection:
             connection.execute("BEGIN")
@@ -830,13 +834,15 @@ class FlightReader(SQLiteConnection):
                 connection, query, airports, transfers, revision=revision
             )
         by_code = {a.iata: a for a in airports}
-        return LocalRouteSearchResult(
+        result = LocalRouteSearchResult(
             **result.model_dump(),
             departure_timezone=by_code[query.origin].timezone,
             arrival_timezone=(
                 by_code[query.destination].timezone if query.destination in by_code else None
             ),
         )
+        result.search_time_seconds = perf_counter() - started
+        return result
 
     def resolve_time(
         self,

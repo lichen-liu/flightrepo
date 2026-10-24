@@ -696,6 +696,55 @@ def test_departure_search_needs_no_arrival_input(client):
     assert query["horizon_end"] == "2026-10-19T05:30:00Z"
 
 
+def test_legacy_search_returns_time_in_response_header(client, monkeypatch):
+    ticks = iter([100.0, 102.5])
+    monkeypatch.setattr("server.reader.perf_counter", lambda: next(ticks))
+    response = client.get(
+        "/v1/itineraries",
+        params={
+            "origin": "YYZ",
+            "destination": "CDG",
+            "start": "2026-10-17T00:00:00Z",
+            "end": "2026-10-18T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Search-Time-Seconds"] == "2.5"
+    assert isinstance(response.json(), list)
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize("kind", ["results", "empty", "partial", "page"])
+def test_search_returns_measured_time_for_every_result(client, demo, monkeypatch, local, kind):
+    changes = {
+        "results": {},
+        "empty": {"destination": "ZZZ"},
+        "partial": {"limits": {"max_candidates": 1}},
+        "page": {"limit": 1, "offset": 1},
+    }[kind]
+    payload = departure_request(**changes)
+    endpoint = "/v1/itineraries/search/local"
+    if not local:
+        request_model = LocalRouteSearchRequest.model_validate(payload)
+        with demo[1].connect() as connection:
+            airports, _ = demo[1]._routing_catalog(connection, request_model)
+        payload = request_model.utc_request(airports).model_dump(mode="json")
+        endpoint = "/v1/itineraries/search"
+    ticks = iter([100.0, 102.5])
+    monkeypatch.setattr("server.reader.perf_counter", lambda: next(ticks))
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["search_time_seconds"] == 2.5
+    if kind == "empty":
+        assert not result["items"]
+    elif kind == "partial":
+        assert not result["diagnostics"]["exhaustive"]
+    else:
+        assert result["items"]
+    assert result["query"]["offset"] == (1 if kind == "page" else 0)
+
+
 @pytest.mark.parametrize("date,hours", [("2026-03-08", 23), ("2026-11-01", 25)])
 def test_explicit_horizon_follows_resolved_departure_window_across_dst(client, date, hours):
     response = client.post(

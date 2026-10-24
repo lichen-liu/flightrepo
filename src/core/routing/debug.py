@@ -36,7 +36,17 @@ def replay(data):
         result = search_routes(RouteSearchRequest.model_validate(data["request"]), snapshot)
     elif data["kind"] == "rebuild":
         result = rebuild_from_snapshot(RebuildRequest.model_validate(data["request"]), snapshot)
+    regenerated = result.model_dump(mode="json")
+    saved = data["result"]
+    if data["kind"] == "search":
+        # Elapsed wall time is not a routing fact. Older replay documents omit
+        # it, and measured serving searches cannot reproduce the same duration.
+        regenerated = {
+            key: value for key, value in regenerated.items() if key != "search_time_seconds"
+        }
+        if isinstance(saved, dict):
+            saved = {key: value for key, value in saved.items() if key != "search_time_seconds"}
     return {
-        "matches_saved_result": result.model_dump(mode="json") == data["result"],
+        "matches_saved_result": regenerated == saved,
         "result": result.model_dump(mode="json"),
     }

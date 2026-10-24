@@ -118,6 +118,9 @@ class PublicSearchResult(BaseModel):
     airports: list[Airport]
     next_offset: int | None = None
     data_revision: str | None = None
+    search_time_seconds: float = Field(
+        ge=0, description="Server search duration in seconds, excluding HTTP transport."
+    )
 
 
 class PublicLocalSearchResult(PublicSearchResult):
@@ -350,6 +353,7 @@ def to_public(store, value):
             airports=value.airports,
             next_offset=value.next_offset,
             data_revision=value.data_revision,
+            search_time_seconds=value.search_time_seconds,
         )
         if isinstance(value, LocalRouteSearchResult):
             return PublicLocalSearchResult(
