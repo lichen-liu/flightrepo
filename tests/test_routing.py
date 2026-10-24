@@ -732,6 +732,21 @@ def test_trace_bounded_identified_and_replay_detects_changed_facts():
     assert search_routes(query(), snapshot).diagnostics.events == []
 
 
+@pytest.mark.parametrize("saved_time", [None, 1.25])
+def test_search_replay_ignores_elapsed_time_but_still_compares_routing_facts(saved_time):
+    request = query()
+    snapshot = RoutingSnapshot((flight("one", "AAA", "EEE", 0, 60),))
+    result = search_routes(request, snapshot)
+    document = replay_document("search", request, snapshot, result)
+    if saved_time is None:
+        document["result"].pop("search_time_seconds")
+    else:
+        document["result"]["search_time_seconds"] = saved_time
+    assert replay(document)["matches_saved_result"]
+    document["result"]["items"][0]["duration_minutes"] += 1
+    assert not replay(document)["matches_saved_result"]
+
+
 def test_conflicting_identities_rejected_and_identical_duplicates_deduplicated():
     f = flight("one", "AAA", "EEE", 0, 60)
     with pytest.raises(RoutingError, match="conflicting records"):
