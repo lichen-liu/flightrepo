@@ -176,7 +176,9 @@ def print_overview(summary):
         f"Searchable flights: {summary['searchable_flights']:,}   Review recommended: {summary['needs_review_count']:,}"
     )
     print(
-        f"Named airports: {summary['named_airports']:,}   Operator references: {summary['reference_carriers']:,}"
+        f"Named airports: {summary['named_airports']:,}   "
+        f"Airports with timezone: {summary['timezone_airports']:,}   "
+        f"Operator references: {summary['reference_carriers']:,}"
     )
     print(f"Airports missing catalog metadata: {summary['missing_airports']:,}")
     for label, first, last in (
@@ -318,6 +320,11 @@ def parser():
     for name in ("import", "export"):
         action = catalog.add_parser(name, help=f"{name} airport and directed transfer JSON")
         action.add_argument("path", type=Path)
+    release_zone = catalog.add_parser(
+        "release-timezone",
+        help="release a serving timezone override for the next reference publication",
+    )
+    release_zone.add_argument("code", type=airport_code)
 
     routes = commands.add_parser(
         "routes", help="summarize direct airport pairs in a departure window"
@@ -441,7 +448,10 @@ def run(arguments, *, database_path=None, interactive=False):
             "ingest",
         }
         reading |= args.command == "flight" and args.flight_action == "show"
-        reading |= args.command == "airports" and args.airport_action != "import"
+        reading |= args.command == "airports" and args.airport_action not in {
+            "import",
+            "release-timezone",
+        }
         reading |= args.command == "storage" and not hasattr(args, "size")
         reading |= args.command == "db" and not args.create
         lifecycle = args.command == "maintenance" and args.maintenance_action in {
@@ -585,6 +595,11 @@ def run(arguments, *, database_path=None, interactive=False):
             updater.initialize()
             updater.update_airports(airports, transfers)
             output({"airports": len(airports), "transfers": len(transfers)})
+        elif args.airport_action == "release-timezone":
+            updater = FlightUpdater(path)
+            updater.initialize()
+            updater.release_airport_timezone(args.code)
+            output({"released_timezone": args.code})
         elif args.airport_action == "export":
             write_json(args.path, FlightReader(path).airport_catalog())
             output({"exported_to": args.path})

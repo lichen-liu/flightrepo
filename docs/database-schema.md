@@ -142,9 +142,13 @@ Both stores own `airports`, `carriers` and snapshot provenance. Serving requests
 need neither private ingestion nor external CSV/API access. OurAirports imports
 names, ICAO, municipality, country/region and coordinates. Municipality is not a
 transfer `city_id`. Duplicate IATA assignments are counted/skipped. The source has
-no timezone column; unknown zones remain NULL and existing IANA zones/manual
-metadata are preserved. Timezone enrichment is tracked in
-[#21](https://github.com/lichen-liu/flightrepo/issues/21).
+no timezone column. Producer reference ingestion enriches the retained coordinates
+using pinned full timezone geometry, leaving unresolved zones NULL. Separate
+`airport_timezone_snapshots` and `airport_timezone_state` tables track dataset
+identity, exact inputs, generated/manual/legacy ownership and ambiguous candidates.
+Manual and legacy values are protected; generated values can refresh. Publication
+and serving replacement retain that ownership without changing flight facts.
+See [timezone backfill and publication](ingestion.md#reference-catalogs-and-vrs-audit).
 
 Carrier snapshots replace source-owned assignments atomically. A 4–8 character
 callsign resolves an operator only when it starts with a known three-letter ICAO

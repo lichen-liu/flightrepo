@@ -12,3 +12,4 @@
 - [Development checks](../README.md#development-checks): Python, frontend, installed-package and browser verification.
 
 - [Standalone monitoring proposal](design/shared-monitoring.md): generic single-process stack, SQL storage, Git submodule adapters and a dashboard layout study.
+- [Airport timezone ingestion proposal](design/airport-timezones.md): reproducible timezone enrichment, ownership-aware publication, existing-catalog backfill and UTC calendar recovery.

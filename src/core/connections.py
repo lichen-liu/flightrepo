@@ -1,7 +1,7 @@
 """Airport metadata and read-only continuation planning contracts."""
 
 from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfoNotFoundError
 
 from pydantic import (
     BaseModel,
@@ -24,6 +24,7 @@ from core.routing.models import (
     validate_via_constraints,
     via_airports,
 )
+from core.tzdb import zone as ZoneInfo
 
 
 class Airport(BaseModel):

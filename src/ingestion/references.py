@@ -167,8 +167,22 @@ def import_catalog(path, kind, data, *, source_url=None):
         if not acquired:
             raise ValueError("Stop the active ingestion job before importing references")
         store.initialize()
+        prepared = lookup = None
+        if kind == "airports":
+            from ingestion.airport_timezones import plan, read_inputs, resolver
+
+            lookup = resolver()
+            with store.connect() as c:
+                c.execute("BEGIN")
+                inputs, states = read_inputs(c)
+            prepared = plan(inputs, states, lookup, incoming=rows)
         with store.connect() as c:
             c.execute("BEGIN IMMEDIATE")
+            if prepared is not None:
+                from ingestion.airport_timezones import digest as timezone_digest
+
+                if timezone_digest(list(read_inputs(c))) != prepared["original"]:
+                    raise ValueError("Airport inputs changed during reference preparation; retry")
             sid = source_id(c, code)
             c.execute(
                 "UPDATE data_sources SET name=?,source_url=?,license_expression=?,license_url=?,attribution=? WHERE id=?",
@@ -198,6 +212,10 @@ def import_catalog(path, kind, data, *, source_url=None):
                     merge_airport(c, values)
                 else:
                     merge_carrier(c, values)
+            if prepared is not None:
+                from ingestion.airport_timezones import apply
+
+                apply(c, prepared, lookup, recheck=False)
             c.execute(
                 "INSERT INTO reference_snapshots VALUES(?,?,?,?,?,?) ON CONFLICT(source_id,kind) DO UPDATE SET source_url=excluded.source_url,sha256=excluded.sha256,fetched_us=excluded.fetched_us,row_count=excluded.row_count",
                 (sid, kind, url, digest, now, len(rows)),
@@ -210,6 +228,11 @@ def import_catalog(path, kind, data, *, source_url=None):
         sha256=digest,
         unchanged=bool(previous and previous[0] == digest),
         serving_changed=False,
+        **(
+            {"timezones": prepared["counts"], "timezone_snapshot": lookup.identity}
+            if prepared is not None
+            else {}
+        ),
     )
 
 
@@ -256,7 +279,7 @@ def copy_source(row, output):
     return sid
 
 
-def copy_catalog(source, output):
+def copy_catalog(source, output, *, refresh_timezones=True):
     """Publish reference dimensions independently of millions of flight facts."""
     sources = {
         r[0]
@@ -271,10 +294,18 @@ def copy_catalog(source, output):
             continue
         sid = copy_source(row, output)
         mapping[row["id"]] = sid
+    from core.airport_timezones import state_rows
+    from ingestion.airport_timezones import publish as publish_timezones
+
+    timezone_states = state_rows(source)
     for row in source.execute("SELECT * FROM airports"):
+        values = dict(row)
+        if row["iata"] in timezone_states:
+            values["timezone"] = None
         merge_airport(
-            output, dict(row) | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
+            output, values | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
         )
+    timezone_counts = publish_timezones(source, output, replace_generated=refresh_timezones)
     carriers = [
         dict(row) | {"metadata_source_id": mapping.get(row["metadata_source_id"])}
         for row in source.execute("SELECT * FROM carriers")
@@ -314,6 +345,7 @@ def copy_catalog(source, output):
                 row["row_count"],
             ),
         )
+    return timezone_counts
 
 
 def publish_catalog(ingestion_db, serving_db):
@@ -329,10 +361,10 @@ def publish_catalog(ingestion_db, serving_db):
         with writer.connect() as output:
             output.execute("BEGIN IMMEDIATE")
             check_quota(serving_db)
-            copy_catalog(source, output)
+            timezones = copy_catalog(source, output)
             check_quota(serving_db, output)
             counts = {
                 table: output.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in ("airports", "carriers")
             }
-    return dict(published=True, **counts, flight_facts_changed=False)
+    return dict(published=True, **counts, timezones=timezones, flight_facts_changed=False)

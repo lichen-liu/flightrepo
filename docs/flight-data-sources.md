@@ -12,7 +12,8 @@ The implemented pipeline handles historical operated-flight observations:
 | --- | --- | --- |
 | Main historical itinerary and aircraft type | ADSB.lol daily archives | Best-effort observed/inferred legs, with retained bounds, uncertainty and observed type |
 | Automatic route verification signal | VRS CC0 standing data | Undated callsign/adjacent-airport association; route plausibility, not proof of historical operation |
-| Airport identity and names | OurAirports | IATA/ICAO names, geography, coordinates/elevation; timezone enrichment is tracked in [#21](https://github.com/lichen-liu/flightrepo/issues/21) |
+| Airport identity and names | OurAirports | IATA/ICAO names, geography, coordinates/elevation |
+| Airport IANA timezones | Timezone Boundary Builder via pinned timezonefinder 8.2.4 | Offline full-polygon lookup of retained coordinates; ODbL data, MIT lookup code; unresolved overlaps remain NULL |
 | Operator names | VRS airline/operator CSV | Undated ICAO-to-name reference; does not establish the historic or marketing carrier |
 | Requested timing reference | Flight.info | A date-valid historical timetable could support **scheduled** timing; tested current/upcoming pages do not supply 2023 actual timing |
 | Requested actual timing reference | Flightradar24 | Needs permitted access, retention rights and the exact historical instance; no free persistent automated path has been established |

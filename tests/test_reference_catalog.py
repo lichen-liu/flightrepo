@@ -60,7 +60,11 @@ def test_shared_catalog_backfill_publish_no_flight_mutation(store, tmp_path):
     reader = FlightReader(target)
     airport = reader.airports(query="CYYZ")[0]
     assert airport.name == "Toronto Pearson" and airport.municipality == "Toronto"
-    assert airport.country_code == "CA" and airport.timezone is None and airport.city_id is None
+    assert (
+        airport.country_code == "CA"
+        and airport.timezone == "America/Toronto"
+        and airport.city_id is None
+    )
     flight = reader.flight("adsblol", "one")
     assert flight.operator_name == "Air Canada" and flight.operator_icao == "ACA"
     assert flight.airline_iata is None and flight.flight_number is None
