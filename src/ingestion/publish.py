@@ -64,6 +64,25 @@ def admitted(record):
     return not record.blocked_for_search
 
 
+def checkpoint_publication_wal(path):
+    """Reclaim serving WAL only after this publisher's read attachments close.
+
+    A read-only connection closing last cannot perform SQLite's final cleanup.
+    A bounded TRUNCATE also makes external readers visible instead of allowing
+    an indefinitely growing journal to consume the database-family quota.
+    """
+    with FlightUpdater(path).connect() as connection:
+        connection.execute("PRAGMA busy_timeout=1000")
+        busy, frames, checkpointed = connection.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+        if busy or frames != checkpointed:
+            raise OSError(
+                "Serving WAL checkpoint blocked by an active reader or writer; "
+                "close long-running database transactions and retry; durable records retained"
+            )
+
+
 def publish_day(ingestion_db, serving_db, day, *, audit_routes=True):
     from ingestion import authority
 
@@ -81,6 +100,8 @@ def _publish_day(ingestion_db, serving_db, day, *, audit_routes):
     if ingestion_db == serving_db or (serving_db.exists() and ingestion_db.samefile(serving_db)):
         raise ValueError("Ingestion and serving databases must be different files")
     canonical = authority.selected(ingestion_db, serving_db)
+    if serving_db.exists():
+        checkpoint_publication_wal(serving_db)
     day = date.fromisoformat(day) if isinstance(day, str) else day
     reference_audit = None
     if audit_routes:
@@ -231,6 +252,7 @@ def _publish_day(ingestion_db, serving_db, day, *, audit_routes):
                 ),
             )
             check_quota(serving_db, output)
+    checkpoint_publication_wal(serving_db)
     if canonical:
         from ingestion.daily import serving_receipts
 

@@ -463,3 +463,14 @@ then parses its JSON; it never extracts tar member paths to disk. A complete
 trace must fit in available process memory. Corrupt gzip, malformed JSON and
 invalid member shapes still fail the day before its atomic commit. Database
 quotas and the raw-workspace budget remain separate limits.
+
+
+Serving publication reclaims its WAL before starting a publication and after its
+canonical read attachments close. This prevents a read-only connection closing
+last from retaining an ever-growing journal. Reclamation uses a SQLite TRUNCATE
+checkpoint with a one-second busy timeout; an active reader or writer pauses the
+producer with an actionable error. A committed serving receipt remains durable
+if reclamation is interrupted, and private copies are released only after the
+post-publication checkpoint succeeds. Retrying reuses the normal receipt and
+identity checks. The persisted DB+WAL+SHM quota is unchanged; do not remove WAL
+files manually. A leftover journal is reclaimed before the next quota gate.
