@@ -380,8 +380,11 @@ def test_busy_checkpoint_retains_committed_facts_and_retry_finishes(pipeline, mo
             raise OSError("Serving WAL checkpoint blocked by an active reader")
         return original(path)
 
-    # Binding creates the target before publication: the second call follows
-    # the serving commit and must precede private release/daily checkpoint.
+    # Complete the startup index migration before injecting a publication failure.
+    authority.bind(private, serving)
+    authority.ensure_window_index(private)
+    # The second publication checkpoint follows the serving commit and must
+    # precede private release/daily checkpoint.
     monkeypatch.setattr(publish, "checkpoint_publication_wal", blocked_after_commit)
     with pytest.raises(OSError, match="checkpoint blocked"):
         daily_run(pipeline)

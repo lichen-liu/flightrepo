@@ -136,6 +136,15 @@ the serving database. A daily rerun stages and reverifies canonical windows when
 their input, references or fingerprint changed. Bound pipeline history cannot be
 cleared/reset independently of the authoritative store.
 
+Canonical daily windows use an index on the current flight's publication-time
+expression. A startup migration creates it under the producer/publication locks
+and the existing serving quota, then reclaims the index build's WAL. Selection
+uses current flight dates rather than the cached membership departure date, so a
+manual date correction remains visible in its new window. Fingerprints read the
+same ordered identities, records and airport/edit metadata in bounded batches;
+the digest format, private-over-serving precedence and validation checks stay the
+same. No input day begins before the preceding day's verified publication.
+
 For an existing run, use a controlled cutover:
 
 1. Finish/stop the producer and confirm its job/extraction locks are released.

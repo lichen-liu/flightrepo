@@ -147,6 +147,8 @@ def daily_range(
         if serving_authoritative:
             authority.bind(path, serving)
         canonical = authority.selected(path, serving)
+        if canonical:
+            authority.ensure_window_index(path)
         if serving.exists():
             with SQLiteConnection(serving, read_only=True).connect() as c:
                 require_serving(c)
