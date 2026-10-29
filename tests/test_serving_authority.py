@@ -340,3 +340,127 @@ def test_hydration_and_release_respect_active_job_lease(pipeline):
             authority.hydrate_window(private, DAY, DAY)
         with pytest.raises(ValueError, match="active ingestion"):
             authority.release_window(private, serving, DAY, DAY, proofs)
+
+
+def test_publication_reclaims_wal_between_authoritative_days(pipeline, monkeypatch):
+    from ingestion import publish
+
+    private, serving, _ = pipeline
+    original = publish.publish_day
+    sizes = []
+
+    def observed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        wal = serving.with_name(serving.name + "-wal")
+        sizes.append(wal.stat().st_size if wal.exists() else 0)
+        return result
+
+    monkeypatch.setattr(publish, "publish_day", observed)
+    results = daily_run(pipeline, end=DAY + timedelta(days=7))
+    assert len(results) == 8
+    assert len(sizes) == 15
+    assert not any(sizes)
+    assert rows(serving, "flight_legs") == 8
+    assert rows(serving, "publication_runs") == 15
+    assert rows(private, "ingestion_fact_history") == 8
+    assert rows(private, "flight_legs") == 0
+
+
+def test_busy_checkpoint_retains_committed_facts_and_retry_finishes(pipeline, monkeypatch):
+    from ingestion import publish
+
+    private, serving, _ = pipeline
+    original = publish.checkpoint_publication_wal
+    calls = 0
+
+    def blocked_after_commit(path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("Serving WAL checkpoint blocked by an active reader")
+        return original(path)
+
+    # Complete the startup index migration before injecting a publication failure.
+    authority.bind(private, serving)
+    authority.ensure_window_index(private)
+    # The second publication checkpoint follows the serving commit and must
+    # precede private release/daily checkpoint.
+    monkeypatch.setattr(publish, "checkpoint_publication_wal", blocked_after_commit)
+    with pytest.raises(OSError, match="checkpoint blocked"):
+        daily_run(pipeline)
+    assert rows(serving, "flight_legs") == 1
+    assert rows(serving, "publication_runs") == 1
+    assert rows(private, "flight_legs") == 1
+    assert rows(private, "extraction_days") == 1
+    with SQLiteConnection(private, read_only=True).connect() as c:
+        assert (
+            c.execute(
+                "SELECT count(*) FROM ingestion_documents WHERE kind='validation' "
+                "AND source_record_key LIKE 'daily-verified-publication-v1:%'"
+            ).fetchone()[0]
+            == 0
+        )
+    monkeypatch.setattr(publish, "checkpoint_publication_wal", original)
+    assert daily_run(pipeline)[0]["released_private_copies"] == 1
+    assert rows(serving, "flight_legs") == 1
+    assert rows(private, "flight_legs") == 0
+
+
+def test_checkpoint_reports_real_reader_and_reclaims_after_it_closes(tmp_path):
+    from ingestion.publish import checkpoint_publication_wal
+
+    serving = tmp_path / "serving.db"
+    FlightUpdater(serving).initialize()
+    reader = sqlite3.connect(serving.as_uri() + "?mode=ro", uri=True)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM flight_legs").fetchone()
+    with SQLiteConnection(serving).connect() as c:
+        c.execute("CREATE TABLE wal_probe(value INTEGER)")
+        c.execute("INSERT INTO wal_probe VALUES(1)")
+    second = sqlite3.connect(serving.as_uri() + "?mode=ro", uri=True)
+    second.execute("BEGIN")
+    second.execute("SELECT value FROM wal_probe").fetchone()
+    reader.close()
+    try:
+        with SQLiteConnection(serving).connect() as c:
+            c.execute("UPDATE wal_probe SET value=2")
+        with pytest.raises(OSError, match="active reader or writer"):
+            checkpoint_publication_wal(serving)
+        assert second.execute("SELECT value FROM wal_probe").fetchone()[0] == 1
+    finally:
+        second.close()
+    checkpoint_publication_wal(serving)
+    wal = serving.with_name(serving.name + "-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
+    with SQLiteConnection(serving, read_only=True).connect() as c:
+        assert c.execute("SELECT value FROM wal_probe").fetchone()[0] == 2
+        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_publication_reclaims_leftover_wal_before_quota_gate(pipeline):
+    from core.disk_quota import database_bytes, set_quota
+
+    private, serving, _ = pipeline
+    daily_run(pipeline)
+    limit = serving.stat().st_size + 3 * 1024**2
+    reader = sqlite3.connect(serving.as_uri() + "?mode=ro", uri=True)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM flight_legs").fetchone()
+    try:
+        with SQLiteConnection(serving).connect() as c:
+            c.execute("CREATE TABLE wal_probe(payload BLOB)")
+            c.execute("INSERT INTO wal_probe VALUES(zeroblob(1048576))")
+        set_quota(serving, limit)
+        for _ in range(5):
+            with SQLiteConnection(serving).connect() as c:
+                c.execute("UPDATE wal_probe SET payload=randomblob(1048576)")
+        assert database_bytes(serving) > limit
+    finally:
+        reader.close()
+    # A reader closing last leaves a large WAL. Publication must reclaim it
+    # before checking occupancy, without changing the persisted quota.
+    assert publish_day(private, serving, DAY, audit_routes=False)["retired"] == 0
+    assert database_bytes(serving) < limit
+    assert rows(serving, "flight_legs") == 1
+    with SQLiteConnection(serving, read_only=True).connect() as c:
+        assert c.execute("SELECT quota_bytes FROM database_policy").fetchone()[0] == limit

@@ -136,6 +136,15 @@ the serving database. A daily rerun stages and reverifies canonical windows when
 their input, references or fingerprint changed. Bound pipeline history cannot be
 cleared/reset independently of the authoritative store.
 
+Canonical daily windows use an index on the current flight's publication-time
+expression. A startup migration creates it under the producer/publication locks
+and the existing serving quota, then reclaims the index build's WAL. Selection
+uses current flight dates rather than the cached membership departure date, so a
+manual date correction remains visible in its new window. Fingerprints read the
+same ordered identities, records and airport/edit metadata in bounded batches;
+the digest format, private-over-serving precedence and validation checks stay the
+same. No input day begins before the preceding day's verified publication.
+
 For an existing run, use a controlled cutover:
 
 1. Finish/stop the producer and confirm its job/extraction locks are released.
@@ -266,6 +275,14 @@ their raw copies. Readers can access completed days throughout processing.
 | Invalid samples | Skip without advancing evidence or bridging gaps; log reason |
 | Emitter categories | Exclude `A7`, `B1`, `B2`, `B3`, `B4`, `B6`, `B7`, `C1`, `C2`, `C3` |
 | Review concerns | Airport estimate; gap over 30 minutes; retained callsign variation; timing requiring over 1,500 km/h even across the widest window |
+
+Endpoint lookup reuses at most 1,024 coarse-cell candidate lists per fixed
+airport catalog. Every observation still uses its original coordinates and the
+current radius, heading and ambiguity rules. A conservative latitude-separation
+bound skips only airports necessarily outside the radius; a roughly one-centimeter
+numerical guard leaves boundary cases to the original exact distance calculation.
+Candidate lists are discarded with the lookup and rebuilt for a different catalog.
+This changes neither extraction policy nor flight identities or resume receipts.
 
 Review concerns retain candidates. All four known categories are searchable with
 accuracy warnings; unknown reasons and unusable/cancelled/deleted facts remain
@@ -455,3 +472,22 @@ stores normalized evidence keyed by `(source,kind,key)`, with URL/licence, valid
 content hash and revision. Payloads are limited to 64 KiB; no raw trace blobs.
 Documents never become flight facts without a validated adapter/publication policy.
 No public ingestion HTTP endpoint is exposed.
+
+
+ADSB aircraft traces have no fixed compressed or decompressed byte-size cap.
+The archive reader opens one aircraft member at a time directly through gzip,
+then parses its JSON; it never extracts tar member paths to disk. A complete
+trace must fit in available process memory. Corrupt gzip, malformed JSON and
+invalid member shapes still fail the day before its atomic commit. Database
+quotas and the raw-workspace budget remain separate limits.
+
+
+Serving publication reclaims its WAL before starting a publication and after its
+canonical read attachments close. This prevents a read-only connection closing
+last from retaining an ever-growing journal. Reclamation uses a SQLite TRUNCATE
+checkpoint with a one-second busy timeout; an active reader or writer pauses the
+producer with an actionable error. A committed serving receipt remains durable
+if reclamation is interrupted, and private copies are released only after the
+post-publication checkpoint succeeds. Retrying reuses the normal receipt and
+identity checks. The persisted DB+WAL+SHM quota is unchanged; do not remove WAL
+files manually. A leftover journal is reclaimed before the next quota gate.

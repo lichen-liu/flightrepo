@@ -246,6 +246,40 @@ def hydrate_key(c, provider, key):
         )
 
 
+def ensure_window_index(path):
+    """Index current canonical dates, including flights moved by manual edits.
+
+    Membership departure dates describe the last publication; they cannot safely
+    select current serving facts. The expression matches the existing private
+    publication index and does not alter records or publication receipts.
+    """
+    from ingestion.publish import PARTITION_TIME_SQL, checkpoint_publication_wal
+
+    config = selected(path)
+    if config is None:
+        return
+    serving = Path(config["serving_path"])
+    with job_lock(path, blocking=False) as acquired:
+        if not acquired:
+            raise ValueError("Stop the active ingestion job before indexing serving facts")
+        with file_mutex(Path(str(serving) + ".publish.lock")):
+            with SQLiteConnection(serving, read_only=True).connect() as c:
+                if c.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type='index' AND name='publication_fact_time'"
+                ).fetchone():
+                    return
+            checkpoint_publication_wal(serving)
+            with FlightUpdater(serving).connect() as c:
+                c.execute("BEGIN IMMEDIATE")
+                validate_target(c, config)
+                check_quota(serving, c)
+                c.execute(
+                    f"CREATE INDEX IF NOT EXISTS publication_fact_time ON flight_legs ({PARTITION_TIME_SQL})"
+                )
+                check_quota(serving, c)
+            checkpoint_publication_wal(serving)
+
+
 def hydrate_window(path, start, end):
     """Stage a bounded canonical partition for the existing audit/VRS machinery."""
     from ingestion.publish import PARTITION_TIME_SQL
@@ -265,7 +299,7 @@ def hydrate_window(path, start, end):
                 copy_source(row, c)
             copy_catalog(source, c, refresh_timezones=False)
         keys = c.execute(
-            f"SELECT s.code,f.source_record_key FROM canonical.flight_legs f JOIN canonical.data_sources s ON s.id=f.source_id JOIN canonical.publication_membership m ON m.source_code=s.code AND m.source_record_key=f.source_record_key WHERE m.store_id=? AND ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<?",
+            f"SELECT s.code,f.source_record_key FROM canonical.flight_legs f CROSS JOIN canonical.data_sources s ON s.id=f.source_id CROSS JOIN canonical.publication_membership m ON m.source_code=s.code AND m.source_record_key=f.source_record_key WHERE m.store_id=? AND ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<?",
             (config["store_id"], lower, upper),
         ).fetchall()
         for provider, key in keys:
@@ -347,8 +381,8 @@ def fingerprint_rows(c, lower, upper):
         WHERE ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<?
         UNION
         SELECT s.code,f.source_record_key FROM canonical.flight_legs f
-        JOIN canonical.data_sources s ON s.id=f.source_id
-        JOIN canonical.publication_membership m ON m.source_code=s.code AND m.source_record_key=f.source_record_key
+        CROSS JOIN canonical.data_sources s ON s.id=f.source_id
+        CROSS JOIN canonical.publication_membership m ON m.source_code=s.code AND m.source_record_key=f.source_record_key
         WHERE m.store_id=? AND ({PARTITION_TIME_SQL})>=? AND ({PARTITION_TIME_SQL})<?
         AND NOT EXISTS(SELECT 1 FROM flight_legs p JOIN data_sources ps ON ps.id=p.source_id WHERE ps.code=s.code AND p.source_record_key=f.source_record_key)
         AND NOT EXISTS(SELECT 1 FROM flight_tombstones t JOIN data_sources ts ON ts.id=t.source_id WHERE ts.code=s.code AND t.source_record_key=f.source_record_key)
@@ -356,20 +390,55 @@ def fingerprint_rows(c, lower, upper):
     """,
         (lower, upper, config["store_id"], lower, upper),
     )
-    for provider, key in rows:
-        row = c.execute(
-            "SELECT * FROM flights WHERE provider=? AND provider_id=?", (provider, key)
-        ).fetchone()
-        schema = "" if row is not None else "canonical."
-        if row is None:
-            row = c.execute(
-                "SELECT * FROM canonical.flights WHERE provider=? AND provider_id=?",
-                (provider, key),
-            ).fetchone()
-        if row is None:
-            continue
-        metadata = c.execute(
-            f"SELECT f.locally_modified_us,a.latitude,a.longitude,b.latitude,b.longitude FROM {schema}flight_legs f JOIN {schema}data_sources s ON s.id=f.source_id JOIN {schema}airports a ON a.iata=f.origin_iata JOIN {schema}airports b ON b.iata=f.destination_iata WHERE s.code=? AND f.source_record_key=?",
-            (provider, key),
-        ).fetchone()
-        yield [flight_record(row).model_dump(mode="json"), tuple(metadata)]
+    # Preserve the original sorted identity stream and private-over-serving
+    # fallback, but fetch records and reference metadata in bounded batches.
+    # Two parameters per key stay below SQLite's legacy 999-variable limit.
+    while batch := rows.fetchmany(256):
+        keys = [tuple(row) for row in batch]
+        private = _fingerprint_records(c, keys, "")
+        missing = [key for key in keys if key not in private]
+        canonical = _fingerprint_records(c, missing, "canonical.") if missing else {}
+        for key in keys:
+            value = private.get(key, canonical.get(key))
+            if value is not None:
+                yield value
+
+
+def _fingerprint_records(c, keys, schema):
+    placeholders = ",".join("(?,?)" for _ in keys)
+    rows = c.execute(
+        f"""WITH requested(provider,record_key) AS (VALUES {placeholders})
+        SELECT f.*,leg.locally_modified_us AS _local_edit,
+            a.latitude AS _origin_lat,a.longitude AS _origin_lon,
+            b.latitude AS _destination_lat,b.longitude AS _destination_lon,
+            a.iata AS _origin_reference,b.iata AS _destination_reference
+        FROM requested k
+        CROSS JOIN {schema}data_sources s ON s.code=k.provider
+        CROSS JOIN {schema}flight_legs leg
+            ON leg.source_id=s.id AND leg.source_record_key=k.record_key
+        CROSS JOIN {schema}flights f
+            ON f.provider=k.provider AND f.provider_id=k.record_key
+        LEFT JOIN {schema}airports a ON a.iata=leg.origin_iata
+        LEFT JOIN {schema}airports b ON b.iata=leg.destination_iata""",
+        [value for key in keys for value in key],
+    )
+    result = {}
+    for row in rows:
+        data = dict(row)
+        if data.pop("_origin_reference") is None or data.pop("_destination_reference") is None:
+            raise ValueError("Fingerprint record has a missing airport reference")
+        metadata = tuple(
+            data.pop(name)
+            for name in (
+                "_local_edit",
+                "_origin_lat",
+                "_origin_lon",
+                "_destination_lat",
+                "_destination_lon",
+            )
+        )
+        result[(data["provider"], data["provider_id"])] = [
+            flight_record(data).model_dump(mode="json"),
+            metadata,
+        ]
+    return result
