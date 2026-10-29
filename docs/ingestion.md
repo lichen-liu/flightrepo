@@ -276,6 +276,14 @@ their raw copies. Readers can access completed days throughout processing.
 | Emitter categories | Exclude `A7`, `B1`, `B2`, `B3`, `B4`, `B6`, `B7`, `C1`, `C2`, `C3` |
 | Review concerns | Airport estimate; gap over 30 minutes; retained callsign variation; timing requiring over 1,500 km/h even across the widest window |
 
+Endpoint lookup reuses at most 1,024 coarse-cell candidate lists per fixed
+airport catalog. Every observation still uses its original coordinates and the
+current radius, heading and ambiguity rules. A conservative latitude-separation
+bound skips only airports necessarily outside the radius; a roughly one-centimeter
+numerical guard leaves boundary cases to the original exact distance calculation.
+Candidate lists are discarded with the lookup and rebuilt for a different catalog.
+This changes neither extraction policy nor flight identities or resume receipts.
+
 Review concerns retain candidates. All four known categories are searchable with
 accuracy warnings; unknown reasons and unusable/cancelled/deleted facts remain
 excluded. This does not certify commercial service: relaxed rules also retain

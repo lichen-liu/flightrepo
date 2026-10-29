@@ -4,6 +4,7 @@ import math
 import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache, partial
 
 from pydantic import BaseModel, Field
 
@@ -206,6 +207,17 @@ def advance_boundary(hex_id, previous, leading, tail, rules, *, diagnostics=None
     return None, merged if tail is not None else None
 
 
+def _bucket_candidates(buckets, south, north, west, east):
+    """Gather the same coarse cells once; exact geometry remains per observation."""
+    longitudes = {(longitude + 180) % 360 - 180 for longitude in range(west, east + 1)}
+    return tuple(
+        point
+        for latitude in range(south, north + 1)
+        for longitude in longitudes
+        for point in buckets.get((latitude, longitude), ())
+    )
+
+
 class AirportLookup:
     """Coarse in-memory buckets keep endpoint matching independent of airport count."""
 
@@ -217,6 +229,10 @@ class AirportLookup:
         for point in airports:
             _, lat, lon = point[:3]
             self.buckets[math.floor(lat), math.floor((lon + 180) % 360 - 180)].append(point)
+        # The extraction catalog is fixed for this lookup's lifetime. Cache only
+        # integer-cell candidate lists, never final matches or rounded positions.
+        # Capturing the bucket mapping rather than self avoids a reference cycle.
+        self._candidate_points = lru_cache(maxsize=1024)(partial(_bucket_candidates, self.buckets))
 
     def match_result(
         self,
@@ -238,19 +254,20 @@ class AirportLookup:
             if abs(lat) + lat_margin >= 90
             else math.degrees(math.asin(min(1, math.sin(angular) / cosine)))
         )
-        candidates = []
-        for latitude in range(math.floor(lat - lat_margin), math.floor(lat + lat_margin) + 1):
-            longitudes = {
-                (longitude + 180) % 360 - 180
-                for longitude in range(
-                    math.floor(lon - lon_margin), math.floor(lon + lon_margin) + 1
-                )
-            }
-            for longitude in longitudes:
-                candidates.extend(self.buckets.get((latitude, longitude), ()))
+        candidates = self._candidate_points(
+            math.floor(lat - lat_margin),
+            math.floor(lat + lat_margin),
+            math.floor(lon - lon_margin),
+            math.floor(lon + lon_margin),
+        )
         matches = {}
         for point in candidates:
             code, airport_lat, airport_lon = point[:3]
+            # Great-circle distance cannot be smaller than latitude separation.
+            # A conservative ~1 cm pad keeps numerical boundary cases in the
+            # exact calculation; acceptance still uses the original distance.
+            if abs(airport_lat - lat) > lat_margin + 1e-7:
+                continue
             distance = distance_km(lat, lon, airport_lat, airport_lon)
             if track is not None and distance > heading_ignore_radius_km:
                 # An airborne endpoint should lie along the observed approach or
