@@ -80,6 +80,10 @@ This retains the runtime, token and hosted database. It does not remove the
 Cloudflare tunnel or DNS route. To replace the token, stop first, run `tunnel`,
 then start again. Update the app using the [installation instructions](../installation/README.md).
 
+Stop verifies that both launchd jobs have disappeared before reporting success.
+It allows up to 20 seconds after the unload requests for shutdown to finish. If
+confirmation fails, deployment stops before installation begins.
+
 The scripts do not configure Cloudflare resources, change DNS or install paid
 add-ons. Use the standard named HTTP tunnel and review the account's plan in the
 dashboard. If port 8014 is occupied, the controller refuses to start; it does not

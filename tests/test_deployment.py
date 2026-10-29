@@ -681,6 +681,74 @@ def test_stop_attempts_both_jobs_even_if_tunnel_cannot_unload(scripts, monkeypat
     assert len(calls) == 2 and state == {"tunnel"}
 
 
+def delayed_shutdown(scripts, monkeypatch, *, never_finishes=False):
+    clock, requested = [0.0], []
+    exits = {"tunnel": 0.2, "server": 0.4}
+
+    def loaded(job):
+        return job not in requested or never_finishes or clock[0] < exits[job]
+
+    def launch(*args):
+        assert args[0] == "bootout"
+        requested.append(next(job for job in exits if args[1].endswith("." + job)))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(scripts.manage, "loaded", loaded)
+    monkeypatch.setattr(scripts.manage, "launchctl", launch)
+    monkeypatch.setattr(scripts.manage.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        scripts.manage.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    return clock, requested
+
+
+def test_stop_waits_for_successful_bootouts_to_disappear(scripts, monkeypatch, capsys):
+    clock, requested = delayed_shutdown(scripts, monkeypatch)
+    scripts.manage.stop()
+    assert requested == ["tunnel", "server"]
+    assert clock[0] >= 0.4
+    assert not any(scripts.manage.loaded(job) for job in scripts.manage.LABELS)
+    assert "Stopped. Both jobs are unloaded" in capsys.readouterr().out
+
+
+def test_stop_times_out_without_claiming_success(scripts, monkeypatch, capsys):
+    clock, requested = delayed_shutdown(scripts, monkeypatch, never_finishes=True)
+    with pytest.raises(RuntimeError, match="Could not unload:.*tunnel.*server"):
+        scripts.manage.stop()
+    assert requested == ["tunnel", "server"]
+    assert 20 <= clock[0] <= 20.01
+    assert "Stopped." not in capsys.readouterr().out
+
+
+def test_deploy_waits_for_unload_before_installing(tmp_path, scripts, monkeypatch):
+    clock, requested = delayed_shutdown(scripts, monkeypatch)
+    spec = importlib.util.spec_from_file_location(
+        "flyji_delayed_stop", REPO / "deployment/deploy.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    stages = []
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "start", lambda *args, **kwargs: stages.append("start"))
+    monkeypatch.setattr(module, "check", lambda *args: stages.append("check"))
+
+    def install(*args):
+        # Reproduce the real installer's guard immediately after stop returns.
+        if any(scripts.manage.loaded(job) for job in scripts.manage.LABELS):
+            raise ValueError("Stop Flyji before installing or updating it.")
+        stages.append("install")
+
+    installer_spec = SimpleNamespace(
+        loader=SimpleNamespace(exec_module=lambda target: setattr(target, "install", install))
+    )
+    monkeypatch.setattr(module.importlib.util, "spec_from_file_location", lambda *a: installer_spec)
+    monkeypatch.setattr(module.importlib.util, "module_from_spec", lambda spec: SimpleNamespace())
+    module.deploy(tmp_path / "runtime")
+    assert requested == ["tunnel", "server"]
+    assert clock[0] >= 0.4
+    assert stages == ["install", "start", "check"]
+
+
 class Response(io.BytesIO):
     status = 200
 
