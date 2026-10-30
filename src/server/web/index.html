@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#070e18" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f5f8f7" />
     <meta name="application-name" content="Flyji · boboji.fyi" />
     <meta
       name="description"
@@ -12,30 +12,16 @@
     />
     <title>Flyji · boboji.fyi</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/assets/fonts/manrope-variable.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/vendor/d3-7.9.0.min.js" defer></script>
     <script type="module" src="/assets/app.mjs"></script>
   </head>
   <body>
     <a class="skip" href="#results">Skip to flight options</a>
-    <aside class="status-banner" aria-label="boboji.fyi tools">
-      <span>BOBOJI / FLIGHT EXPLORER</span>
-      <a
-        class="boboji-lockup"
-        href="https://boboji.fyi/"
-        aria-label="boboji.fyi home"
-        ><b aria-hidden="true">b/</b><span>boboji.fyi</span></a
-      >
-    </aside>
     <header class="site-header">
-      <a href="/" class="brand" aria-label="Flyji home"
-        ><span class="brand-mark" aria-hidden="true">b/</span
-        ><span>FLYJI</span></a
-      >
-      <nav class="header-actions" aria-label="Flyji tools">
-        <button id="copy-search" type="button">Copy search link</button
-        ><a href="/docs">API</a>
-      </nav>
+      <a href="/" class="brand" aria-label="Flyji home"><span class="brand-mark" aria-hidden="true">f↗</span>flyji<span class="brand-caption">/ route explorer</span></a>
+      <nav class="header-actions" aria-label="Flyji tools"><span class="header-note">Routes, schedules &amp; connections</span><button id="copy-search" type="button">Share search <span aria-hidden="true">↗</span></button></nav>
     </header>
     <section
       id="request-progress"
@@ -53,12 +39,9 @@
       <p id="request-detail">Waiting for a response.</p>
     </section>
     <main>
+      <div class="intro-row"><div><p class="eyebrow">THE WAY THERE MATTERS</p><h1 id="page-title">Find a better way there.</h1></div><p>Explore the routes.<br>Make the connections yours.</p></div>
       <div class="explore-hero">
         <section class="search-section" aria-labelledby="page-title">
-          <div class="heading-row">
-            <span class="tag">ROUTE PLANNER</span>
-            <h1 id="page-title">Find a flight.</h1>
-          </div>
           <form id="search-form">
             <div class="search-grid">
               <div class="airport-field">
@@ -107,27 +90,22 @@
                   required
               /></label>
               <button id="search-button" class="primary" type="submit" disabled>
-                Search flights
+                Search flights <span aria-hidden="true">↗</span>
               </button>
             </div>
-            <div id="date-recovery" hidden>
-              <p id="date-recovery-message" class="small" role="status"></p>
-              <button id="use-utc-dates" type="button">Use UTC dates</button>
-            </div>
-            <p id="date-clock-notice" class="small" role="status" hidden></p>
-            <p id="coverage-warning" class="small" role="status" hidden></p>
-            <button id="retry-dates" type="button" hidden>
-              Retry departure dates
-            </button>
-            <details class="coverage-details">
-              <summary>Airport availability details</summary>
-              <p id="coverage-scope" class="small muted" hidden></p>
-              <p id="date-availability" class="small" role="status">
-                Choose airports to see available dates.
-              </p>
-              <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
-            </details>
-            <div class="route-filter">
+<div class="search-policy"><div class="connection-policy"><label
+                  >Connection limit<input aria-label="Maximum connection (days)"
+                    name="maximum-days"
+                    type="number"
+                    min="0"
+                    step="any"
+                    value="7"
+                    placeholder="No limit"
+                    aria-describedby="maximum-connection-hint" title="Maximum wait per connection, in days. Clear for no limit."
+                  /><span id="maximum-connection-hint" class="small muted"
+                    >days</span
+                  ></label></div>
+<details id="search-details"><summary>More options <span aria-hidden="true">＋</span></summary><div class="search-options-panel"><div class="options-intro"><strong>Shape your route</strong><span>A few preferences for the way there.</span></div>              <div class="filter-grid">            <div class="route-filter">
               <label
                 >Via airports (optional)<span class="airport-list-input"
                   ><input
@@ -160,8 +138,42 @@
                 spaces.</span
               >
             </div>
-            <datalist id="airport-suggestions"></datalist>
-            <div class="clock-row">
+
+                <label
+                  >Last departure date<input name="last-date" type="date"
+                /></label>
+                <label>Arrival window (days after last departure)<input name="onward-days" type="number" min="0" placeholder="All available data" /></label>
+                <label
+                  >Maximum stops<select name="stops">
+                    <option value="any" selected>Any number</option>
+                    <option value="0">Nonstop</option>
+                    <option value="1">1 stop</option>
+                    <option value="2">2 stops</option>
+                    <option value="3">3 stops</option>
+                  </select></label
+                >
+
+                <label
+                  >Minimum connection (minutes)<input
+                    name="minimum"
+                    type="number"
+                    min="0"
+                    value="45"
+                    required
+                /></label>
+
+                <label
+                  >Avoid airports<input
+                    name="avoid"
+                    placeholder="e.g. LHR, AMS"
+                    autocomplete="off"
+                /></label>
+                <label class="check"
+                  ><input type="checkbox" name="airport-change" />Allow
+                  connections between airports in the same city</label
+                >
+              </div>
+<div class="preference-actions"><button id="apply-preferences" class="primary" type="submit" disabled>Apply &amp; search <span aria-hidden="true">↗</span></button></div><details id="data-time-settings"><summary>Data &amp; time settings</summary>            <div class="clock-row">
               <span id="date-zones">Dates use airport local time.</span
               ><label class="inline-label"
                 >Input clock<select name="input-clock">
@@ -177,78 +189,73 @@
                 <option value="actual">Reported actual times</option>
               </select></label
             >
-            <details id="search-details">
-              <summary>Search filters</summary>
-              <div class="filter-grid">
-                <label
-                  >Last departure date<input name="last-date" type="date"
-                /></label>
-                <label>Arrival window (days after last departure)<input name="onward-days" type="number" min="0" placeholder="All available data" /></label>
-                <label
-                  >Maximum stops<select name="stops">
-                    <option value="any" selected>Any number</option>
-                    <option value="0">Nonstop</option>
-                    <option value="1">1 stop</option>
-                    <option value="2">2 stops</option>
-                    <option value="3">3 stops</option>
-                  </select></label
-                >
-                <label
-                  >Sort by<select name="ranking">
+            <details class="coverage-details">
+              <summary>Airport availability details</summary>
+              <p id="coverage-scope" class="small muted" hidden></p>
+              <p id="date-availability" class="small" role="status">
+                Choose airports to see available dates.
+              </p>
+              <p id="dataset-tag" class="tag">Loading dataset statistics…</p>
+            </details>
+</details></div></details><span id="active-filters" class="active-filters"></span><span id="filter-summary">Connections up to 7 days</span></div>
+<datalist id="airport-suggestions"></datalist>            <div id="date-recovery" hidden>
+              <p id="date-recovery-message" class="small" role="status"></p>
+              <button id="use-utc-dates" type="button">Use UTC dates</button>
+            </div>
+            <p id="date-clock-notice" class="small" role="status" hidden></p>
+            <p id="coverage-warning" class="small" role="status" hidden></p>
+            <button id="retry-dates" type="button" hidden>
+              Retry departure dates
+            </button>
+</form>          <p id="status" class="status" role="status" aria-live="polite">
+            Choose your airports and a departure date to find flights.
+          </p>
+          <p id="draft-notice" class="draft-notice" role="status" hidden>Search settings changed. These journeys still reflect your previous search.</p>
+          <p id="error" class="error" role="alert" hidden></p>
+          <button id="retry-catalog" type="button" hidden>
+            Retry data connection
+          </button>
+</section></div>      <nav class="mobile-views" aria-label="Workspace view">
+        <button data-view="options" type="button" aria-pressed="true">
+          Options</button
+        ><button data-view="journey" type="button" aria-pressed="false" disabled>
+          Journey</button
+        ><button data-view="map" type="button" aria-pressed="false">Map</button>
+      </nav>
+<div class="workspace empty-results" data-view="options">        <section
+          class="options-panel"
+          id="results"
+          aria-labelledby="options-heading"
+          aria-busy="false"
+        >
+          <div class="panel-heading">
+            <h2 id="options-heading">Ways to get there</h2>
+            <span id="result-count"></span></div><div class="results-sort"><label
+                  >Sort<select name="ranking" form="search-form">
                     <option value="fewest_legs">Fewest stops</option>
                     <option value="shortest_elapsed">Shortest journey</option>
                     <option value="earliest_arrival">Earliest arrival</option>
                   </select></label
                 >
-                <label
-                  >Minimum connection (minutes)<input
-                    name="minimum"
-                    type="number"
-                    min="0"
-                    value="45"
-                    required
-                /></label>
-                <label
-                  >Maximum connection<select name="maximum">
-                    <option value="180">3 hours</option>
-                    <option value="360">6 hours</option>
-                    <option value="720">12 hours</option>
-                    <option value="1440">24 hours</option>
-                    <option value="any" selected>Any time in the search window</option>
-                  </select></label
-                >
-                <label
-                  >Avoid airports<input
-                    name="avoid"
-                    placeholder="e.g. LHR, AMS"
-                    autocomplete="off"
-                /></label>
-                <label class="check"
-                  ><input type="checkbox" name="airport-change" />Allow
-                  connections between airports in the same city</label
-                >
-              </div>
-            </details>
-          </form>
-          <p id="status" class="status" role="status" aria-live="polite">
-            Choose your airports and a departure date to find flights.
+          </div>
+          <p id="applied-query" class="muted small">
+            Search the loaded flight records.
           </p>
-          <p id="error" class="error" role="alert" hidden></p>
-          <button id="retry-catalog" type="button" hidden>
-            Retry data connection
-          </button>
+          <p id="partial" class="notice" hidden></p>
+          <p id="search-time" class="muted small" hidden></p>
+          <div class="duration-legend" aria-label="Journey duration legend">
+            <span>In the air</span><span>Between flights</span><small>Same time scale</small>
+          </div>
+          <div id="options">
+            <p class="empty">
+              Choose airports and departure dates to find a route.
+            </p>
+          </div>
+          <button id="more-routes" type="button" hidden>Show more journeys</button>
         </section>
-
-        <section class="map-panel" aria-labelledby="map-heading">
+        <div class="journey-workspace">        <section class="map-panel" aria-labelledby="map-heading">
           <div class="panel-heading">
-            <h2 id="map-heading">Route map</h2>
-            <div class="segmented" aria-label="Map projection">
-              <button id="globe-mode" type="button" aria-pressed="true">
-                Globe</button
-              ><button id="flat-mode" type="button" aria-pressed="false">
-                Map
-              </button>
-            </div>
+            <h2 id="map-heading" tabindex="-1">Selected route</h2><div class="map-view-switch" aria-label="Map view"><button id="route-mode" type="button" aria-pressed="true">Route</button><button id="globe-mode" type="button" aria-pressed="false">Earth</button></div>
           </div>
           <div class="map-overview">
             <div id="map-route-title" class="map-route-title">Your route</div>
@@ -269,7 +276,12 @@
               ><span>Results will appear here.</span>
             </div>
           </div>
-          <div class="map-toolbar">
+          <details class="map-toolbar"><summary>Map controls</summary>            <div class="segmented" aria-label="Map projection">
+              <button id="flat-mode" type="button" aria-pressed="false">
+                Map
+              </button>
+            </div>
+
             <span id="map-info" class="small muted"
               >Use the controls to rotate or zoom.</span
             >
@@ -300,77 +312,17 @@
               <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
               <button id="fit-map" type="button">Fit journey</button>
             </div>
-          </div>
+          </details>
           <p id="map-error" class="small error" role="status" hidden></p>
         </section>
-      </div>
 
-      <nav class="mobile-views" aria-label="Workspace view">
-        <button data-view="options" type="button" aria-pressed="true">
-          Options</button
-        ><button data-view="journey" type="button" aria-pressed="false">
-          Journey</button
-        ><button data-view="map" type="button" aria-pressed="false">Map</button>
-      </nav>
-      <div class="workspace" data-view="options">
-        <section
-          class="options-panel"
-          id="results"
-          aria-labelledby="options-heading"
-          aria-busy="false"
-        >
-          <div class="panel-heading">
-            <h2 id="options-heading">Flight options</h2>
-            <span id="result-count"></span>
-          </div>
-          <p id="applied-query" class="muted small">
-            Search the loaded flight records.
-          </p>
-          <p id="partial" class="notice" hidden></p>
-          <p id="search-time" class="muted small" hidden></p>
-          <div class="duration-legend" aria-label="Journey duration legend">
-            <span>Flight</span><span>Connection</span>
-          </div>
-          <div id="options">
-            <p class="empty">
-              Choose airports and departure dates to find a route.
-            </p>
-          </div>
-          <button id="more-routes" type="button" hidden>Show more journeys</button>
-        </section>
-        <div class="journey-workspace">
-          <section class="schedule-panel" aria-labelledby="schedule-heading">
-            <div class="panel-heading">
-              <h2 id="schedule-heading">Journey times</h2>
-              <label class="inline-label"
-                >Leg times<select id="display-clock">
-                  <option value="local">Airport local</option>
-                  <option value="UTC">UTC</option>
-                </select></label
-              >
-            </div>
-            <div id="timeline"></div>
-            <label class="cursor-label" for="time-cursor"
-              >Journey time <output id="cursor-time">—</output></label
-            >
-            <input
-              id="time-cursor"
-              type="range"
-              min="0"
-              max="1000"
-              value="0"
-              disabled
-            />
-            <p id="cursor-detail" class="small muted">
-              Map positions illustrate journey progress, not aircraft tracking.
-            </p>
-          </section>
+
           <section class="journey-panel" aria-labelledby="journey-heading">
             <div class="panel-heading">
-              <h2 id="journey-heading">Selected journey</h2>
+              <h2 id="journey-heading" tabindex="-1">The journey, step by step</h2>
               <div>
                 <button id="undo" type="button" disabled>Undo edit</button
-                ><button id="export" type="button" disabled>Export JSON</button>
+                ><details class="journey-tools"><summary>Journey tools</summary><button id="export" type="button" disabled>Export JSON</button></details>
               </div>
             </div>
             <p id="journey-status" class="small muted">
@@ -459,6 +411,32 @@
               <button id="more-next" type="button" hidden>Show more next flights</button>
             </section>
           </section>
+          <details class="schedule-panel"><summary id="schedule-heading">Journey timeline <span>Explore the trip in time</span></summary>
+            <div class="panel-heading">
+
+              <label class="inline-label"
+                >Leg times<select id="display-clock">
+                  <option value="local">Airport local</option>
+                  <option value="UTC">UTC</option>
+                </select></label
+              >
+            </div>
+            <div id="timeline"></div>
+            <label class="cursor-label" for="time-cursor"
+              >Journey time <output id="cursor-time">—</output></label
+            >
+            <input
+              id="time-cursor"
+              type="range"
+              min="0"
+              max="1000"
+              value="0"
+              disabled
+            />
+            <p id="cursor-detail" class="small muted">
+              Map positions illustrate journey progress, not aircraft tracking.
+            </p>
+          </details>
           <details id="dataset-info" class="evidence-panel">
             <summary>Data and search details</summary>
             <div id="dataset-content"></div>
@@ -473,7 +451,7 @@
           >Coverage and commercial transfer suitability are unverified</span
         >
         <a href="/data-sources">Data sources &amp; licences</a>
-      </footer>
+      <aside class="status-banner" aria-label="boboji.fyi tools"><a href="https://boboji.fyi/" aria-label="boboji.fyi home">A boboji.fyi tool ↗</a><a href="/docs">API documentation</a></aside></footer>
     </main>
     <noscript
       ><p>

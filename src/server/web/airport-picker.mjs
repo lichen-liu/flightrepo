@@ -129,7 +129,7 @@ export class AirportPicker {
   render() {
     this.list.innerHTML = this.options
       .map((a, index) =>
-        `<button type="button" tabindex="-1" role="option" id="${this.list.id}-${index}" data-airport="${e(a.iata)}" aria-selected="${index === this.active}"><strong>${e(a.iata)}</strong><span>${e(a.name || a.iata)}${a.municipality ? `<small>${e(a.municipality)}</small>` : ""}</span></button>`,
+        `<button type="button" tabindex="-1" role="option" id="${this.list.id}-${index}" data-airport="${e(a.iata)}" aria-label="${e([a.iata, a.name, a.municipality].filter(Boolean).join(" "))}" aria-selected="${index === this.active}"><strong>${e(a.iata)}</strong><span>${e(a.name || a.iata)}${a.municipality ? `<small>${e(a.municipality)}</small>` : ""}</span></button>`,
       )
       .join("");
     this.list.hidden = !this.options.length;

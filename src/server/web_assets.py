@@ -82,9 +82,16 @@ class WebAssets(StaticFiles):
             raise HTTPException(status_code=405)
         if not re.fullmatch(r"v-[a-f0-9]{16}", first):
             raise HTTPException(status_code=404)
-        await run_in_threadpool(self.release)
+        version = first.removeprefix("v-")
         with self._lock:
-            release = self._releases.get(first.removeprefix("v-"))
+            release = self._releases.get(version)
+        # A known content-addressed release is immutable. Page requests detect
+        # edits; avoid walking and stat-ing the asset tree for each dependency.
+        # A cold worker still needs to discover the release named by the page.
+        if release is None:
+            await run_in_threadpool(self.release)
+            with self._lock:
+                release = self._releases.get(version)
         if release is None or rest not in release.files:
             raise HTTPException(status_code=404)
         response = Response(

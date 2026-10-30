@@ -13,6 +13,7 @@ from core.config import get_settings
 from core.connections import Airport
 from core.models import RouteSummary
 from core.routing.models import (
+    DEFAULT_MAXIMUM_CONNECTION_MINUTES,
     IncompleteSearchError,
     RouteSearchRequest,
     RoutingError,
@@ -383,7 +384,7 @@ def itineraries(
     end: datetime,
     max_legs: Annotated[int | None, Query(ge=1)] = None,
     min_connection_minutes: Annotated[int, Query(ge=0)] = 45,
-    max_connection_minutes: Annotated[int | None, Query(ge=0)] = None,
+    max_connection_minutes: Annotated[int | None, Query(ge=0)] = DEFAULT_MAXIMUM_CONNECTION_MINUTES,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     horizon_end: datetime | None = None,

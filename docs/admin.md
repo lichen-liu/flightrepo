@@ -226,7 +226,10 @@ python -m admin --db var/flights.db search \
 ```
 
 Use `search --request FILE` for a full RouteSearchRequest JSON, including custom
-engine budgets. A request file cannot be mixed with search input flags. Add
+engine budgets. Searches default to a maximum of 7 days (10,080 minutes) per
+connection. Override it with `--max-connection MINUTES`, or set
+`maximum_connection_minutes` to `null` in a request file for unlimited waits.
+A request file cannot be mixed with search input flags. Add
 `--snapshot-out FILE` to any input mode to capture facts, request, and result.
 `--trace` adds developer diagnostic events when using flags; request files can
 also enable tracing. Guided search uses the engine defaults for tracing/budgets.

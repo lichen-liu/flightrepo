@@ -835,7 +835,10 @@ class FlightReader(SQLiteConnection):
             )
         by_code = {a.iata: a for a in airports}
         result = LocalRouteSearchResult(
-            **result.model_dump(),
+            # Already-validated records can be reused. Serializing here would
+            # recompute private evidence/quality for every repeated leg, then
+            # rebuild those same models before the public conversion.
+            **dict(result),
             departure_timezone=by_code[query.origin].timezone,
             arrival_timezone=(
                 by_code[query.destination].timezone if query.destination in by_code else None

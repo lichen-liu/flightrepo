@@ -3,10 +3,10 @@ import {
   departureTime,
   arrivalTime,
   flightLabel,
-  flightTimeLabel,
   ref,
   duration,
   stamp,
+  stampParts,
   localDate,
   localInput,
   addDate,
@@ -17,15 +17,17 @@ import {
   airportListSuggestions,
 } from "./format.mjs";
 import { RouteMap, drawTimeline } from "./map.mjs";
+import { renderJourneyLegs, renderCompactEndpoint, journeyElapsedLabel } from "./journey-detail.mjs";
+import { hasSearchDraft, rankedRequest, reconcileSortedSelection, readMapPreference, writeMapPreference } from "./workspace-state.mjs";
 import { RequestActivity } from "./activity.mjs";
 import {
-  routeChain,
   durationChart,
+  journeyTiming,
   journeyAirports,
 } from "./journey-visuals.mjs";
 import { AirportPicker } from "./airport-picker.mjs";
 import { DataCalendar } from "./calendar.mjs";
-import { qualityBadges, qualityDetails } from "./quality.mjs";
+import { qualityBadges } from "./quality.mjs";
 
 const $ = (id) => document.getElementById(id);
 const form = $("search-form"),
@@ -59,6 +61,7 @@ const state = {
   preview: null,
   cursor: null,
   queryValues: null,
+  replacingQuery: false,
 };
 const airportPickers = ["origin", "destination"].map((name) =>
   new AirportPicker(field(name), {
@@ -80,7 +83,7 @@ const zone = (code, source = state.selection) =>
     ? "UTC"
     : metadata(code, source)?.timezone || "UTC";
 const inputZone = (code, source = null) =>
-  field("input-clock").value === "UTC"
+  (state.queryValues?.["input-clock"] || field("input-clock").value) === "UTC"
     ? "UTC"
     : (source ? metadata(code, source) : state.airports.get(code))?.timezone ||
       "UTC";
@@ -128,6 +131,7 @@ function updateDatasetTag() {
     `${demo ? "Demo · " : ""}${timeBasisLabel(basis)} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} recommended for review` : ""}`;
 }
 function updateSearchButton() {
+  field("ranking").disabled = $("more-routes").disabled = !!searchLane.controller;
   $("search-button").disabled =
     !!searchLane.controller ||
     datesKey !== dateKey() ||
@@ -135,12 +139,13 @@ function updateSearchButton() {
     !availability?.inbound ||
     !availableDates.has(field("date").value) ||
     !availableDates.has(field("last-date").value || field("date").value);
+  $("apply-preferences").disabled = $("search-button").disabled;
 }
 function updateWorkspaceState(empty) {
   document.querySelector(".workspace").classList.toggle("empty-results", empty);
   for (const button of document.querySelectorAll("[data-view]"))
     if (button.tagName === "BUTTON")
-      button.disabled = empty && button.dataset.view !== "options";
+      button.disabled = empty && button.dataset.view === "journey";
   if (empty) setView("options");
 }
 function normalizeAirportInput(control) {
@@ -216,7 +221,7 @@ function updateViaSuggestions(open = false) {
   $("via-suggestions").innerHTML = viaOptions
     .map(
       ({ code, value }, index) =>
-        `<span role="option" id="via-option-${index}" data-via-option="${index}" data-value="${e(value)}" aria-selected="false"><strong>${e(code)}</strong><span>${e(state.airports.get(code).name || code)}</span></span>`,
+        `<span role="option" id="via-option-${index}" data-via-option="${index}" data-value="${e(value)}" aria-label="${e(code + " " + (state.airports.get(code).name || code))}" aria-selected="false"><strong>${e(code)}</strong><span>${e(state.airports.get(code).name || code)}</span></span>`,
     )
     .join("");
   if (open && document.activeElement === control && viaOptions.length) {
@@ -233,6 +238,10 @@ function chooseVia(index) {
   control.dispatchEvent(new Event("input", { bubbles: true }));
   hideViaSuggestions();
 }
+function maximumConnectionMinutes() {
+  const days = field("maximum-days").value;
+  return days === "" ? null : Math.round(Number(days) * 24 * 60);
+}
 function values() {
   return Object.fromEntries(
     [
@@ -245,7 +254,6 @@ function values() {
       "stops",
       "ranking",
       "minimum",
-      "maximum",
       "avoid",
       "input-clock",
       "time-basis",
@@ -263,11 +271,16 @@ function values() {
             : field(name).value,
       ])
       .concat([
+        ["maximum", String(maximumConnectionMinutes() ?? "any")],
         ["airport-change", field("airport-change").checked ? "1" : "0"],
       ]),
   );
 }
 function restore(values) {
+  // Shared links store minutes, including links from the former preset menu.
+  if (Object.hasOwn(values, "maximum"))
+    field("maximum-days").value =
+      values.maximum === "any" ? "" : Number(values.maximum) / (24 * 60);
   for (const [name, value] of Object.entries(values)) {
     const control = field(name);
     if (!control) continue;
@@ -285,6 +298,17 @@ function restore(values) {
 }
 function updateZones() {
   updateAirportNames();
+  updateDraftNotice();
+  const maximum = maximumConnectionMinutes();
+  $("filter-summary").textContent = maximum === null
+    ? "Any connection length"
+    : `Connections up to ${duration(maximum)}`;
+  $("active-filters").textContent = [
+    field("via").value.trim() ? `Via ${field("via").value.trim().toUpperCase()}` : "",
+    field("stops").value !== "any" ? `${field("stops").value} stops maximum` : "",
+    field("avoid").value.trim() ? `Avoid ${field("avoid").value.trim().toUpperCase()}` : "",
+    field("airport-change").checked ? "Airport changes allowed" : "",
+  ].filter(Boolean).join(" · ");
   const origin = airportCode(field("origin").value),
     local = field("input-clock").value === "local",
     clock = (code) =>
@@ -299,6 +323,9 @@ function updateZones() {
   if (missing && local)
     $("date-zones").textContent +=
       ` · timezone details not loaded for ${origin}; choose UTC or load airport data`;
+}
+function updateDraftNotice() {
+  $("draft-notice").hidden = !hasSearchDraft(values(), state.queryValues);
 }
 function updateLastDates() {
   const first = field("date").value;
@@ -417,7 +444,7 @@ async function loadDates() {
         $("date-availability").textContent +=
           ` No matching departure data on ${requestedDate}; selected ${field("date").value}.`;
       if (!state.result && !searchLane.controller) {
-        updateWorkspaceState(!result.dates.length);
+        updateWorkspaceState(true);
         $("options").innerHTML = result.dates.length
           ? '<p class="empty">Choose departure dates and search to find a route.</p>'
           : `<p class="empty">${e($("coverage-warning").textContent || $("date-availability").textContent)}</p>`;
@@ -438,6 +465,8 @@ async function loadDates() {
     (error) => {
       datesKey = null;
       $("date-availability").textContent = errorMessage(error);
+      $("coverage-warning").textContent = errorMessage(error);
+      $("coverage-warning").hidden = false;
       document.querySelector(".coverage-details").open = true;
       for (const name of ["origin", "destination"])
         $(`${name}-coverage`).textContent = "Flight counts unavailable.";
@@ -476,8 +505,7 @@ function commonQuery() {
       field("stops").value === "any" ? null : Number(field("stops").value) + 1,
     ranking: field("ranking").value,
     minimum_connection_minutes: Number(field("minimum").value),
-    maximum_connection_minutes:
-      field("maximum").value === "any" ? null : Number(field("maximum").value),
+    maximum_connection_minutes: maximumConnectionMinutes(),
     allow_airport_change: field("airport-change").checked,
     avoid_airports: field("avoid")
       .value.split(/[\s,]+/)
@@ -549,23 +577,31 @@ async function search(options) {
   try {
     request = searchRequest(options);
   } catch (error) {
+    $("search-details").open = false;
     showError("error", errorMessage(error));
     return;
   }
   const submitted = values();
+  $("search-details").open = false;
   field("via").value = submitted.via;
   updateAirportNames();
+  state.replacingQuery = true;
   closeEditor();
+  updateJourneyActions();
   showError("error", "");
   $("status").textContent = "Searching flights…";
   $("results").setAttribute("aria-busy", "true");
   $("map-loading").hidden = false;
   document.querySelector(".map-panel").setAttribute("aria-busy", "true");
   $("search-button").disabled = true;
+  $("apply-preferences").disabled = true;
+  field("ranking").disabled = true;
+  $("more-routes").disabled = true;
   await searchLane.run(
     request.url,
     request.body,
     (result) => {
+      closeEditor();
       state.result = result;
       state.searchRequest = request;
       state.history = [];
@@ -599,6 +635,9 @@ async function search(options) {
         : "Search failed. Adjust the input or retry.";
     },
     () => {
+      state.replacingQuery = false;
+      updateJourneyActions();
+      field("ranking").disabled = false;
       updateSearchButton();
       $("results").setAttribute("aria-busy", "false");
       $("map-loading").hidden = true;
@@ -606,11 +645,52 @@ async function search(options) {
     },
   );
 }
+async function sortRoutes() {
+  if (!state.result || !state.searchRequest) return;
+  const ranking = field("ranking").value,
+    oldRevision = state.result.data_revision,
+    request = rankedRequest(state.searchRequest, ranking, oldRevision),
+    submitted = { ...state.queryValues, ranking };
+  showError("error", "");
+  field("ranking").disabled = true;
+  $("search-button").disabled = $("apply-preferences").disabled = true;
+  $("more-routes").disabled = true;
+  $("results").setAttribute("aria-busy", "true");
+  $("status").textContent = "Reordering journeys…";
+  await searchLane.run(request.url, request.body, (result) => {
+    const next = reconcileSortedSelection(state.selection, oldRevision, result);
+    state.result = result;
+    state.searchRequest = request;
+    state.queryValues = submitted;
+    state.selection = next.selection;
+    if (!next.preserveHistory) state.history = [];
+    for (const airport of result.airports) state.airports.set(airport.iata, airport);
+    renderOptions();
+    renderJourney({ preserveView: next.preserveView });
+    updateZones();
+    const url = new URL(queryLink(submitted));
+    history.replaceState(null, "", url.pathname + url.search);
+    $("status").textContent = next.preserveView
+      ? "Journeys reordered. Your selected journey is unchanged."
+      : "Journeys reordered.";
+  }, (error) => {
+    field("ranking").value = state.result.query.ranking;
+    showError("error", errorMessage(error));
+    $("status").textContent = "Could not reorder journeys. Your selection is unchanged.";
+  }, () => {
+    field("ranking").disabled = false;
+    $("results").setAttribute("aria-busy", "false");
+    updateSearchButton();
+    updateDraftNotice();
+  });
+}
 async function moreRoutes() {
   const previous = state.result,
     request = state.searchRequest;
-  if (!previous || previous.next_offset == null || !request) return;
+  if (searchLane.controller || !previous || previous.next_offset == null || !request) return;
   $("more-routes").disabled = true;
+  field("ranking").disabled = true;
+  $("search-button").disabled = $("apply-preferences").disabled = true;
   await searchLane.run(
     request.url,
     { ...request.body, offset: previous.next_offset, data_revision: previous.data_revision },
@@ -641,7 +721,7 @@ function renderOptions() {
   if (!result) return;
   $("more-routes").hidden = result.next_offset == null;
   $("more-routes").disabled = false;
-  updateWorkspaceState(!result.items.length);
+  updateWorkspaceState(!result.items.length && !state.selection?.legs.length);
   $("result-count").textContent = `${result.items.length}${result.next_offset != null ? "+" : ""}`;
   $("search-time").hidden = false;
   $("search-time").textContent = `Search time: ${result.search_time_seconds.toFixed(2)} s${result.query.offset ? " · latest page" : ""}`;
@@ -649,13 +729,12 @@ function renderOptions() {
     via = result.query.via_airport,
     viaLabel = Array.isArray(via) ? via.join(" → ") : via;
   $("applied-query").textContent =
-    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"} · ${timeBasisLabel(v["time-basis"])} · ${result.query.max_legs === null ? "Any number of stops" : result.query.max_legs === 1 ? "Nonstop" : `Up to ${result.query.max_legs - 1} stops`}`;
+    `${result.query.origin} → ${result.query.destination}${viaLabel ? " via " + viaLabel : ""} · ${v.date}${v["last-date"] && v["last-date"] !== v.date ? " to " + v["last-date"] : ""} · ${v["input-clock"] === "UTC" ? "UTC" : result.departure_timezone || result.airports.find((a) => a.iata === result.query.origin)?.timezone || "local"}${result.query.max_legs === null ? "" : result.query.max_legs === 1 ? " · Nonstop" : ` · Up to ${result.query.max_legs - 1} stops`}`;
+  $("applied-query").textContent += ` · ${timeBasisLabel(v["time-basis"])}`;
   const d = result.diagnostics;
-  const noConnectingPath = d.exhaustive && result.query.max_legs === null,
-    connectionWindow =
-      result.query.maximum_connection_minutes === null
-        ? `at least ${result.query.minimum_connection_minutes} minutes`
-        : `${result.query.minimum_connection_minutes}–${result.query.maximum_connection_minutes} minutes`;
+  const connectionScope = result.query.maximum_connection_minutes === null
+    ? "Connection length is unrestricted."
+    : `Connections are limited to ${duration(result.query.maximum_connection_minutes)} each.`;
   $("partial").hidden = d.exhaustive;
   const reasons = d.termination_reasons.map((x) =>
     x === "data_limit"
@@ -666,21 +745,33 @@ function renderOptions() {
   );
   $("partial").textContent =
     `Search reached its ${reasons.join(" and ")}. ${result.items.length ? "Returned routes are feasible, but their overall ranking is incomplete." : "The ranking is incomplete; a matching route may not have been examined."} Narrow the dates or add filters to reduce the search.`;
+  const longestJourney = Math.max(0, ...result.items.map((item) => item.duration_minutes)),
+    comparisonScale = Math.max(0, ...result.items.map((item) => journeyTiming(item.legs).total)),
+    shortestJourney = Math.min(...result.items.map((item) => item.duration_minutes)),
+    fewestLegs = Math.min(...result.items.map((item) => item.legs.length)),
+    mostLegs = Math.max(0, ...result.items.map((item) => item.legs.length));
   $("options").innerHTML = result.items.length
     ? result.items
         .map((item, index) => {
           const count = item.legs.length,
-            codes = journeyAirports(item.legs);
-          return `<button class="option" type="button" data-option="${index}" aria-pressed="${!state.selection?.edited && item.itinerary_id === state.selection?.itinerary_id}">
-      <span class="option-title"><span><span class="option-rank" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)).split(",").at(-1).trim())}</span><span>${e(duration(item.duration_minutes))}</span></span>
-      <span class="route-codes route-chain" aria-label="${e(codes.join(" → "))}">${routeChain(codes)}</span>
-      ${durationChart(item.legs)}
-      <span class="option-times">Depart ${e(stamp(item.departure, zone(item.legs[0].origin_iata, result)))}<br>Arrive ${e(stamp(item.arrival, zone(item.legs.at(-1).destination_iata, result)))}</span>
-      <span class="option-facts"><span>${count === 1 ? "Nonstop" : `${count - 1} stop${count === 2 ? "" : "s"}`}</span>${count > 1 ? `<span>${item.connections.some((c) => c.airport_change) ? "Airport change" : "Same-airport connections"}</span>` : ""}${qualityBadges(item.legs)}</span>
+            timing = journeyTiming(item.legs),
+            observed = item.legs.some((flight) => flight.time_basis === "observed"),
+            selected = !state.selection?.edited && item.itinerary_id === state.selection?.itinerary_id,
+            stops = count === 1 ? "Nonstop" : `${count - 1} stop${count === 2 ? "" : "s"}`,
+            badges = [
+              observed ? "Observed range" : "",
+              item.duration_minutes === shortestJourney && shortestJourney < longestJourney ? "Shortest shown" : "",
+              count === fewestLegs && fewestLegs < mostLegs ? "Fewest stops shown" : "",
+            ].filter(Boolean);
+          return `<button class="option" type="button" data-option="${index}" aria-pressed="${selected}">
+      <span class="option-eyebrow"><span class="option-rank" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span><span class="option-badges">${badges.map((badge) => `<span>${e(badge)}</span>`).join("")}</span><span class="option-selection">${selected ? "Selected" : "View journey"}<span aria-hidden="true"> ↗</span></span></span>
+      <span class="option-schedule">${renderCompactEndpoint(item.legs[0], "departure", zone(item.legs[0].origin_iata, result))}<span class="option-duration"><strong>${e(journeyElapsedLabel(item.legs))}</strong><small>${e(stops)}</small></span>${renderCompactEndpoint(item.legs.at(-1), "arrival", zone(item.legs.at(-1).destination_iata, result))}</span>
+      <span class="option-comparison">${durationChart(item.legs, comparisonScale)}<span class="option-breakdown"><span>${observed ? "Up to " : ""}${e(duration(timing.flying))} flying</span><span>${count > 1 ? `${observed ? "At least " : ""}${e(duration(timing.connecting))} connecting` : "No connections"}</span></span></span>
+      <span class="option-facts"><span>${count > 1 ? item.connections.map((connection, i) => `${e(connection.arrival_iata)} ${[item.legs[i], item.legs[i + 1]].some((flight) => flight.time_basis === "observed") ? "≥ " : ""}${e(duration(connection.wait_minutes))}`).join(" · ") : "Direct flight"}</span>${item.connections.some((connection) => connection.airport_change) ? "<span>Airport change</span>" : ""}${qualityBadges(item.legs)}</span>
     </button>`;
         })
         .join("")
-    : `<p class="empty">${noConnectingPath ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} satisfies this date window and filters. Stop count is unrestricted. Connections must be ${connectionWindow}; ${result.query.allow_airport_change ? "only permitted airport transfers are allowed" : "airport changes are off"}. Endpoint flight counts do not guarantee a connecting journey. Try different dates or connection settings.` : d.exhaustive ? "No matching route in loaded data. Try a wider departure date range or fewer filters." : "No route returned before the search stopped early. A matching route may not have been examined."}</p>`;
+    : `<div class="empty empty-state"><span class="empty-route-mark" aria-hidden="true">↗</span><h3>${d.exhaustive ? "No matching route yet" : "The search ended early"}</h3><p>${d.exhaustive ? `No connecting path from ${e(result.query.origin)} to ${e(result.query.destination)} matches these dates and preferences. ${e(connectionScope)}` : "A matching route may not have been examined. Try narrower dates or review your preferences."}</p><div class="empty-actions"><button type="button" data-recovery="dates">Change dates</button><button type="button" data-recovery="preferences">Review preferences</button></div><small>You can still explore the Earth view.</small></div>`;
 }
 function renderJourney({ preserveView = false } = {}) {
   const selected = state.selection,
@@ -693,26 +784,13 @@ function renderJourney({ preserveView = false } = {}) {
     ? codes.join(" → ")
     : "Choose a journey to map its route";
   $("journey-summary").innerHTML = legs.length
-    ? `<span><b>${e(duration((Date.parse(arrivalTime(legs.at(-1))) - Date.parse(departureTime(legs[0]))) / 60000))}</b>Total journey</span><span><b>${legs.length === 1 ? "Nonstop" : `${legs.length - 1} stop${legs.length === 2 ? "" : "s"}`}</b>Connections</span><span><b>${e(stamp(departureTime(legs[0]), zone(legs[0].origin_iata)).split(",")[0])}</b>Departure</span>`
+    ? `<span><b>${e(journeyElapsedLabel(legs))}</b>Total journey</span><span><b>${legs.length === 1 ? "Nonstop" : `${legs.length - 1} stop${legs.length === 2 ? "" : "s"}`}</b>Connections</span><span><b>${e(stampParts(departureTime(legs[0]), zone(legs[0].origin_iata)).date)}</b>Departure</span>`
     : "<span>Select a flight option to see its path and times.</span>";
-  $("undo").disabled = !state.history.length;
   $("export").disabled = !legs.length;
   $("journey-status").textContent = !legs.length
     ? "Select a flight option to inspect its legs."
-    : `${selected.edited ? "Edited journey · " : ""}${selected.complete ? "Arrives at " + legs.at(-1).destination_iata : "No complete onward route found"} · ${duration((Date.parse(arrivalTime(legs.at(-1))) - Date.parse(departureTime(legs[0]))) / 60000)}${selected.diagnostics?.exhaustive === false ? " · search partial" : ""}`;
-  $("legs").innerHTML = legs
-    .map((f, i) => {
-      const conn = selected.connections[i],
-        gap = conn
-          ? `<div class="gap ${conn.airport_change ? "airport-change" : ""}"><span>${conn.airport_change ? `${e(conn.arrival_iata)} → ${e(conn.departure_iata)} · airport change` : e(conn.arrival_iata) + " connection"} · ${duration(conn.wait_minutes)}<br><span class="small">Minimum ${conn.minimum_minutes}m</span></span><button type="button" data-edit="${i}">Change connection</button></div>`
-          : "";
-      return `<div class="leg" data-flight-id="${e(f.flight_id)}"><span class="leg-number">${i + 1}</span><div><div class="leg-route">${e(flightLabel(f))} · ${e(f.origin_iata)} → ${e(f.destination_iata)}</div>
-      <div class="leg-time"><div><strong>${e(flightTimeLabel(f, "departure", zone(f.origin_iata)))}</strong>${e(label(f.origin_iata))}</div><div><strong>${e(flightTimeLabel(f, "arrival", zone(f.destination_iata)))}</strong>${e(label(f.destination_iata))}</div></div>
-      ${f.aircraft_type_code ? `<div class="leg-source">Aircraft type: ${e(f.aircraft_type_code)}</div>` : ""}
-      <div class="leg-quality">${qualityDetails(f)}</div>
-      <div class="leg-source">${e(f.status)}</div></div><button type="button" data-focus="${i}">Show leg</button></div>${gap}`;
-    })
-    .join("");
+    : `${selected.edited ? "Edited journey · " : ""}${selected.complete ? "Arrives at " + legs.at(-1).destination_iata : "No complete onward route found"} · ${journeyElapsedLabel(legs)}${selected.diagnostics?.exhaustive === false ? " · search partial" : ""}`;
+  $("legs").innerHTML = renderJourneyLegs(legs, selected?.connections || [], { zone, label });
   // A partial plan still exposes the next gap so the user can continue exploring.
   if (
     legs.length &&
@@ -724,6 +802,7 @@ function renderJourney({ preserveView = false } = {}) {
       "beforeend",
       `<div class="gap"><span>Continue from ${e(legs.at(-1).destination_iata)}</span><button type="button" data-edit="${legs.length - 1}">Find onward flights</button></div>`,
     );
+  updateJourneyActions();
   $("time-cursor").disabled = !legs.length;
   if (!preserveView) $("time-cursor").value = 0;
   state.cursor = legs.length ? Date.parse(departureTime(legs[0])) : null;
@@ -778,6 +857,11 @@ function renderDatasetInfo() {
   $("dataset-content").innerHTML =
     `<dl>${entries.map(([a, b]) => `<dt>${e(a)}</dt><dd>${e(b)}</dd>`).join("")}</dl>`;
 }
+function updateJourneyActions() {
+  $("undo").disabled = state.replacingQuery || !state.history.length;
+  for (const button of $("legs").querySelectorAll("[data-edit]"))
+    button.disabled = state.replacingQuery;
+}
 function closeEditor() {
   editLane.cancel();
   state.editing = null;
@@ -793,6 +877,7 @@ function updateEditorZone() {
     `Not-before time uses ${inputZone(f.destination_iata)}. Connections searched until ${stamp(state.result.query.horizon_end, inputZone(state.result.query.destination))}.`;
 }
 function openEditor(index) {
+  if (state.replacingQuery || !state.selection?.legs[index]) return;
   closeEditor();
   state.editing = index;
   editField("minimum").value = state.result.query.minimum_connection_minutes;
@@ -848,7 +933,7 @@ $("more-next").addEventListener("click", () =>
 async function findNext(optionOffset = 0) {
   if (typeof optionOffset !== "number") optionOffset = 0;
   const previous = optionOffset ? state.preview : null;
-  if (state.editing === null) return;
+  if (state.replacingQuery || state.editing === null) return;
   const mode = editField("window").value,
     after = editField("after").value;
   if (mode === "after" && !after) {
@@ -903,7 +988,7 @@ async function findNext(optionOffset = 0) {
   const rebuild = () =>
     editLane.run("/v1/plans/rebuild", request, receive, fail, finish);
   if (mode === "after") {
-    if (field("input-clock").value === "UTC") {
+    if (state.queryValues["input-clock"] === "UTC") {
       request.window.not_before = `${after}:00Z`;
       await rebuild();
     } else {
@@ -930,7 +1015,7 @@ async function findNext(optionOffset = 0) {
   } else await rebuild();
 }
 async function applyNext(index) {
-  if (!state.preview) return;
+  if (state.replacingQuery || !state.preview) return;
   const { plan, request } = state.preview,
     option = plan.options[index];
   if (!option) return;
@@ -972,8 +1057,9 @@ form.addEventListener("submit", (event) => {
   search();
 });
 form.addEventListener("input", (event) => {
-  if (!event.target.hasAttribute("data-airport-code")) return;
   userEdited = true;
+  updateDraftNotice();
+  if (!event.target.hasAttribute("data-airport-code")) return;
   normalizeAirportInput(event.target);
   updateZones();
   if ([field("origin"), field("destination")].includes(event.target))
@@ -1016,6 +1102,10 @@ form.addEventListener("change", (event) => {
   if (state.result)
     $("status").textContent =
       "Inputs changed. Search to apply them; previous results remain visible.";
+});
+field("ranking").addEventListener("change", () => {
+  userEdited = true;
+  if (state.result) sortRoutes();
 });
 for (const event of ["focus", "click"])
   field("via").addEventListener(event, () => updateViaSuggestions(true));
@@ -1067,6 +1157,17 @@ $("swap").addEventListener("click", () => {
   form.dispatchEvent(new Event("change", { bubbles: true }));
 });
 $("options").addEventListener("click", (event) => {
+  const recovery = event.target.closest("[data-recovery]");
+  if (recovery) {
+    if (recovery.dataset.recovery === "dates" && !field("date").disabled) {
+      field("date").focus();
+      field("date").click();
+    } else {
+      $("search-details").open = true;
+      field("via").focus();
+    }
+    return;
+  }
   const button = event.target.closest("[data-option]");
   if (!button) return;
   closeEditor();
@@ -1083,7 +1184,8 @@ $("options").addEventListener("click", (event) => {
   renderJourney();
   if (matchMedia("(max-width:720px)").matches) {
     setView("journey");
-    $("export").focus();
+    $("journey-heading").focus({ preventScroll: true });
+    $("journey-heading").scrollIntoView({ block: "start" });
   } else
     $("options")
       .querySelector(`[data-option="${button.dataset.option}"]`)
@@ -1097,7 +1199,7 @@ $("legs").addEventListener("click", (event) => {
     setView("map");
     map.focus(Number(focus.dataset.focus));
     syncProjection();
-    if (matchMedia("(max-width:720px)").matches) $("fit-map").focus();
+    if (matchMedia("(max-width:720px)").matches) $("map-heading").focus();
   }
 });
 editorForm.addEventListener("submit", (event) => {
@@ -1111,7 +1213,7 @@ function editorChanged() {
   $("find-next").disabled = false;
   const after = editField("window").value === "after";
   $("after-field").hidden = !after;
-  $("fold-field").hidden = !after || field("input-clock").value === "UTC";
+  $("fold-field").hidden = !after || state.queryValues["input-clock"] === "UTC";
   editField("after").required = after;
   $("editor-status").textContent =
     "Connection filters changed. Find next flights to update the options.";
@@ -1134,7 +1236,7 @@ $("close-editor").addEventListener("click", () => {
   $("legs").querySelector(`[data-edit="${index}"]`)?.focus();
 });
 $("undo").addEventListener("click", () => {
-  if (!state.history.length) return;
+  if (state.replacingQuery || !state.history.length) return;
   closeEditor();
   state.selection = state.history.pop();
   renderOptions();
@@ -1151,6 +1253,7 @@ new ResizeObserver(() =>
   drawTimeline($("timeline"), state.selection?.legs, state.cursor),
 ).observe($("timeline"));
 function syncProjection() {
+  $("route-mode").setAttribute("aria-pressed", String(map.mode === "route"));
   $("globe-mode").setAttribute("aria-pressed", String(map.mode === "globe"));
   $("flat-mode").setAttribute("aria-pressed", String(map.mode === "flat"));
   for (const id of [
@@ -1181,11 +1284,13 @@ document.querySelector(".mobile-views").addEventListener("click", (event) => {
   }
 });
 for (const [id, mode] of [
+  ["route-mode", "route"],
   ["globe-mode", "globe"],
   ["flat-mode", "flat"],
 ])
   $(id).addEventListener("click", () => {
     map.setMode(mode);
+    try { writeMapPreference(localStorage, mode); } catch { /* Storage may be blocked. */ }
     syncProjection();
   });
 for (const [id, degrees] of [
@@ -1264,7 +1369,7 @@ async function loadBootstrap() {
     async (bootstrap) => {
       for (const airport of bootstrap.airports)
         state.airports.set(airport.iata, airport);
-      map.setAirports([...state.airports.values()]);
+      if (!state.selection) map.setAirports([...state.airports.values()]);
       $("airport-suggestions").innerHTML = bootstrap.airports
         .map((a) => `<option value="${e(a.iata)}" label="${e(a.name || a.iata)}"></option>`)
         .join("");
@@ -1304,12 +1409,28 @@ map
 // A shared UTC query is already complete. Availability configures the calendars;
 // it must not delay sending that query to the authoritative search endpoint.
 const linkedValues = Object.fromEntries(new URLSearchParams(location.search));
+document.addEventListener("pointerdown", (event) => {
+  const details = $("search-details");
+  if (details.open && !details.contains(event.target)) details.open = false;
+});
+$("search-details").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !event.target.closest(".data-calendar")) {
+    $("search-details").open = false;
+    $("search-details").querySelector("summary").focus();
+  }
+});
+form.addEventListener("invalid", (event) => {
+  for (let parent = event.target.parentElement; parent; parent = parent.parentElement)
+    if (parent.tagName === "DETAILS") parent.open = true;
+}, true);
 const linkedSearch =
   [linkedValues.origin, linkedValues.destination].every((code) => /^[a-z]{3}$/i.test(code || "")) &&
   /^\d{4}-\d{2}-\d{2}$/.test(linkedValues.date || "");
 const linkedUTC = linkedSearch && linkedValues["input-clock"] === "UTC" &&
   ["scheduled", "observed", "actual"].includes(linkedValues["time-basis"]);
 restore(linkedValues);
+try { map.setMode(readMapPreference(localStorage)); } catch { /* Keep the default without storage. */ }
+syncProjection();
 updateZones();
 if (linkedUTC) {
   const initialSearch = search({ checkAvailability: false });

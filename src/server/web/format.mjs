@@ -75,6 +75,27 @@ export function duration(minutes) {
     .filter(Boolean)
     .join(" ");
 }
+// Constructing an Intl formatter is much more expensive than formatting a date.
+// Keep only a small working set as travelers explore airports across timezones.
+const dateFormatters = new Map(),
+  formatterLimit = 48;
+function dateFormatter(locale, options) {
+  // Preserve Intl's coercion and errors for unusual caller-supplied zone values.
+  if (typeof options.timeZone !== "string")
+    return new Intl.DateTimeFormat(locale, options);
+  const key = JSON.stringify([locale, options]),
+    cached = dateFormatters.get(key);
+  if (cached) {
+    dateFormatters.delete(key);
+    dateFormatters.set(key, cached);
+    return cached;
+  }
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  if (dateFormatters.size >= formatterLimit)
+    dateFormatters.delete(dateFormatters.keys().next().value);
+  dateFormatters.set(key, formatter);
+  return formatter;
+}
 function localParts(instant, zone, includeClock = false) {
   const options = {
     timeZone: zone,
@@ -86,7 +107,7 @@ function localParts(instant, zone, includeClock = false) {
       : {}),
   };
   return Object.fromEntries(
-    new Intl.DateTimeFormat("en-CA", options)
+    dateFormatter("en-CA", options)
       .formatToParts(new Date(instant))
       .filter((part) => part.type !== "literal")
       .map((part) => [part.type, part.value]),
@@ -100,8 +121,8 @@ export function localInput(instant, zone = "UTC") {
   const parts = localParts(instant, zone, true);
   return `${dateFromParts(parts)}T${parts.hour}:${parts.minute}`;
 }
-export function stamp(instant, zone = "UTC") {
-  return new Intl.DateTimeFormat("en-GB", {
+function stampFormatter(zone) {
+  return dateFormatter("en-GB", {
     timeZone: zone,
     year: "numeric",
     day: "numeric",
@@ -110,7 +131,21 @@ export function stamp(instant, zone = "UTC") {
     minute: "2-digit",
     hourCycle: "h23",
     timeZoneName: "shortOffset",
-  }).format(new Date(instant));
+  });
+}
+export function stamp(instant, zone = "UTC") {
+  return stampFormatter(zone).format(new Date(instant));
+}
+export function stampParts(instant, zone = "UTC") {
+  const parts = Object.fromEntries(stampFormatter(zone)
+    .formatToParts(new Date(instant))
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return {
+    date: `${parts.day} ${parts.month} ${parts.year}`,
+    clock: `${parts.hour}:${parts.minute}`,
+    offset: parts.timeZoneName,
+  };
 }
 export function addDate(date, days) {
   const d = new Date(`${date}T12:00:00Z`);

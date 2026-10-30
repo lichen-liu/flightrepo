@@ -32,7 +32,7 @@ has never configured either SQL loading or routing.
 | Arrival horizon | No fixed day ceiling in search or continuation. An omitted horizon uses the latest available destination arrival, at least the departure-window end. | The former 31/62-day ceilings are removed. |
 | Calendar/browser horizon | Uses all available arrival data by default. Optional `onward_days` is shared by availability and search; precise local/UTC arrival deadlines remain supported. | The fixed seven-day eligibility window is removed. |
 | Via and avoided airports | No count ceiling. Codes, no-repeat vias, endpoint exclusions and conflicts remain validated. | The six-via/fifty-avoid ceilings and browser character cap are removed. |
-| Connection allowances | Nonnegative minimum and nullable maximum, without arbitrary numeric ceilings. Maximum must be at least minimum. Public adapters agree; default maximum is unrestricted. | The 1,440/44,640-minute ceilings and tighter legacy validators are removed. |
+| Connection allowances | Nonnegative minimum and nullable maximum, without arbitrary numeric ceilings. Maximum must be at least minimum. Flight path searches default to a 7-day (10,080-minute) maximum per connection; callers can override it or explicitly use `null` for unlimited waits. | The 1,440/44,640-minute ceilings and tighter legacy validators are removed. |
 | Continuation gap semantics | The edited gap uses its requested maximum/not-before. Later gaps use the minimum without a maximum. | Continuation and full-search policies differ; an edited journey may exceed the maximum used in its original search. This is documented behavior, not a row-loading cutoff. |
 
 Sources: [request validation](../src/core/routing/models.py),

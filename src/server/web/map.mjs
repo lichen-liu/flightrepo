@@ -1,10 +1,76 @@
 import { stamp, departureTime, arrivalTime, flightLabel } from "./format.mjs";
 
+export function routeGeometry(legs, point) {
+  const codes = [...new Set(legs.flatMap((flight) => [flight.origin_iata, flight.destination_iata]))],
+    points = codes.map(point).filter(Boolean),
+    lines = [];
+  let missing = 0;
+  for (let i = 0; i < legs.length; i++) {
+    const flight = legs[i], a = point(flight.origin_iata), b = point(flight.destination_iata);
+    if (a && b) lines.push({ type: "flight", coordinates: [a, b] });
+    else missing++;
+    if (i && legs[i - 1].destination_iata !== flight.origin_iata) {
+      const arrival = point(legs[i - 1].destination_iata);
+      if (arrival && a) lines.push({ type: "transfer", coordinates: [arrival, a] });
+    }
+  }
+  return { codes, points, lines, missing };
+}
+
+export function routeProjection(d3, geometry, width, height) {
+  const { points, lines } = geometry,
+    marginX = Math.min(36, width * 0.12),
+    marginY = Math.min(28, height * 0.2),
+    extent = [[marginX, marginY], [width - marginX, height - marginY]];
+  if (!points.length)
+    return d3.geoNaturalEarth1().fitExtent(extent, { type: "Sphere" });
+
+  let widest = 0, pair = [points[0], points[0]];
+  for (let i = 0; i < points.length; i++)
+    for (let j = i + 1; j < points.length; j++) {
+      const distance = d3.geoDistance(points[i], points[j]);
+      if (distance > widest) { widest = distance; pair = [points[i], points[j]]; }
+    }
+  const candidates = [
+    d3.geoCentroid({ type: "MultiPoint", coordinates: points }),
+    d3.geoInterpolate(...pair)(0.5),
+    points[0],
+  ].filter((candidate) => candidate.every(Number.isFinite));
+  const radius = (center) => Math.max(...points.map((point) => d3.geoDistance(center, point)));
+  const center = candidates.reduce((best, next) => radius(next) < radius(best) ? next : best);
+  const projection = d3.geoAzimuthalEquidistant()
+    .rotate([-center[0], -center[1], 0])
+    .clipAngle(179.9);
+  // Fit sampled great-circle arcs, not longitude extrema: trans-Pacific routes
+  // stay centered on the Pacific and bowed flight paths keep their padding.
+  const samples = [...points];
+  for (const line of lines) {
+    const interpolate = d3.geoInterpolate(...line.coordinates),
+      steps = Math.max(2, Math.ceil(d3.geoDistance(...line.coordinates) / (Math.PI / 36)));
+    for (let step = 1; step < steps; step++) samples.push(interpolate(step / steps));
+  }
+  if (widest < 1e-8) {
+    projection.scale(Math.min(width, height) * 2).translate([width / 2, height / 2]);
+  } else {
+    projection.fitExtent(extent, { type: "MultiPoint", coordinates: samples });
+    // Nearby or coincident airports should retain geographic context rather
+    // than producing an unbounded zoom level.
+    projection.scale(Math.min(projection.scale(), Math.max(width, height) * 8));
+    const bounds = d3.geoPath(projection).bounds({ type: "MultiPoint", coordinates: samples }),
+      offset = projection.translate();
+    projection.translate([
+      offset[0] + width / 2 - (bounds[0][0] + bounds[1][0]) / 2,
+      offset[1] + height / 2 - (bounds[0][1] + bounds[1][1]) / 2,
+    ]);
+  }
+  return projection.clipExtent([[0, 0], [width, height]]);
+}
+
 export class RouteMap {
   constructor(svg, info) {
     this.svg = svg;
     this.info = info;
-    this.mode = "globe";
+    this.mode = "route";
     this.rotation = [35, -35, 0];
     this.zoom = 1;
     this.airports = new Map();
@@ -14,10 +80,7 @@ export class RouteMap {
     this.d3 = window.d3;
     this.revision = 0;
     // SVG updates can change layout. Draw after resize delivery has finished.
-    this.resize = new ResizeObserver(() => {
-      cancelAnimationFrame(this.resizeFrame);
-      this.resizeFrame = requestAnimationFrame(() => this.draw());
-    });
+    this.resize = new ResizeObserver(() => this.requestDraw());
     this.resize.observe(svg);
     let drag = null;
     svg.addEventListener("pointerdown", (e) => {
@@ -36,7 +99,7 @@ export class RouteMap {
           Math.max(-80, Math.min(80, drag[3] - dy * 0.35)),
           0,
         ];
-        this.draw();
+        this.requestDraw();
       }
     });
     const stop = () => {
@@ -46,12 +109,7 @@ export class RouteMap {
     svg.addEventListener("pointercancel", stop);
     svg.addEventListener(
       "wheel",
-      (e) => {
-        if (this.mode === "globe") {
-          e.preventDefault();
-          this.adjustZoom(Math.exp(-e.deltaY * 0.001));
-        }
-      },
+      (event) => this.onWheel(event),
       { passive: false },
     );
   }
@@ -60,12 +118,12 @@ export class RouteMap {
     const response = await fetch(new URL("./vendor/world-110m.geojson", import.meta.url));
     if (!response.ok) throw Error("World geometry unavailable.");
     this.world = await response.json();
-    this.draw();
+    this.requestDraw();
   }
   setAirports(airports) {
     this.airports = new Map(airports.map((a) => [a.iata, a]));
     this.revision++;
-    this.draw();
+    this.requestDraw();
   }
   point(code) {
     const a = this.airports.get(code);
@@ -81,19 +139,24 @@ export class RouteMap {
   }
   setMode(mode) {
     this.mode = mode;
-    this.draw();
+    this.requestDraw();
   }
   rotate(degrees) {
     this.rotation[0] += degrees;
-    this.draw();
+    this.requestDraw();
   }
   tilt(degrees) {
     this.rotation[1] = Math.max(-80, Math.min(80, this.rotation[1] + degrees));
-    this.draw();
+    this.requestDraw();
   }
   adjustZoom(factor) {
     this.zoom = Math.max(0.8, Math.min(8, this.zoom * factor));
-    this.draw();
+    this.requestDraw();
+  }
+  onWheel(event) {
+    if (this.mode !== "globe" || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    this.adjustZoom(Math.exp(-event.deltaY * 0.001));
   }
   fit() {
     const points = this.legs
@@ -113,13 +176,14 @@ export class RouteMap {
           const distance = this.d3.geoDistance(points[i], points[j]);
           if (distance > widest) { widest = distance; pair = [points[i], points[j]]; }
         }
-      const candidates = [center, this.d3.geoInterpolate(...pair)(0.5)];
+      const candidates = [center, this.d3.geoInterpolate(...pair)(0.5)]
+        .filter((candidate) => candidate.every(Number.isFinite));
       const radius = (c) => Math.max(...points.map((point) => this.d3.geoDistance(c, point)));
       const c = candidates.reduce((best, candidate) => radius(candidate) < radius(best) ? candidate : best);
       this.rotation = [-c[0], -c[1], 0];
     } else this.rotation = [35, -35, 0];
     this.zoom = 1;
-    this.draw();
+    this.requestDraw();
   }
   focus(index) {
     const f = this.legs[index];
@@ -131,12 +195,12 @@ export class RouteMap {
       this.rotation = [-c[0], -c[1], 0];
       this.mode = "globe";
       this.zoom = Math.max(1, Math.min(8, 1.4 / this.d3.geoDistance(a, b)));
-      this.draw();
+      this.requestDraw();
     }
   }
   setCursor(instant) {
     this.cursor = instant;
-    this.draw();
+    this.requestDraw();
   }
   position() {
     if (this.cursor == null || !this.legs.length || !this.d3) return null;
@@ -149,7 +213,7 @@ export class RouteMap {
         const a = this.point(f.origin_iata),
           b = this.point(f.destination_iata);
         return a && b
-          ? this.d3.geoInterpolate(a, b)((this.cursor - start) / (end - start))
+          ? this.d3.geoInterpolate(a, b)(end > start ? (this.cursor - start) / (end - start) : 1)
           : null;
       }
       // A timetable does not locate a traveler during an airport change.
@@ -159,6 +223,13 @@ export class RouteMap {
           : this.point(f.origin_iata);
     }
     return this.point(this.legs.at(-1).destination_iata);
+  }
+  requestDraw() {
+    if (this.drawFrame != null) return;
+    this.drawFrame = requestAnimationFrame(() => {
+      this.drawFrame = null;
+      this.draw();
+    });
   }
   draw() {
     if (!this.d3 || !this.world) return;
@@ -178,6 +249,7 @@ export class RouteMap {
       this.drawPosition(this.projection);
       return;
     }
+    const geometry = routeGeometry(this.legs, (code) => this.point(code));
     const p =
       this.mode === "globe"
         ? d3
@@ -186,7 +258,9 @@ export class RouteMap {
             .translate([w / 2, h / 2])
             .scale(Math.min(w * 0.44, h * 0.44) * this.zoom)
             .clipAngle(90)
-        : d3.geoNaturalEarth1().fitExtent(
+        : this.mode === "route"
+          ? routeProjection(d3, geometry, w, h)
+          : d3.geoNaturalEarth1().fitExtent(
             [
               [14, 12],
               [w - 14, h - 25],
@@ -194,7 +268,7 @@ export class RouteMap {
             { type: "Sphere" },
           );
     const path = d3.geoPath(p),
-      s = d3.select(this.svg).attr("viewBox", `0 0 ${w} ${h}`);
+      s = d3.select(this.svg).attr("viewBox", `0 0 ${w} ${h}`).attr("data-mode", this.mode);
     s.selectAll("*").remove();
     this.staticKey = key;
     this.projection = p;
@@ -205,9 +279,9 @@ export class RouteMap {
     );
     const defs = s.append("defs");
     const ocean = defs.append("radialGradient").attr("id", "atlas-ocean").attr("cx", "35%").attr("cy", "25%").attr("r", "80%");
-    ocean.append("stop").attr("offset", "0%").attr("stop-color", "#153b49");
-    ocean.append("stop").attr("offset", "70%").attr("stop-color", "#0a2030");
-    ocean.append("stop").attr("offset", "100%").attr("stop-color", "#06111e");
+    ocean.append("stop").attr("offset", "0%").attr("stop-color", "#f3f4ff");
+    ocean.append("stop").attr("offset", "70%").attr("stop-color", "#ccd3f5");
+    ocean.append("stop").attr("offset", "100%").attr("stop-color", "#929edc");
     if (this.mode === "globe") {
       s.append("circle").attr("class", "map-atmosphere").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale());
       s.append("circle").attr("class", "map-orbit").attr("cx", w / 2).attr("cy", h / 2).attr("r", p.scale() * 1.09);
@@ -220,24 +294,11 @@ export class RouteMap {
       .datum(d3.geoGraticule10())
       .attr("class", "map-grid")
       .attr("d", path);
-    s.selectAll("path.map-land")
-      .data(this.world.features)
-      .join("path")
+    s.append("path")
+      .datum(this.world)
       .attr("class", "map-land")
       .attr("d", path);
-    const lines = [];
-    let missing = 0;
-    for (let i = 0; i < this.legs.length; i++) {
-      const f = this.legs[i],
-        a = this.point(f.origin_iata),
-        b = this.point(f.destination_iata);
-      if (a && b) lines.push({ type: "flight", coordinates: [a, b] });
-      else missing++;
-      if (i && this.legs[i - 1].destination_iata !== f.origin_iata) {
-        const g = this.point(this.legs[i - 1].destination_iata);
-        if (g && a) lines.push({ type: "transfer", coordinates: [g, a] });
-      }
-    }
+    const { lines, missing, codes } = geometry;
     s.selectAll("path.map-route")
       .data(lines)
       .join("path")
@@ -249,9 +310,6 @@ export class RouteMap {
       this.mode !== "globe" ||
       d3.geoDistance(point, d3.geoRotation(p.rotate()).invert([0, 0])) <
         Math.PI / 2;
-    const codes = [
-      ...new Set(this.legs.flatMap((f) => [f.origin_iata, f.destination_iata])),
-    ];
     const placed = [];
     const labelOrder = this.legs.length
       ? [
@@ -298,7 +356,7 @@ export class RouteMap {
     this.info.textContent = missing
       ? `${missing} leg${missing === 1 ? "" : "s"} without coordinates`
       : this.mode === "globe"
-        ? "Rotate or zoom with the controls; drag and scroll also work."
+        ? "Drag to rotate · Ctrl/⌘ + scroll to zoom"
         : "Great-circle flight paths · dashed airport changes";
   }
   drawPosition(projection) {
@@ -323,14 +381,43 @@ export class RouteMap {
   }
 }
 
+const timelineScenes = new WeakMap();
+
 export function drawTimeline(container, legs, cursor) {
-  container.replaceChildren();
-  if (!legs?.length) return;
+  const clear = () => {
+    container.replaceChildren();
+    timelineScenes.delete(container);
+  };
+  if (!legs?.length) { clear(); return; }
   const d3 = window.d3,
     w = container.clientWidth - 36;
-  if (!d3 || w < 100) return;
-  const start = new Date(departureTime(legs[0])),
-    end = new Date(arrivalTime(legs.at(-1)));
+  if (!d3 || w < 100) { clear(); return; }
+  const times = legs.map((flight) => [departureTime(flight), arrivalTime(flight)]),
+    key = JSON.stringify([w, times]);
+  let scene = timelineScenes.get(container);
+  // Scrubbing changes only the cursor. Keep the flight bars and tick axis until
+  // their geometry changes, including edits that retain the same legs array.
+  if (!scene || scene.key !== key || scene.node !== container.firstElementChild) {
+    clear();
+    scene = buildTimeline(d3, container, w, times);
+    timelineScenes.set(container, { ...scene, key });
+  }
+  const at = cursor == null ? NaN : scene.x(new Date(cursor));
+  scene.svg.selectAll(".timeline-cursor")
+    .data(Number.isFinite(at) ? [at] : [])
+    .join("line")
+    .attr("class", "timeline-cursor")
+    .attr("x1", (position) => position)
+    .attr("x2", (position) => position)
+    .attr("y1", 5)
+    .attr("y2", 34)
+    .attr("stroke", "var(--cursor)")
+    .attr("stroke-width", 2);
+}
+
+function buildTimeline(d3, container, w, times) {
+  const start = new Date(times[0][0]),
+    end = new Date(times.at(-1)[1]);
   const x = d3
     .scaleUtc()
     .domain([start, end])
@@ -345,12 +432,11 @@ export function drawTimeline(container, legs, cursor) {
       "aria-label",
       `UTC itinerary times from ${stamp(start)} to ${stamp(end)}, including flight and connection durations.`,
     );
-  for (let i = 0; i < legs.length; i++) {
-    const f = legs[i],
-      a = x(new Date(departureTime(f))),
-      b = x(new Date(arrivalTime(f)));
+  for (let i = 0; i < times.length; i++) {
+    const a = x(new Date(times[i][0])),
+      b = x(new Date(times[i][1]));
     if (i) {
-      const prev = x(new Date(arrivalTime(legs[i - 1])));
+      const prev = x(new Date(times[i - 1][1]));
       svg
         .append("line")
         .attr("x1", prev)
@@ -395,15 +481,5 @@ export function drawTimeline(container, legs, cursor) {
     .attr("y", 8)
     .attr("text-anchor", "end")
     .text("UTC");
-  if (cursor != null) {
-    const at = x(new Date(cursor));
-    svg
-      .append("line")
-      .attr("x1", at)
-      .attr("x2", at)
-      .attr("y1", 5)
-      .attr("y2", 34)
-      .attr("stroke", "var(--cursor)")
-      .attr("stroke-width", 2);
-  }
+  return { svg, x, node: svg.node() };
 }

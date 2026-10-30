@@ -2,7 +2,7 @@
 
 Explore dated flight options, inspect their routes and schedules, and change a connection to see how the rest of the journey changes. Flyji runs locally with Python, FastAPI and SQLite. Its intended domain is **fly.boboji.fyi**.
 
-Flyji shares boboji.fyi's fonts, colors and branding with Trip Split and AeroRepo. Fonts and map assets are bundled locally.
+Flyji shares boboji.fyi's fonts and branding with Trip Split and AeroRepo. Its route explorer uses a compact search strip, comparable journey cards and a linked route canvas. The interactive Earth sphere remains available through the visible **Route / Earth** switch. Fonts and map assets are bundled locally.
 
 This preview uses imported schedules. It does not establish seat availability, fares, booking protection or whether a transfer is suitable for a traveler. The demo data is synthetic; coverage is unknown.
 
@@ -15,7 +15,7 @@ pip install -e '.[dev]'
 python scripts/run_demo.py --port 8013
 ```
 
-Open **http://127.0.0.1:8013/**. Select a route, inspect its legs on the globe or flat map, and scrub the schedule. Choose **Change connection**, widen the time window, allow an airport change, and apply a flight. Later legs are recalculated; **Undo** restores the previous journey. See the [demo walkthrough](docs/demo.md).
+Open **http://127.0.0.1:8013/**. Choose airports and a departure date, then compare journey times and layovers. **More options** reveals route preferences; **Data & time settings** keeps clock and source settings available. Select a journey to inspect its route, switch to **Earth** for the globe, or open **Journey timeline** to scrub the schedule. Choose **Change connection** to rebuild later flights; **Undo** restores the previous journey. See the [demo walkthrough](docs/demo.md).
 
 The demo uses `var/connections-demo.db`, separate from the normal `var/flights.db`. Both files and their SQLite sidecars are ignored by Git. Stop the server with Ctrl+C. If the port is busy, choose another with `--port`.
 
@@ -37,6 +37,11 @@ requests use `max_legs: null` (or omit it) for no stop-count limit; positive int
 apply an optional explicit limit. Routes cannot revisit airports. Date windows and
 record/candidate budgets still bound computation, with partial results identified
 in the search diagnostics.
+
+Each connection defaults to a maximum wait of **7 days** (10,080 minutes).
+Change it in the browser's visible **Connection limit** field (days), with the CLI's
+`--max-connection MINUTES`, or through the API's `maximum_connection_minutes`.
+An explicit JSON `null` allows unlimited waits.
 
 ## Architecture
 
@@ -107,7 +112,7 @@ python -m admin maintenance clear-data --yes
 python -m pytest -q
 ruff check src tests scripts installation deployment
 ruff format --check src tests scripts installation deployment
-node --test tests/test_frontend.mjs
+node --test tests/test_frontend.mjs tests/test_journey_visuals.mjs tests/test_route_projection.mjs tests/test_workspace_state.mjs tests/test_journey_detail.mjs tests/test_format_cache.mjs
 python -m build --wheel --outdir var/wheels
 python scripts/verify_package.py var/wheels/*.whl
 ```
@@ -130,9 +135,14 @@ For browser tests, start the demo in another terminal, then run:
 npm install --prefix var/browser-qa --no-save playwright@1.62.1
 var/browser-qa/node_modules/.bin/playwright install chromium webkit
 NODE_PATH=var/browser-qa/node_modules node scripts/qa_web.cjs
-NODE_PATH=var/browser-qa/node_modules FLYJI_QA_BROWSER=webkit node --test --test-name-pattern='calendar|fresh visits|airport lookup|phone airport|delayed bootstrap|statistics loaded' scripts/qa_web.cjs
+NODE_PATH=var/browser-qa/node_modules FLYJI_QA_BROWSER=webkit node scripts/qa_web.cjs
 ```
 
 Browser tests check search, editing, undo, error recovery, keyboard access and responsive use against the real API. They compare flight identities and constraints rather than saved screenshots or exact presentation strings. Failed cases save a screenshot under ignored `var/web-qa/`.
+
+The globe batches interaction updates into one draw per animation frame and renders
+country geometry in one SVG path. Versioned assets serve immutable releases from
+memory; only page requests and unknown releases scan for file changes. See
+[web performance notes](docs/web-performance.md) for the scope and local measurements.
 
 Keep generated reports, screenshots, replay files and build outputs under `var/`. GitHub uses label-triggered PR checks and automatic checks on `main`; see the [CI policy](.github/README.md).
