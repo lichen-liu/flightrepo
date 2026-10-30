@@ -29,10 +29,6 @@ function check(name, run, options = {}) {
       timezoneId: "Asia/Tokyo",
       reducedMotion: "reduce",
       ...options,
-      // WebKit allows gesture-triggered writes without a context permission.
-      ...(process.env.FLYJI_QA_BROWSER === "webkit" && options.permissions
-        ? {permissions:options.permissions.filter(permission => permission !== "clipboard-write")}
-        : {}),
     });
     const errors = [],
       requests = [];
@@ -1025,12 +1021,21 @@ check(
     assert.equal(Object.hasOwn(saved.query_inputs, "arrival"), false);
     assert.equal(Object.hasOwn(saved.query_inputs, "arrival-fold"), false);
     assert.equal(saved.query.horizon_end, ranged.query.horizon_end);
+    // Verify the app's exact link and its real write, without reading the OS
+    // clipboard: Linux WebKit does not grant that separate read permission.
+    await page.evaluate(() => {
+      const write = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = async text => {
+        await write(text);
+        window.copiedSearchLink = text;
+      };
+    });
     await page
       .getByRole("button", { name: "Share search", exact: true })
       .click();
     await expect(page.locator("#status")).toContainText("Search link copied");
     const copied = new URL(
-      await page.evaluate(() => navigator.clipboard.readText()),
+      await page.evaluate(() => window.copiedSearchLink),
     );
     assert.equal(copied.searchParams.get("last-date"), "2026-10-19");
     assert.equal(copied.searchParams.has("arrival"), false);
@@ -1059,7 +1064,7 @@ check(
       );
     }
   },
-  { permissions: ["clipboard-read", "clipboard-write"] },
+  { permissions: process.env.FLYJI_QA_BROWSER === "webkit" ? [] : ["clipboard-write"] },
 );
 
 check(
