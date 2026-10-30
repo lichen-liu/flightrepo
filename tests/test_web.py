@@ -64,6 +64,65 @@ def departure_request(**changes):
     return payload
 
 
+@pytest.mark.parametrize("basis", ["scheduled", "actual", "observed"])
+def test_local_and_utc_searches_return_identical_flight_facts(client, demo, basis):
+    records = []
+    for payload in demo[2]["flights"]:
+        record = FlightRecord.model_validate(payload)
+        records.append(
+            record.model_copy(
+                update={
+                    "departure_actual": record.departure_scheduled,
+                    "arrival_actual": record.arrival_scheduled,
+                    "departure_observed_lower": record.departure_scheduled,
+                    "departure_observed_upper": record.departure_scheduled + timedelta(minutes=1),
+                    "arrival_observed_lower": record.arrival_scheduled,
+                    "arrival_observed_upper": record.arrival_scheduled + timedelta(minutes=1),
+                }
+            )
+        )
+    demo[0].upsert(records)
+    local = client.post("/v1/itineraries/search/local", json=departure_request(time_basis=basis))
+    assert local.status_code == 200, local.text
+    local = local.json()
+    utc = client.post("/v1/itineraries/search", json=local["query"])
+    assert utc.status_code == 200, utc.text
+    assert local["items"]
+    assert local["items"] == utc.json()["items"]
+
+
+def test_public_response_converts_shared_legs_once_without_cross_response_caching(
+    demo, monkeypatch
+):
+    import server.public as public
+
+    reader = demo[1]
+    result = reader.search_local(LocalRouteSearchRequest(**departure_request()))
+    records = [record for item in result.items for record in item.legs]
+    unique = {id(record) for record in records}
+    assert len(records) > len(unique)
+    convert, calls = public.flight, []
+
+    def counted(record, refs):
+        calls.append(id(record))
+        return convert(record, refs)
+
+    monkeypatch.setattr(public, "flight", counted)
+    first = public.to_public(reader, result)
+    assert len(calls) == len(unique)
+    assert set(calls) == unique
+    assert len(first.items) == len(result.items)
+    original_number = first.items[0].legs[0].flight_number
+    records[0].flight_number = "UPDATED"
+    second = public.to_public(reader, result)
+    assert len(calls) == 2 * len(unique)
+    assert first.items[0].legs[0].flight_number == original_number
+    assert second.items[0].legs[0].flight_number == "UPDATED"
+    variant = records[0].model_copy(update={"flight_number": "DIFFERENT"})
+    distinct = public.to_public(reader, [records[0], variant])
+    assert [record.flight_number for record in distinct] == ["UPDATED", "DIFFERENT"]
+
+
 def test_date_availability_is_origin_specific_and_uses_requested_clock(client, demo):
     response = client.get("/v1/dates", params={"origin": "yyz"})
     assert response.status_code == 200
@@ -1245,7 +1304,7 @@ def test_family_favicon_is_local_valid_svg_served_with_browser_headers(client):
     assert "img-src 'self'" in response.headers["content-security-policy"]
 
 
-def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
+def test_family_shell_keeps_accessible_flight_workspace_and_daylight_theme(client):
     class Elements(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -1284,12 +1343,12 @@ def test_family_shell_keeps_accessible_flight_workspace_and_night_theme(client):
         tag == "aside" and attrs.get("aria-label") == "boboji.fyi tools" for tag, attrs in nodes
     )
     assert any(
-        tag == "meta" and attrs.get("name") == "color-scheme" and attrs.get("content") == "dark"
+        tag == "meta" and attrs.get("name") == "color-scheme" and attrs.get("content") == "light"
         for tag, attrs in nodes
     )
     css = client.get("/assets/app.css").text
-    assert "color-scheme: dark" in css
-    # Native controls use the night palette too. Browser QA establishes
+    assert "color-scheme: light" in css
+    # Native controls use the daylight palette too. Browser QA establishes
     # computed colors, contrast, layout and focus.
     assert "@media (prefers-reduced-motion: reduce)" in css
 

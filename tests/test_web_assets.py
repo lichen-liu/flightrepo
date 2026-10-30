@@ -55,3 +55,34 @@ def test_asset_history_is_bounded_and_retains_original_bytes(tmp_path):
         assert client.get(f"/assets/v-{versions[1]}/app.css").text == "second"
         assert client.get(f"/assets/v-{versions[2]}/app.css").text == "third"
         assert client.get("/assets/v-not-a-version/app.css").status_code == 404
+
+
+def test_known_immutable_assets_skip_filesystem_scans(tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text("/assets/app.css")
+    (tmp_path / "app.css").write_text("original styles")
+    assets = WebAssets(tmp_path)
+    _, version = assets.page()
+    app = FastAPI()
+    app.mount("/assets", assets)
+
+    def unexpected_scan():
+        raise AssertionError("known immutable assets must not scan the filesystem")
+
+    monkeypatch.setattr(assets, "release", unexpected_scan)
+    with TestClient(app) as client:
+        url = f"/assets/v-{version}/app.css"
+        assert client.get(url).text == "original styles"
+        assert client.head(url).status_code == 200
+        assert client.get(url, headers={"If-None-Match": f'"{version}"'}).status_code == 304
+        assert client.get(f"/assets/v-{version}/missing.css").status_code == 404
+
+
+def test_cold_worker_discovers_a_version_from_another_worker(tmp_path):
+    (tmp_path / "index.html").write_text("/assets/app.css")
+    (tmp_path / "app.css").write_text("shared styles")
+    _, version = WebAssets(tmp_path).page()
+    assets = WebAssets(tmp_path)
+    app = FastAPI()
+    app.mount("/assets", assets)
+    with TestClient(app) as client:
+        assert client.get(f"/assets/v-{version}/app.css").text == "shared styles"

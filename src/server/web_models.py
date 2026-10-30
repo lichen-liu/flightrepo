@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serial
 
 from core.connections import Airport
 from core.routing.models import (
+    DEFAULT_MAXIMUM_CONNECTION_MINUTES,
     Ranking,
     RouteSearchRequest,
     RoutingError,
@@ -34,7 +35,11 @@ class LocalRouteSearchRequest(BaseModel):
     arrival_timezone: str | None = None
     max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     minimum_connection_minutes: int = Field(default=45, ge=0)
-    maximum_connection_minutes: int | None = Field(default=None, ge=0)
+    maximum_connection_minutes: int | None = Field(
+        default=DEFAULT_MAXIMUM_CONNECTION_MINUTES,
+        ge=0,
+        description="Maximum wait per connection in minutes; defaults to 7 days. Null means unlimited.",
+    )
     allow_airport_change: bool = False
     avoid_airports: tuple[str, ...] = Field(default=())
     ranking: Ranking = "fewest_legs"

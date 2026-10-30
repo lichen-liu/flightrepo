@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 ENGINE_VERSION = "routing-8"
+DEFAULT_MAXIMUM_CONNECTION_MINUTES = 7 * 24 * 60
 Ranking = Literal["fewest_legs", "shortest_elapsed", "earliest_arrival"]
 TimeBasis = Literal["scheduled", "actual", "observed"]
 ViaAirports = str | list[str] | None
@@ -99,7 +100,11 @@ class RouteSearchRequest(BaseModel):
     horizon_end: datetime | None = None
     max_legs: int | None = Field(default=None, ge=1, description="Null means no leg-count limit.")
     minimum_connection_minutes: int = Field(default=45, ge=0)
-    maximum_connection_minutes: int | None = Field(default=None, ge=0)
+    maximum_connection_minutes: int | None = Field(
+        default=DEFAULT_MAXIMUM_CONNECTION_MINUTES,
+        ge=0,
+        description="Maximum wait per connection in minutes; defaults to 7 days. Null means unlimited.",
+    )
     allow_airport_change: bool = False
     via_airport: ViaAirports = Field(
         default=None,

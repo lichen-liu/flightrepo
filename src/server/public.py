@@ -326,10 +326,20 @@ def to_public(store, value):
     else:
         raise TypeError("Unsupported public result")
     refs = references(store, records) if records else {}
+    converted = {}
+
+    def public_flight(record):
+        # Hydrated routes share record objects for common legs. Convert each
+        # object once per response; different objects with the same identity
+        # still retain their own facts, and later responses never reuse models.
+        key = id(record)
+        if key not in converted:
+            converted[key] = flight(record, refs)
+        return converted[key]
 
     def itinerary(item):
         data = {k: getattr(item, k) for k in ("departure", "arrival", "duration_minutes")}
-        data["legs"] = [flight(r, refs) for r in item.legs]
+        data["legs"] = [public_flight(r) for r in item.legs]
         if hasattr(item, "connections"):
             return PublicRouteItinerary(
                 **data,
@@ -342,7 +352,7 @@ def to_public(store, value):
 
     if isinstance(value, list):
         return [
-            flight(item, refs) if isinstance(item, FlightRecord) else itinerary(item)
+            public_flight(item) if isinstance(item, FlightRecord) else itinerary(item)
             for item in value
         ]
     if isinstance(value, RouteSearchResult):
@@ -365,14 +375,14 @@ def to_public(store, value):
     data = value.model_dump(exclude={"legs", "options", "diagnostics", "connections"})
     return PublicPlan(
         **data,
-        legs=[flight(r, refs) for r in value.legs],
+        legs=[public_flight(r) for r in value.legs],
         connections=[PublicConnection.model_validate(c.model_dump()) for c in value.connections],
         diagnostics=diagnostics(value.diagnostics),
         options=[
             PublicOption(
-                flight=flight(o.flight, refs),
+                flight=public_flight(o.flight),
                 connection=PublicConnection.model_validate(o.connection.model_dump()),
-                tail=[flight(r, refs) for r in o.tail],
+                tail=[public_flight(r) for r in o.tail],
                 tail_connections=[
                     PublicConnection.model_validate(c.model_dump()) for c in o.tail_connections
                 ],

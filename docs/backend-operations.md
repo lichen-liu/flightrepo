@@ -22,7 +22,12 @@ the departure-window end. Local searches do the same when both `arrival_by_local
 and `onward_days` are omitted. A positive or zero `onward_days` explicitly searches
 that many elapsed days after the resolved departure-window end. Do not supply it
 with `arrival_by_local`. Calendar availability accepts the same `onward_days`
-filter. The browser defaults to all available data and no maximum layover.
+filter. Flight path searches default to a maximum layover of 7 days (10,080 minutes)
+per connection, including exactly 7 days. Set `maximum_connection_minutes` to a
+custom nonnegative minute count, or explicitly to `null` for unlimited waits.
+The legacy GET endpoint uses `max_connection_minutes`. The browser's editable
+**Maximum connection (days)** field defaults to 7, accepts fractional days,
+and allows unlimited waits when left blank.
 
 POST search uses `offset` and `limit` (at most 100 per response), returning
 `next_offset` or null. Continuation uses `option_offset` and `option_limit` (at

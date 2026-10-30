@@ -4,7 +4,11 @@ from datetime import datetime
 
 from core.contracts import RoutingQuery
 from core.models import Itinerary
-from core.routing.models import IncompleteSearchError, RouteSearchRequest
+from core.routing.models import (
+    DEFAULT_MAXIMUM_CONNECTION_MINUTES,
+    IncompleteSearchError,
+    RouteSearchRequest,
+)
 
 
 def build_itineraries(
@@ -15,7 +19,7 @@ def build_itineraries(
     end: datetime,
     max_legs: int | None = None,
     min_connection_minutes: int = 45,
-    max_connection_minutes: int | None = None,
+    max_connection_minutes: int | None = DEFAULT_MAXIMUM_CONNECTION_MINUTES,
     limit: int = 20,
     *,
     horizon_end: datetime | None = None,

@@ -29,6 +29,10 @@ function check(name, run, options = {}) {
       timezoneId: "Asia/Tokyo",
       reducedMotion: "reduce",
       ...options,
+      // WebKit allows gesture-triggered writes without a context permission.
+      ...(process.env.FLYJI_QA_BROWSER === "webkit" && options.permissions
+        ? {permissions:options.permissions.filter(permission => permission !== "clipboard-write")}
+        : {}),
     });
     const errors = [],
       requests = [];
@@ -72,6 +76,9 @@ async function result(page, endpoint, action) {
       endpoint.test(new URL(response.url()).pathname) &&
       response.request().method() === "POST",
   );
+  // An action failure closes the context; retain that original failure instead
+  // of reporting an unrelated unhandled wait rejection during cleanup.
+  pending.catch(() => {});
   await action();
   const response = await pending;
   assert.equal(response.status(), 200, await response.text());
@@ -100,8 +107,29 @@ async function search(
   await expect(page.locator("#search-time")).toHaveText(`Search time: ${data.search_time_seconds.toFixed(2)} s`);
   return data;
 }
+// The main flow stays compact; tests explicitly reveal specialist controls.
+async function openSearchOptions(page) {
+  await page.locator("#search-details").evaluate((details) => { details.open = true; });
+}
+async function openDataSettings(page) {
+  await openSearchOptions(page);
+  await page.locator("#data-time-settings").evaluate((details) => { details.open = true; });
+}
+async function openMapControls(page) {
+  await page.locator(".map-toolbar").evaluate((details) => { details.open = true; });
+}
+async function openJourneyTimeline(page) {
+  await page.locator(".schedule-panel").evaluate((details) => { details.open = true; });
+}
+async function revealControl(control) {
+  await control.evaluate((element) => {
+    for (let parent = element.parentElement; parent; parent = parent.parentElement)
+      if (parent.tagName === "DETAILS") parent.open = true;
+  });
+}
 async function chooseDate(page, name, date) {
   const input = page.locator(`input[name="${name}"]`);
+  await revealControl(input);
   await expect(input).toBeEnabled();
   await input.click();
   await page.locator(`#${name}-calendar button[data-date="${date}"]`).click();
@@ -126,7 +154,102 @@ check("flight details show the flight's stored aircraft type code", async (page)
     await route.fulfill({ response, json: data });
   });
   await open(page);
+  await expect(page.locator(".detail-evidence").first()).not.toHaveAttribute("open", "");
+  await page.locator(".detail-evidence summary").first().click();
   await expect(page.locator("#legs")).toContainText("Aircraft type: B738");
+  await expect(page.getByText("Aircraft type: B738", { exact: true })).toBeVisible();
+});
+
+check("observed route cards retain uncertainty and fit narrow phones", async (page) => {
+  const shift = (instant, minutes) => new Date(Date.parse(instant) + minutes * 60000).toISOString();
+  await page.route("**/v1/itineraries/search/local", async route => {
+    const response = await route.fetch(), data = await response.json();
+    for (const item of data.items) {
+      item.legs = item.legs.map(flight => ({...flight,time_basis:"observed",
+        departure_lower:shift(flight.departure_scheduled,-5),departure_upper:shift(flight.departure_scheduled,5),
+        arrival_lower:shift(flight.arrival_scheduled,-5),arrival_upper:shift(flight.arrival_scheduled,5)}));
+      item.departure = item.legs[0].departure_lower;
+      item.arrival = item.legs.at(-1).arrival_upper;
+      item.duration_minutes = (Date.parse(item.arrival) - Date.parse(item.departure)) / 60000;
+      item.connections.forEach((connection, i) => {
+        connection.wait_minutes = (Date.parse(item.legs[i+1].departure_lower) - Date.parse(item.legs[i].arrival_upper)) / 60000;
+      });
+    }
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  await expect(page.locator(".option-endpoint time").first()).toContainText("≈");
+  await expect(page.locator(".option-badges").first()).toContainText("Observed range");
+  await expect(page.locator(".option-duration strong").first()).toContainText("–");
+  await expect(page.locator(".option-timeline").first()).toHaveAttribute("aria-label", /Observed time bounds/);
+  await expect(page.locator(".detail-stop-duration").first()).toContainText("At least");
+  await page.setViewportSize({width:320,height:740});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  const bounds = await page.locator(".option-schedule").first().evaluate(element =>
+    [...element.children].map(child => ({left:child.getBoundingClientRect().left,right:child.getBoundingClientRect().right})));
+  assert.ok(bounds[0].right <= bounds[1].left && bounds[1].right <= bounds[2].left, "time columns do not overlap");
+});
+
+check("sorting keeps selection camera and cursor without applying search drafts", async (page) => {
+  const initial = await open(page);
+  await page.locator("[data-option]").nth(1).click();
+  const selected = identity((await exported(page)).selection.legs);
+  await page.locator("#globe-mode").click();
+  await expect(page.locator("#route-map")).toHaveAttribute("data-mode", "globe");
+  await openMapControls(page);
+  const land = page.locator("#route-map .map-land");
+  const fitted = await land.getAttribute("d");
+  await page.locator("#rotate-left").click();
+  await expect(land).not.toHaveAttribute("d", fitted);
+  const camera = await land.getAttribute("d");
+  await openJourneyTimeline(page);
+  await page.locator("#time-cursor").fill("500");
+  await page.getByLabel("Maximum connection (days)").fill("0.5");
+  await expect(page.locator("#draft-notice")).toBeVisible();
+  let submitted;
+  page.on("request", request => {
+    if (searchPath.test(new URL(request.url()).pathname)) submitted = request.postDataJSON();
+  });
+  const sorted = await result(page, searchPath, () => page.locator('[name="ranking"]').selectOption("shortest_elapsed"));
+  await expect(page.locator("#status")).toContainText("selected journey is unchanged");
+  assert.equal(sorted.query.ranking, "shortest_elapsed");
+  assert.equal(submitted.data_revision, initial.data_revision);
+  assert.equal(submitted.offset, 0);
+  assert.equal(submitted.maximum_connection_minutes, 10080);
+  assert.equal(new URL(page.url()).searchParams.get("maximum"), "10080");
+  assert.deepEqual(identity((await exported(page)).selection.legs), selected);
+  await expect(page.getByLabel("Maximum connection (days)")).toHaveValue("0.5");
+  await expect(page.locator("#draft-notice")).toBeVisible();
+  await expect(page.locator("#globe-mode")).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => await land.getAttribute("d") === camera).toBe(true);
+  await expect(page.locator("#time-cursor")).toHaveValue("500");
+});
+
+check("sorting and pagination lock their shared controls and recover after failure", async (page) => {
+  let hold = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route("**/v1/itineraries/search/local", async route => {
+    if (hold) await gate;
+    await route.continue({postData:JSON.stringify({...route.request().postDataJSON(),limit:2})});
+  });
+  await open(page);
+  await expect(page.locator("#more-routes")).toBeVisible();
+  hold = true;
+  const sorted = result(page, searchPath, () => page.locator('[name="ranking"]').selectOption("shortest_elapsed"));
+  await expect(page.locator("#more-routes")).toBeDisabled();
+  await expect(page.locator('[name="ranking"]')).toBeDisabled();
+  await expect(page.locator("#search-button")).toBeDisabled();
+  release();
+  await sorted;
+  await expect(page.locator("#more-routes")).toBeEnabled();
+  await expect(page.locator('[name="ranking"]')).toBeEnabled();
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await page.route("**/v1/itineraries/search/local", route => route.fulfill({status:503,json:{detail:{message:"Temporarily unavailable"}}}));
+  await page.locator('[name="ranking"]').selectOption("fewest_legs");
+  await expect(page.locator("#status")).toContainText("Could not reorder");
+  await expect(page.locator("#more-routes")).toBeEnabled();
+  await expect(page.locator('[name="ranking"]')).toHaveValue("shortest_elapsed");
+  await expect(page.locator("#search-button")).toBeEnabled();
 });
 
 check("journey pages append results and preserve the selected journey", async (page) => {
@@ -147,12 +270,19 @@ check("journey pages append results and preserve the selected journey", async (p
   assert.equal(requests.at(-1).data_revision, first.data_revision);
   assert.equal(await page.locator('[data-option][aria-pressed="true"]').innerText(), selected);
   assert.equal(new Set(await page.locator("[data-option]").allTextContents()).size, 4);
+  await page.locator("[data-option]").nth(3).click();
+  const laterSelection = (await exported(page)).selection;
+  const sorted = await result(page, searchPath, () => page.locator('[name="ranking"]').selectOption("shortest_elapsed"));
+  assert.ok(!sorted.items.some(item => item.itinerary_id === laterSelection.itinerary_id));
+  assert.deepEqual(identity((await exported(page)).selection.legs), identity(laterSelection.legs));
+  await expect(page.locator("#journey-status")).toContainText("Arrives at CDG");
 });
 
 check("arrival window is optional and survives shared search links", async (page) => {
   const initial = await open(page);
-  assert.equal(initial.query.maximum_connection_minutes, null);
-  await page.locator("#search-details > summary").click();
+  assert.equal(initial.query.maximum_connection_minutes, 10080);
+  await openSearchOptions(page);
+  await expect(page.getByLabel("Maximum connection (days)")).toHaveValue("7");
   await expect(page.locator('[name="onward-days"]')).toHaveValue("");
   await page.locator('[name="onward-days"]').fill("100");
   await page.locator('[name="onward-days"]').press("Tab");
@@ -160,6 +290,48 @@ check("arrival window is optional and survives shared search links", async (page
   const data = await search(page);
   assert.equal(Date.parse(data.query.horizon_end) - Date.parse(data.query.departure_end), 100 * 86400000);
   assert.equal(new URL(page.url()).searchParams.get("onward-days"), "100");
+});
+
+check("More options applies preferences and closes without discarding them", async (page) => {
+  await open(page);
+  const preferences = page.locator("#search-details"),
+    summary = page.locator("#search-details > summary"),
+    via = page.getByLabel("Via airports", { exact: true });
+  assert.equal(await preferences.evaluate((details) => details.open), false);
+  await summary.click();
+  await via.fill("LHR");
+  const data = await result(page, searchPath, () =>
+    page.getByRole("button", { name: "Apply & search", exact: true }).click(),
+  );
+  assert.deepEqual(data.query.via_airport, ["LHR"]);
+  assert.equal(await preferences.evaluate((details) => details.open), false);
+  await summary.click();
+  await expect(via).toHaveValue("LHR");
+  await page.locator("#page-title").click();
+  assert.equal(await preferences.evaluate((details) => details.open), false);
+  await summary.click();
+  await via.press("Escape");
+  assert.equal(await preferences.evaluate((details) => details.open), false);
+  await summary.click();
+  await expect(via).toHaveValue("LHR");
+});
+
+check("custom connection days reach search and survive shared links", async (page) => {
+  await open(page);
+  const maximum = page.getByLabel("Maximum connection (days)");
+  await expect(maximum).toBeVisible();
+  await expect(maximum).toHaveValue("7");
+  for (const [days, minutes] of [["10", 14400], ["0.5", 720], ["", null]]) {
+    await maximum.fill(days);
+    const data = await search(page);
+    assert.equal(data.query.maximum_connection_minutes, minutes);
+    assert.equal(new URL(page.url()).searchParams.get("maximum"), String(minutes ?? "any"));
+    const restored = await result(page, searchPath, () => page.reload());
+    assert.equal(restored.query.maximum_connection_minutes, minutes);
+      await expect(maximum).toHaveValue(days);
+  }
+  await result(page, searchPath, () => page.goto(demoSearch + "&maximum=360"));
+  await expect(maximum).toHaveValue("0.25");
 });
 
 check("stop count defaults to unbounded and survives links exports and connection editing", async (page) => {
@@ -176,7 +348,7 @@ check("stop count defaults to unbounded and survives links exports and connectio
   await expect(page.getByLabel("Maximum stops")).toHaveValue("5");
   const finite = await search(page);
   assert.equal(finite.query.max_legs, 6);
-  await page.locator("#search-details > summary").click();
+  await openSearchOptions(page);
   await page.getByLabel("Maximum stops").selectOption("any");
   const unlimited = await search(page);
   assert.equal(unlimited.query.max_legs, null);
@@ -327,6 +499,7 @@ check("delayed bootstrap preserves user input", async (page) => {
   await started;
   await page.getByLabel("From", { exact: true }).fill("LHR");
   await page.getByLabel("To", { exact: true }).fill("NRT");
+  await openDataSettings(page);
   await page.getByLabel("Input clock").selectOption("UTC");
   release();
   await expect(page.locator("#origin-coverage")).toContainText("Outbound:");
@@ -493,7 +666,7 @@ check("last departure calendar navigates months within the selected range", asyn
     dates: ["2026-10-17", "2026-11-01", "2026-11-16", "2026-12-01"],
   }));
   await open(page);
-  await page.locator("#search-details > summary").click();
+  await openSearchOptions(page);
   const input = page.locator('[name="last-date"]'),
     calendar = page.locator("#last-date-calendar"),
     month = calendar.getByRole("button", { name: "Month with departure data" });
@@ -509,6 +682,7 @@ check("last departure calendar navigates months within the selected range", asyn
   await calendar.locator('[data-date="2026-11-01"]').click();
   await expect(input).toHaveValue("2026-11-01");
   await chooseDate(page, "date", "2026-10-17");
+  await openSearchOptions(page);
   await input.click();
   await calendar.getByRole("button", { name: "Use first date only" }).click();
   await expect(input).toHaveValue("");
@@ -562,9 +736,11 @@ check("availability and counts follow the selected flight times without duplicat
     });
   });
   await open(page);
+  await openDataSettings(page);
   const times = page.getByLabel("Flight times"),
     availability = page.locator("#date-availability");
   await expect(page.locator("#dataset-tag")).toContainText("Published schedules · 12");
+  await openDataSettings(page);
   await times.selectOption("observed");
   await expect(availability).toContainText("Observed historical legs · America/Toronto");
   await expect(availability).toContainText("from YYZ");
@@ -573,12 +749,14 @@ check("availability and counts follow the selected flight times without duplicat
   await expect(page.locator("#applied-query")).toContainText("Published schedules");
   await search(page);
   await expect(page.locator("#applied-query")).toContainText("Observed historical legs");
+  await openDataSettings(page);
   await times.selectOption("actual");
   await expect(availability).toContainText("No selectable departure dates for YYZ → CDG");
   await expect(page.locator("#date")).toBeDisabled();
   await expect(page.locator("#date")).toHaveValue("2025-01-02");
   await expect(page.locator("#search-button")).toBeDisabled();
   await expect(page.locator("#dataset-tag")).toContainText("Reported actual times · 1");
+  await openDataSettings(page);
   await times.selectOption("scheduled");
   await expect(page.locator("#date")).toHaveValue("2026-10-17");
   await expect(page.locator("#search-button")).toBeEnabled();
@@ -614,6 +792,7 @@ check("late availability responses cannot overwrite a new origin and clock", asy
   await intercepted;
   await expect(page.locator("#search-button")).toBeDisabled();
   await expect(page.locator("#date")).toBeDisabled();
+  await openDataSettings(page);
   await page.getByLabel("Input clock").selectOption("UTC");
   await expect(page.locator("#date")).toHaveValue("2026-10-18");
   await expect(page.locator("#search-button")).toBeEnabled();
@@ -711,20 +890,28 @@ check("linked search disables calendar before statistics load when destination h
 
 check("endpoint airports are excluded from via suggestions and rejected when typed", async (page) => {
   await open(page);
+  await openSearchOptions(page);
   const via = page.getByLabel("Via airports", { exact: true });
+  await openSearchOptions(page);
   await via.fill("Y");
   await expect(page.locator('#via-suggestions [data-value="YYZ"]')).toHaveCount(0);
+  await openSearchOptions(page);
   await via.fill("C");
   await expect(page.locator('#via-suggestions [data-value="CDG"]')).toHaveCount(0);
   for (const code of ["YYZ", "CDG"]) {
+    await openSearchOptions(page);
     await via.fill(code);
+    await openSearchOptions(page);
     await via.press("Enter");
     await expect(page.locator("#error")).toContainText("Via airports must be intermediate airports");
   }
 });
 
 async function exported(page) {
+  if (await page.locator("#search-details").evaluate(details => details.open))
+    await page.locator("#search-details > summary").click();
   const pending = page.waitForEvent("download");
+  await revealControl(page.locator("#export"));
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
   const stream = await (await pending).createReadStream(),
     chunks = [];
@@ -753,6 +940,7 @@ async function next(
 }
 async function viaSearch(page, input = "ams", expected = ["AMS"]) {
   await open(page);
+  await openSearchOptions(page);
   await page.getByLabel("Via airports", { exact: true }).fill(input);
   const data = await search(page, () =>
     page.getByLabel("Via airports", { exact: true }).press("Enter"),
@@ -825,7 +1013,7 @@ check(
     assert.equal(new URL(page.url()).searchParams.has("arrival"), false);
     assert.equal(new URL(page.url()).searchParams.has("arrival-fold"), false);
 
-    await page.locator("#search-details > summary").click();
+    await openSearchOptions(page);
     await page.getByLabel("From", { exact: true }).fill("LHR");
     await expect(page.locator("#date-availability")).toContainText("2 departure dates");
     await chooseDate(page, "last-date", "2026-10-19");
@@ -838,7 +1026,7 @@ check(
     assert.equal(Object.hasOwn(saved.query_inputs, "arrival-fold"), false);
     assert.equal(saved.query.horizon_end, ranged.query.horizon_end);
     await page
-      .getByRole("button", { name: "Copy search link", exact: true })
+      .getByRole("button", { name: "Share search", exact: true })
       .click();
     await expect(page.locator("#status")).toContainText("Search link copied");
     const copied = new URL(
@@ -858,6 +1046,7 @@ check(
     );
     assert.equal(submitted.at(-1).body.horizon_end, ranged.query.horizon_end);
 
+    await openDataSettings(page);
     await page.getByLabel("Input clock").selectOption("UTC");
     const utc = await search(page);
     assert.equal(utc.query.departure_start, "2026-10-18T00:00:00Z");
@@ -905,9 +1094,7 @@ check(
     await page.getByLabel("Next departure").selectOption("any");
     await page.getByLabel("Allow a same-city airport change").check();
     await page.getByLabel("Next airport", { exact: true }).fill("ams");
-    const plan = await next(page, () =>
-      page.getByLabel("Next airport", { exact: true }).press("Enter"),
-    );
+    const plan = await next(page);
     assert.ok(plan.options.length);
     assert.ok(
       plan.options.every((option) => option.flight.destination_iata === "AMS"),
@@ -940,20 +1127,24 @@ check(
       identity(updated.legs),
     );
     assert.deepEqual((await exported(page)).query.via_airport, ["LHR", "AMS"]);
+    await result(page, searchPath, () => page.locator('[name="ranking"]').selectOption("shortest_elapsed"));
+    await expect(page.locator("#journey-status")).toContainText("Edited journey");
+    assert.deepEqual(identity((await exported(page)).selection.legs), identity(updated.legs));
+    await expect(page.getByRole("button", { name: "Undo edit", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Undo edit", exact: true }).click();
     assert.deepEqual(
       identity((await exported(page)).selection.legs),
       identity(before.legs),
     );
-    await expect(
-      page.getByRole("button", { name: "Undo edit", exact: true }),
-    ).toBeDisabled();
+    await expect(page.locator("#undo")).toBeDisabled();
   },
 );
 
 check("ordered via lists survive typing, links and export", async (page, context) => {
   await open(page);
+  await openSearchOptions(page);
   const via = page.getByLabel("Via airports", { exact: true });
+  await openSearchOptions(page);
   await via.pressSequentially("lhr ams");
   await expect(via).toHaveValue("LHR AMS");
   const data = await search(page, () => via.press("Enter"));
@@ -971,6 +1162,7 @@ check("ordered via lists survive typing, links and export", async (page, context
   await expect(reloaded.getByLabel("Via airports", { exact: true })).toHaveValue(
     "LHR, AMS",
   );
+  await openSearchOptions(page);
   await via.fill(" ams,, lhr, ");
   const reversed = await search(page, () => via.press("Enter"));
   assert.deepEqual(reversed.query.via_airport, ["AMS", "LHR"]);
@@ -982,20 +1174,25 @@ check("via suggestions preserve other codes and invalid lists preserve the journ
   await viaSearch(page, "LHR, AMS", ["LHR", "AMS"]);
   const via = page.getByLabel("Via airports", { exact: true }),
     before = (await exported(page)).selection;
+  await openSearchOptions(page);
   await via.fill("LHR, A");
   const appended = await page
     .locator("#via-suggestions [role=option]")
     .evaluateAll((options) => options.map((o) => o.dataset.value));
   assert.ok(appended.includes("LHR, AMS"));
   assert.ok(!appended.includes("LHR, LHR"));
+  await openSearchOptions(page);
   await via.press("ArrowDown");
   await expect(via).toHaveAttribute("aria-activedescendant", "via-option-0");
+  await openSearchOptions(page);
   await via.press("Enter");
   await expect(via).toHaveValue("LHR, AMS");
   await expect(via).toBeFocused();
   await expect(via).toHaveAttribute("aria-expanded", "false");
+  await openSearchOptions(page);
   await via.fill("LHR, LG, KEF");
   await via.evaluate((input) => input.setSelectionRange(6, 6));
+  await openSearchOptions(page);
   await via.press("ArrowRight");
   const replaced = await page
     .locator("#via-suggestions [role=option]")
@@ -1007,17 +1204,23 @@ check("via suggestions preserve other codes and invalid lists preserve the journ
   await expect(via).toBeFocused();
   await expect(via).toHaveAttribute("aria-expanded", "false");
   assert.equal(await via.evaluate((input) => input.selectionStart), 8);
+  await openSearchOptions(page);
   await via.fill("LHR, ");
   const choices = page.locator("#via-suggestions [role=option]");
   assert.ok(await choices.count() > 1);
+  await openSearchOptions(page);
   await via.press("ArrowUp");
   await expect(via).toHaveAttribute("aria-activedescendant", await choices.last().getAttribute("id"));
+  await openSearchOptions(page);
   await via.press("ArrowDown");
   await expect(via).toHaveAttribute("aria-activedescendant", await choices.first().getAttribute("id"));
+  await openSearchOptions(page);
   await via.press("Escape");
   await expect(via).toHaveValue("LHR, ");
   await expect(via).toHaveAttribute("aria-expanded", "false");
+  await openSearchOptions(page);
   await via.press("ArrowDown");
+  await openSearchOptions(page);
   await via.press("Tab");
   await expect(via).not.toBeFocused();
   await expect(via).toHaveValue("LHR, ");
@@ -1027,17 +1230,22 @@ check("via suggestions preserve other codes and invalid lists preserve the journ
     ["LHR, FRA1", "Invalid airport code: FRA1"],
     ["YYZ, AMS", "endpoint"],
   ]) {
+    await openSearchOptions(page);
     await via.fill(value);
+    await openSearchOptions(page);
     await via.press("Enter");
     await expect(page.locator("#error")).toContainText(error);
+    await expect(page.locator("#error")).toBeVisible();
     assert.deepEqual(
       identity((await exported(page)).selection.legs),
       identity(before.legs),
     );
   }
-  await page.locator("#search-details > summary").click();
+  await openSearchOptions(page);
   await page.locator("#search-form [name=stops]").selectOption("3");
+  await openSearchOptions(page);
   await via.fill("LHR, AMS, KEF, YUL");
+  await openSearchOptions(page);
   await via.press("Enter");
   await expect(page.locator("#error")).toContainText("choose Any number");
   assert.deepEqual(
@@ -1050,12 +1258,13 @@ check(
   "connection bounds and avoided airports reach the engine",
   async (page) => {
     await open(page);
-    await page.locator("#search-details > summary").click();
+    await openSearchOptions(page);
     await page
       .locator("#search-form")
       .getByLabel("Minimum connection (minutes)")
       .fill("120");
-    await page.getByLabel("Maximum connection").selectOption("any");
+    await page.getByLabel("Maximum connection (days)").fill("");
+    await openSearchOptions(page);
     await page.getByLabel("Avoid airports").fill("ams");
     const data = await search(page);
     assert.equal(data.query.minimum_connection_minutes, 120);
@@ -1121,8 +1330,9 @@ check("partial searches differ from exhaustive empty results", async (page) => {
   );
   await page.unroute("**/v1/itineraries/search/local");
   await page.getByLabel("To", { exact: true }).fill("NRT");
-  await page.locator("#search-details > summary").click();
-  await page.locator('[name="maximum"]').selectOption("360");
+  await openSearchOptions(page);
+  await page.getByLabel("Maximum connection (days)").fill("0.25");
+  await openDataSettings(page);
   await page.getByLabel("Input clock").selectOption("UTC");
   const empty = await search(page);
   assert.equal(empty.diagnostics.exhaustive, true);
@@ -1173,6 +1383,7 @@ check(
     ).toBeDisabled();
     await page.getByLabel("From", { exact: true }).fill("yyz");
     await page.getByLabel("To", { exact: true }).fill("cdg");
+    await openDataSettings(page);
     await page.getByLabel("Input clock").selectOption("UTC");
     await expect(page.locator("#date-availability")).toContainText("UTC");
     const date = await page
@@ -1221,24 +1432,27 @@ check(
       page.getByRole("img", { name: /flight route|world map/i }),
     ).toBeVisible();
     await expect(page.locator("#map-error")).toBeHidden();
+    await openMapControls(page);
     await page.getByRole("button", { name: "Map", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Map", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "Globe", exact: true }).click();
+    await page.getByRole("button", { name: "Earth", exact: true }).click();
     const mapImage = page.getByRole("img", { name: /flight route|world map/i });
     await expect(mapImage.locator("path").first()).toBeAttached();
-    const cameraBefore = await mapImage.screenshot();
+    await expect(mapImage).toHaveAttribute("data-mode", "globe");
+    const cameraBefore = await mapImage.locator(".map-land").getAttribute("d");
     await page
       .getByRole("button", { name: "Tilt globe up", exact: true })
       .click();
     await expect
-      .poll(async () => !(await mapImage.screenshot()).equals(cameraBefore))
+      .poll(async () => await mapImage.locator(".map-land").getAttribute("d") !== cameraBefore)
       .toBe(true);
     await page.getByRole("button", { name: "Zoom in", exact: true }).click();
     await page
       .getByRole("button", { name: "Fit journey", exact: true })
       .click();
+    await openJourneyTimeline(page);
     await page.getByRole("slider", { name: /^Journey time/ }).fill("500");
     const cursor = await page
       .getByRole("slider", { name: /^Journey time/ })
@@ -1283,7 +1497,9 @@ check(
   "phone workspace remains usable without horizontal overflow",
   async (page) => {
     await open(page);
+    await openSearchOptions(page);
     const via = page.getByLabel("Via airports", { exact: true });
+    await openSearchOptions(page);
     await via.fill("LHR, A");
     await page.getByRole("option", { name: /^AMS / }).tap();
     await expect(via).toHaveValue("LHR, AMS");
@@ -1291,16 +1507,20 @@ check(
     const views = page.getByRole("navigation", { name: "Workspace view" });
     for (const width of [320, 390, 736, 1180]) {
       await page.setViewportSize({ width, height: 900 });
+      await openSearchOptions(page);
       await via.fill("LHR, ");
       await expect(via).toHaveAttribute("aria-expanded", "true");
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await openSearchOptions(page);
       await via.press("Escape");
       if (await views.isVisible()) {
         await views.getByRole("button", { name: "Journey", exact: true }).tap();
+        await revealControl(page.locator("#export"));
         await expect(
           page.getByRole("button", { name: "Export JSON", exact: true }),
         ).toBeVisible();
         await views.getByRole("button", { name: "Map", exact: true }).tap();
+        await openMapControls(page);
         await expect(
           page.getByRole("button", { name: "Fit journey", exact: true }),
         ).toBeVisible();
@@ -1373,6 +1593,30 @@ check("stale catalog timezone is corrected by date availability before search", 
   await expect(page.locator("#error")).toBeHidden();
 });
 
+check("editor timezone errors refresh input clocks while selected facts stay frozen", async (page) => {
+  await page.route("**/v1/itineraries/search/local", async route => {
+    const response = await route.fetch(), data = await response.json();
+    data.airports.find(airport => airport.iata === "LHR").timezone = "Asia/Tokyo";
+    await route.fulfill({response,json:data});
+  });
+  await open(page);
+  const before = identity((await exported(page)).selection.legs);
+  await edit(page);
+  await page.getByLabel("Next departure").selectOption("after");
+  await page.getByLabel("Not before", {exact:true}).fill("2026-10-18T09:00");
+  const failed = page.waitForResponse(response => new URL(response.url()).pathname === "/v1/time/resolve");
+  await page.locator("#find-next").click();
+  const rejected = await failed;
+  assert.equal(rejected.status(), 422);
+  assert.equal((await rejected.json()).detail.code, "airport_timezone_changed");
+  await expect(page.locator("#editor-zone")).toContainText("Europe/London");
+  await expect(page.locator("#find-next")).toBeEnabled();
+  await next(page);
+  await expect(page.locator("#editor-error")).toBeHidden();
+  assert.deepEqual(identity((await exported(page)).selection.legs), before);
+  assert.equal((await exported(page)).selection.airports.find(airport => airport.iata === "LHR").timezone, "Asia/Tokyo");
+});
+
 check("timezone changes after loading dates are corrected before retry", async (page) => {
   let actualZone, departureDate;
   await page.route("**/v1/bootstrap", async (route) => {
@@ -1436,11 +1680,14 @@ check("slow searches show indeterminate activity, elapsed time and a map overlay
   await expect(page.locator("#request-label")).toHaveText("Finding flight routes");
   await expect(page.locator("#request-progress progress")).not.toHaveAttribute("value");
   await expect(page.locator("#map-loading")).toBeVisible();
+  await expect(page.locator("[data-edit]").first()).toBeDisabled();
+  await expect(page.locator("#connection-editor")).toBeHidden();
   await expect(page.locator("#request-elapsed")).not.toHaveText("0s");
   await expect(page.locator("[data-option]").first()).toBeVisible();
   release(); await pending;
   await expect(page.locator("#map-loading")).toBeHidden();
   await expect(page.locator("#request-progress")).toBeHidden();
+  await expect(page.locator("[data-edit]").first()).toBeEnabled();
 });
 
 check("failed searches clear loading activity and retain the previous journey", async (page) => {
@@ -1452,17 +1699,53 @@ check("failed searches clear loading activity and retain the previous journey", 
   await expect(page.locator("#map-loading")).toBeHidden();
   await expect(page.locator("#request-progress")).toBeHidden();
   assert.deepEqual(identity((await exported(page)).selection.legs), before);
+  await expect(page.locator("[data-edit]").first()).toBeEnabled();
 });
 
-check("route map leads the desktop page and options visualize flights and connections", async (page) => {
+check("a replacement search cancels an in-flight connection lookup", async (page) => {
   await open(page);
-  const map = await page.locator(".map-panel").boundingBox(), form = await page.locator(".search-section").boundingBox();
-  assert.ok(Math.abs(map.y - form.y) < 2);
-  assert.ok(map.x >= form.x + form.width);
+  let release, started, completed;
+  const gate = new Promise(resolve => { release = resolve; });
+  const incoming = new Promise(resolve => { started = resolve; });
+  const finished = new Promise(resolve => { completed = resolve; });
+  await page.route("**/v1/plans/rebuild", async route => {
+    started();
+    await gate;
+    try { await route.continue(); } catch { /* The replacement search aborts this read. */ }
+    finally { completed(); }
+  });
+  await edit(page);
+  await page.locator("#find-next").click();
+  await incoming;
+  const replacement = await search(page);
+  release();
+  await finished;
+  await expect(page.locator("#connection-editor")).toBeHidden();
+  await expect(page.locator("#next-options")).toBeEmpty();
+  assert.deepEqual(identity((await exported(page)).selection.legs), identity(replacement.items[0].legs));
+  await edit(page);
+  await expect(page.locator("#next-options")).toBeEmpty();
+  await expect(page.locator("#find-next")).toBeEnabled();
+});
+
+check("compact search leads a results-first workspace with a selected journey canvas", async (page) => {
+  await open(page);
+  await expect(page.locator("#route-map .map-land")).toHaveCount(1);
+  const map = await page.locator(".map-panel").boundingBox(),
+    form = await page.locator(".search-section").boundingBox(),
+    options = await page.locator(".options-panel").boundingBox();
+  assert.ok(options.y >= form.y + form.height);
+  assert.ok(map.y >= form.y + form.height);
+  assert.ok(map.x >= options.x + options.width);
+  assert.equal(await page.locator("#search-details").evaluate((details) => details.open), false);
+  await expect(page.getByLabel("Maximum connection (days)")).toBeVisible();
   await expect(page.locator(".option-timeline").first()).toBeVisible();
-  await expect(page.locator(".route-node.endpoint").first()).toBeVisible();
+  await expect(page.locator(".option-comparison").first()).toBeVisible();
+  await expect(page.locator(".option-facts").first()).toBeVisible();
+  await expect(page.locator("#route-mode")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#journey-summary")).toContainText("Total journey");
   await page.emulateMedia({reducedMotion:"reduce",colorScheme:"dark"});
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), "light");
   await expect(page.locator("#route-map")).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth), false);
 });
@@ -1476,6 +1759,8 @@ check("globe fit keeps a distant origin visible beside clustered connection airp
     await route.fulfill({response,json:data});
   });
   await open(page);
+  await openMapControls(page);
+  await page.getByRole("button", { name: "Earth", exact: true }).click();
   for (const code of ["YYZ", "LHR", "CDG"])
     await expect(page.locator("#route-map .map-airport-label", {hasText:code})).toBeVisible();
   await page.getByRole("button", {name:"Fit journey",exact:true}).click();
@@ -1496,6 +1781,50 @@ check("fresh visits keep airports blank and do not search automatically", async 
   await expect(page.locator("#date")).toBeDisabled();
   await expect(page.locator("#search-button")).toBeDisabled();
   assert.deepEqual(calls, []);
+  await expect(page.locator('button[data-view="journey"]')).toBeDisabled();
+  await expect(page.locator('button[data-view="map"]')).toBeEnabled();
+});
+
+check("date availability keeps Journey disabled until a route is selected", async (page) => {
+  const bootstrap = page.waitForResponse("**/v1/bootstrap");
+  await page.goto(base);
+  await bootstrap;
+  await page.getByLabel("From", {exact:true}).fill("YYZ");
+  const available = page.waitForResponse("**/v1/search-availability?*");
+  await page.getByLabel("To", {exact:true}).fill("CDG");
+  await available;
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(page.locator('button[data-view="journey"]')).toBeDisabled();
+  await expect(page.locator('button[data-view="map"]')).toBeEnabled();
+  const data = await search(page);
+  assert.ok(data.items.length);
+  await expect(page.locator('button[data-view="journey"]')).toBeEnabled();
+});
+
+check("Earth survives reload and remains available before and after an empty search", async (page) => {
+  await open(page);
+  await page.locator("#globe-mode").click();
+  await result(page, searchPath, () => page.reload());
+  await expect(page.locator("#globe-mode")).toHaveAttribute("aria-pressed", "true");
+  await page.goto(base);
+  await expect(page.locator("#globe-mode")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#route-map .map-land")).toBeAttached();
+  await expect(page.locator(".map-panel")).toBeVisible();
+  await open(page);
+  await page.getByLabel("Maximum connection (days)").fill("0.05");
+  const empty = await search(page);
+  assert.equal(empty.items.length, 0);
+  await expect(page.locator("#options")).toContainText("No matching route yet");
+  await expect(page.locator(".map-panel")).toBeVisible();
+  await page.getByRole("button", {name:"Review preferences",exact:true}).click();
+  await expect(page.locator("#search-details")).toHaveAttribute("open", "");
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.locator('[data-view="map"]').filter({hasText:"Map"})).toBeEnabled();
+  await page.getByRole("button", {name:"Map",exact:true}).click();
+  await expect(page.locator(".map-panel")).toBeVisible();
+  await expect(page.locator("#globe-mode")).toHaveAttribute("aria-pressed", "true");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
 });
 
 check("airport lookup supports names keyboard selection clearing and swapping", async (page) => {

@@ -5,7 +5,7 @@ import sqlite3
 from core.connections import Airport
 from core.models import FlightRecord
 from core.prompts import ask
-from core.routing.models import RouteSearchRequest
+from core.routing.models import DEFAULT_MAXIMUM_CONNECTION_MINUTES, RouteSearchRequest
 from core.storage import SQLiteConnection
 from ingestion.updater import FlightUpdater
 from server.reader import FlightReader
@@ -205,7 +205,9 @@ def route_request():
                 "avoid_airports": ask("Avoid airports (space separated)", "-"),
                 "max_legs": ask("Maximum legs", "3"),
                 "minimum_connection_minutes": ask("Minimum connection minutes", "45"),
-                "maximum_connection_minutes": ask("Maximum connection minutes", "360"),
+                "maximum_connection_minutes": ask(
+                    "Maximum connection minutes", str(DEFAULT_MAXIMUM_CONNECTION_MINUTES)
+                ),
                 "ranking": ask(
                     "Ranking: fewest_legs, shortest_elapsed, earliest_arrival", "fewest_legs"
                 ),

@@ -299,7 +299,11 @@ def parser():
     search.add_argument("--avoid", nargs="+", help="airports to avoid")
     search.add_argument("--max-legs", type=int)
     search.add_argument("--min-connection", type=int)
-    search.add_argument("--max-connection", type=int)
+    search.add_argument(
+        "--max-connection",
+        type=int,
+        help="maximum wait per connection in minutes (default: 7 days)",
+    )
     search.add_argument("--allow-airport-change", action="store_true", default=None)
     search.add_argument(
         "--ranking", choices=("fewest_legs", "shortest_elapsed", "earliest_arrival")

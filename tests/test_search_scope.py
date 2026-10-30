@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 from public_helpers import rebuild_payload
 from test_routing import BASE, continuation_request, flight, identity, query
 
+from admin import client as admin
 from core.connections import Airport, AirportTransfer
+from core.itineraries import build_itineraries
 from core.planning import rebuild_from_snapshot
 from core.routing.search import search_routes
 from core.routing.snapshot import RoutingSnapshot
@@ -32,7 +34,7 @@ def database(tmp_path):
         app.dependency_overrides.clear()
 
 
-def test_long_journey_calendar_and_default_search_share_available_data(database):
+def test_long_journey_calendar_and_unlimited_search_share_available_data(database):
     writer, reader, client = database
     writer.upsert(
         [
@@ -55,8 +57,12 @@ def test_long_journey_calendar_and_default_search_share_available_data(database)
     response = client.post("/v1/itineraries/search", json=body)
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len(data["items"]) == 1 and data["diagnostics"]["exhaustive"]
+    assert data["items"] == [] and data["diagnostics"]["exhaustive"]
     assert data["query"]["horizon_end"] == availability["arrival_end"]
+    assert data["query"]["maximum_connection_minutes"] == 10080
+    body["maximum_connection_minutes"] = None
+    data = client.post("/v1/itineraries/search", json=body).json()
+    assert len(data["items"]) == 1 and data["diagnostics"]["exhaustive"]
     assert data["query"]["maximum_connection_minutes"] is None
     bounded = client.get(
         "/v1/search-availability",
@@ -71,6 +77,124 @@ def test_long_journey_calendar_and_default_search_share_available_data(database)
     body["horizon_end"] = (BASE + timedelta(days=7)).isoformat()
     assert client.post("/v1/itineraries/search", json=body).json()["items"] == []
     assert reader.routing_snapshot(query(horizon_end=None)).flights
+
+
+@pytest.mark.parametrize(
+    "overrides,expected",
+    [
+        ({}, {"under", "boundary"}),
+        ({"maximum_connection_minutes": 10079}, {"under"}),
+        ({"maximum_connection_minutes": 10081}, {"under", "boundary", "over"}),
+        ({"maximum_connection_minutes": None}, {"under", "boundary", "over"}),
+    ],
+)
+def test_connection_limit_defaults_and_overrides_across_search_entry_points(
+    database, overrides, expected
+):
+    writer, reader, client = database
+    records = (
+        flight("first", "AAA", "BBB", 0, 30),
+        *(
+            flight(name, "BBB", "EEE", 30 + gap, 90 + gap)
+            for name, gap in (("under", 10079), ("boundary", 10080), ("over", 10081))
+        ),
+    )
+    writer.upsert(records)
+    writer.update_airports([Airport(iata="AAA", timezone="UTC")], [])
+    request = query(horizon_end=None, **overrides)
+
+    def destinations(items):
+        return {item.legs[-1].provider_id for item in items}
+
+    for best_first in (False, True):
+        result = search_routes(request, RoutingSnapshot(records), best_first=best_first)
+        assert destinations(result.items) == expected
+        assert result.diagnostics.exhaustive
+    assert destinations(reader.search_itineraries(request).items) == expected
+    legacy_overrides = (
+        {"max_connection_minutes": overrides["maximum_connection_minutes"]} if overrides else {}
+    )
+    assert (
+        destinations(
+            build_itineraries(
+                reader, "AAA", "EEE", BASE, BASE + timedelta(days=1), **legacy_overrides
+            )
+        )
+        == expected
+    )
+    bodies = {
+        "/v1/itineraries/search": {
+            "origin": "AAA",
+            "destination": "EEE",
+            "departure_start": BASE.isoformat(),
+            "departure_end": (BASE + timedelta(days=1)).isoformat(),
+            **overrides,
+        },
+        "/v1/itineraries/search/local": {
+            "origin": "AAA",
+            "destination": "EEE",
+            "departure_date": str(BASE.date()),
+            **overrides,
+        },
+    }
+    for endpoint, body in bodies.items():
+        response = client.post(endpoint, json=body)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["query"]["maximum_connection_minutes"] == overrides.get(
+            "maximum_connection_minutes", 10080
+        )
+        assert {item["legs"][-1]["flight_number"][1:] for item in data["items"]} == expected
+    if not overrides or overrides["maximum_connection_minutes"] is not None:
+        response = client.get(
+            "/v1/itineraries",
+            params={
+                "origin": "AAA",
+                "destination": "EEE",
+                "start": BASE.isoformat(),
+                "end": (BASE + timedelta(days=1)).isoformat(),
+                **legacy_overrides,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert {item["legs"][-1]["flight_number"][1:] for item in response.json()} == expected
+
+
+def test_connection_default_limits_each_gap_without_limiting_total_journey(database):
+    writer, reader, _ = database
+    records = (
+        flight("first", "AAA", "BBB", 0, 30),
+        flight("middle", "BBB", "CCC", 30 + 10080, 60 + 10080),
+        flight("valid", "CCC", "EEE", 60 + 2 * 10080, 120 + 2 * 10080),
+        flight("invalid", "CCC", "EEE", 61 + 2 * 10080, 121 + 2 * 10080),
+    )
+    writer.upsert(records)
+    request = query(horizon_end=None)
+    for result in (
+        search_routes(request, RoutingSnapshot(records)),
+        reader.search_itineraries(request),
+    ):
+        assert [item.legs[-1].provider_id for item in result.items] == ["valid"]
+        assert result.items[0].duration_minutes > 10080
+
+
+def test_cli_search_defaults_to_seven_days_and_accepts_custom_limit():
+    flags = [
+        "search",
+        "--origin",
+        "AAA",
+        "--destination",
+        "EEE",
+        "--start",
+        BASE.isoformat(),
+        "--end",
+        (BASE + timedelta(days=1)).isoformat(),
+    ]
+    assert (
+        admin.search_request(admin.parser().parse_args(flags)).maximum_connection_minutes == 10080
+    )
+    custom = admin.search_request(admin.parser().parse_args([*flags, "--max-connection", "20000"]))
+    assert custom.maximum_connection_minutes == 20000
 
 
 def test_local_calendar_dates_across_dst_and_long_ranges():
