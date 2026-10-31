@@ -1236,10 +1236,12 @@ $("options").addEventListener("click", (event) => {
     setView("journey");
     $("journey-heading").focus({ preventScroll: true });
     $("journey-heading").scrollIntoView({ block: "start" });
-  } else
+  } else {
+    document.querySelector(".journey-workspace").scrollTop = 0;
     $("options")
       .querySelector(`[data-option="${button.dataset.option}"]`)
-      ?.focus();
+      ?.focus({ preventScroll: true });
+  }
 });
 $("legs").addEventListener("click", (event) => {
   const edit = event.target.closest("[data-edit]"),

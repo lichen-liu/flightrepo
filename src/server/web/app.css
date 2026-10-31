@@ -179,6 +179,19 @@ button.primary:not(:disabled):hover { background: #293cc8; border-color: #293cc8
 #more-routes { width: 100%; margin-top: 14px; font-size: 12px; border-style: dashed; background: transparent; }
 .empty { text-align: center; padding: 55px 24px; font-size: 13px; line-height: 1.8; color: var(--muted); border: 1px dashed #d6d8e1; border-radius: 14px; background: #ffffff70; }
 .journey-workspace { display: flex; flex-direction: column; min-width: 0; gap: 16px; }
+@media (min-width: 721px) {
+  .journey-workspace {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+  }
+  .journey-workspace > * { flex-shrink: 0; }
+}
 .map-panel { position: relative; order: 0; min-width: 0; border-radius: 17px; border: 1px solid #dfe1f1; background: #e9ecfa; overflow: hidden; }
 .map-panel > .panel-heading { padding: 19px 23px 8px; }
 #map-heading { font: 9px var(--mono); text-transform: uppercase; letter-spacing: .12em; color: #5f6890; }
