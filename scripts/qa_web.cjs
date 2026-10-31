@@ -1890,6 +1890,63 @@ check("compact search leads a results-first workspace with a selected journey ca
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth > innerWidth), false);
 });
 
+check("desktop journey follows options and changing selection keeps the list in place", async (page) => {
+  const data = await open(page);
+  await page.locator('[data-option="1"]').click();
+  const panel = page.getByRole("region", { name: "Selected journey map and details" }),
+    option = page.locator('[data-option="4"]');
+  await option.scrollIntoViewIfNeeded();
+  const listScroll = await page.evaluate(() => scrollY);
+  assert.ok(listScroll > 300, "the user has scrolled down the options");
+  assert.ok(Math.abs((await panel.boundingBox()).y - 16) < 2, "the journey stays near the viewport top");
+  await panel.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  assert.ok(await panel.evaluate(element => element.scrollTop > 0), "long details are scrollable");
+  await option.click();
+  await expect(option).toBeFocused();
+  await expect(option).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBe(0);
+  assert.ok(Math.abs(await page.evaluate(() => scrollY) - listScroll) < 2, "selection preserves the options position");
+  const map = await page.locator(".map-panel").boundingBox(),
+    heading = await page.locator("#journey-heading").boundingBox();
+  assert.ok(map.y >= 0 && map.y < 20);
+  assert.ok(heading.y > map.y && heading.y < 850, "new journey details are in view");
+  assert.deepEqual(identity((await exported(page)).selection.legs), identity(data.items[4].legs));
+}, { viewport: { width: 1180, height: 900 } });
+
+check("short desktop lets keyboard users scroll every journey leg without losing the options", async (page) => {
+  await open(page);
+  await page.locator('[data-option="1"]').click();
+  await page.locator('[data-option="4"]').scrollIntoViewIfNeeded();
+  const panel = page.getByRole("region", { name: "Selected journey map and details" });
+  await panel.focus();
+  const listScroll = await page.evaluate(() => scrollY);
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  assert.ok(Math.abs(await page.evaluate(() => scrollY) - listScroll) < 2);
+  for (let count = 0; count < 6; count++) await page.keyboard.press("PageDown");
+  await expect.poll(() => panel.evaluate(element => element.scrollTop + element.clientHeight >= element.scrollHeight - 2)).toBe(true);
+  const lastLeg = await page.locator("#legs .leg").last().boundingBox(),
+    bounds = await panel.boundingBox();
+  assert.ok(lastLeg.y + lastLeg.height <= bounds.y + bounds.height + 2, "the final leg is reachable");
+  assert.ok(lastLeg.height > 100, "details do not shrink inside the bounded panel");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+}, { viewport: { width: 900, height: 620 } });
+
+check("phone journey selection still switches views and the desktop breakpoint restores the panel", async (page) => {
+  await open(page);
+  await page.locator('[data-option="1"]').tap();
+  await expect(page.locator(".workspace")).toHaveAttribute("data-view", "journey");
+  await expect(page.locator("#journey-heading")).toBeInViewport();
+  const panel = page.getByRole("region", { name: "Selected journey map and details" });
+  assert.equal(await panel.evaluate(element => getComputedStyle(element).position), "static");
+  assert.equal(await panel.evaluate(element => getComputedStyle(element).maxHeight), "none");
+  for (const width of [720, 721, 1180, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(await panel.evaluate(element => getComputedStyle(element).position), width > 720 ? "sticky" : "static");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
+}, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
 check("globe fit keeps a distant origin visible beside clustered connection airports", async (page) => {
   await page.route("**/v1/itineraries/search/local", async route => {
     const response = await route.fetch(), data = await response.json();
