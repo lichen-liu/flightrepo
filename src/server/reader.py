@@ -33,6 +33,7 @@ from core.tzdb import zone as ZoneInfo
 from server.archive_queries import AIRPORT_PAIRS_CTE, has_airport_pair_index
 from server.reachability import TimeEdge, reverse_reachable_flights
 from server.routing_projection import calculate_database_routes, project_routes
+from server.search_calendar import SearchCalendar, day_bounds
 from server.web_models import (
     AirportCoverage,
     AirportTraffic,
@@ -1110,6 +1111,8 @@ class FlightReader(SQLiteConnection):
         departure_date: date | None = None,
         departure_last_date: date | None = None,
         onward_days: int | None = None,
+        *,
+        include_counts: bool = True,
     ) -> SearchAvailability:
         origin, destination = airport_code(origin), airport_code(destination)
         if onward_days is not None and onward_days < 0:
@@ -1132,6 +1135,33 @@ class FlightReader(SQLiteConnection):
                     )
                 zone = row[0]
             timezone = ZoneInfo(zone)
+            if not include_counts:
+                calendar = SearchCalendar(connection, origin, destination, basis, zone, onward_days)
+                outbound_days = calendar.departure_days()
+                dates = [day for day in outbound_days if calendar.has_arrivals(day)]
+                selected = (
+                    departure_date if departure_date in dates else next(iter(dates), departure_date)
+                )
+                last = (
+                    departure_last_date
+                    if departure_last_date in dates and selected and departure_last_date >= selected
+                    else None
+                )
+                start, end = (
+                    day_bounds(selected, zone, last, onward_days) if selected else (None, None)
+                )
+                return SearchAvailability(
+                    origin=origin,
+                    destination=destination,
+                    timezone=zone,
+                    time_basis=basis,
+                    dates=dates,
+                    selected_date=selected,
+                    outbound=None if selected in outbound_days else 0,
+                    inbound=None if selected and calendar.has_arrivals(selected, last) else 0,
+                    arrival_start=start,
+                    arrival_end=end if onward_days is not None else None,
+                )
             outbound = {}
             for lower, upper in connection.execute(
                 "SELECT departure_lower_us,departure_upper_us FROM searchable_legs "

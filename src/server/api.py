@@ -147,11 +147,19 @@ def search_availability(
     departure_date: date | None = None,
     departure_last_date: date | None = None,
     onward_days: Annotated[int | None, Query(ge=0)] = None,
+    include_counts: bool = True,
     store: FlightReader = Depends(get_store),
 ):
     try:
         return store.search_availability(
-            origin, destination, clock, time_basis, departure_date, departure_last_date, onward_days
+            origin,
+            destination,
+            clock,
+            time_basis,
+            departure_date,
+            departure_last_date,
+            onward_days,
+            include_counts=include_counts,
         )
     except ValueError as error:
         raise routing_http_error(error) from error

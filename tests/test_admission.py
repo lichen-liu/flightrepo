@@ -67,10 +67,16 @@ def test_model_sql_calendar_routing_and_admin_agree(tmp_path, reasons, blocked, 
     bootstrap = reader.web_bootstrap()
     assert bootstrap.available_time_bases == ([] if held else ["observed"])
     assert bootstrap.first_departure == (None if held else record.departure_lower)
-    availability = reader.search_availability(
-        "AAA", "BBB", clock="UTC", time_basis="observed", departure_date=date(2025, 1, 1)
-    )
-    assert availability.dates == ([] if held else [date(2025, 1, 1)])
+    for include_counts in (False, True):
+        availability = reader.search_availability(
+            "AAA",
+            "BBB",
+            clock="UTC",
+            time_basis="observed",
+            departure_date=date(2025, 1, 1),
+            include_counts=include_counts,
+        )
+        assert availability.dates == ([] if held else [date(2025, 1, 1)])
     assert reader.overview()["needs_review_count"] == int(record.quality["review_recommended"])
     assert reader.flight("adsblol", "sample").itinerary_reviewed == reviewed
 
@@ -251,6 +257,12 @@ def test_all_approved_categories_are_admitted_but_unknown_reasons_fail_closed(tm
             "UPDATE flight_legs SET review_reasons=?", (json.dumps(["future_unknown_reason"]),)
         )
         assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+    assert (
+        FlightReader(updater.path)
+        .search_availability("AAA", "BBB", "UTC", "observed", include_counts=False)
+        .dates
+        == []
+    )
 
 
 def test_explicit_writer_upgrades_old_view_without_read_side_mutation(tmp_path):
@@ -270,6 +282,10 @@ def test_explicit_writer_upgrades_old_view_without_read_side_mutation(tmp_path):
     reader.stats()
     with reader.connect() as c:
         assert c.execute("SELECT count(*) FROM searchable_legs").fetchone()[0] == 0
+    assert (
+        reader.search_availability("AAA", "BBB", "UTC", "observed", include_counts=False).dates
+        == []
+    )
     updater.initialize()
     assert len(reader.search_itineraries(query()).items) == 1
     with reader.connect() as c:

@@ -40,6 +40,7 @@ const searchLane = new RequestLane(track("Finding flight routes", 5)),
   catalogLane = new RequestLane(),
   bootstrapLane = new RequestLane(track("Loading airports", 1)),
   datesLane = new RequestLane(track("Checking available dates", 3)),
+  countsLane = new RequestLane(),
   editLane = new RequestLane(track("Updating your connection", 5));
 const firstCalendar = new DataCalendar(field("date")),
   lastCalendar = new DataCalendar(field("last-date"), { optional: true });
@@ -49,9 +50,12 @@ let datesKey = null,
   utcReviewPending = false,
   timeBasisEdited = false;
 let availability = null;
+let availabilityURL = null;
 const map = new RouteMap($("route-map"), $("map-info"));
 const state = {
   catalog: null,
+  catalogStatus: "idle",
+  bootstrap: null,
   airports: new Map(),
   result: null,
   searchRequest: null,
@@ -122,21 +126,31 @@ const dateKey = () =>
     field("onward-days").value,
   ].join("/");
 function updateDatasetTag() {
-  const data = state.catalog?.dataset;
-  if (!data) return;
-  const basis = field("time-basis").value,
-    count = data.time_bases?.[basis] ?? data.flight_count,
-    demo = data.data_mode === "synthetic";
+  const data = state.catalog?.dataset,
+    basis = field("time-basis").value,
+    demo = (data || state.bootstrap)?.data_mode === "synthetic",
+    label = `${demo ? "Demo · " : ""}${timeBasisLabel(basis)}`;
+  if (!data) {
+    const message = state.catalogStatus === "loading"
+      ? "Loading archive totals…"
+      : state.catalogStatus === "error"
+        ? "Archive totals unavailable."
+        : "Open Data and search details for archive totals.";
+    $("dataset-tag").textContent = `${label} · ${message}`;
+    return;
+  }
+  const count = data.time_bases?.[basis] ?? data.flight_count;
   $("dataset-tag").textContent =
-    `${demo ? "Demo · " : ""}${timeBasisLabel(basis)} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} recommended for review` : ""}`;
+    `${label} · ${count} searchable legs across all origins${data.needs_review_count ? ` · ${data.needs_review_count} recommended for review` : ""}`;
 }
 function updateSearchButton() {
   field("ranking").disabled = $("more-routes").disabled = !!searchLane.controller;
   $("search-button").disabled =
     !!searchLane.controller ||
     datesKey !== dateKey() ||
-    !availability?.outbound ||
-    !availability?.inbound ||
+    !availability ||
+    availability.outbound === 0 ||
+    availability.inbound === 0 ||
     !availableDates.has(field("date").value) ||
     !availableDates.has(field("last-date").value || field("date").value);
   $("apply-preferences").disabled = $("search-button").disabled;
@@ -350,6 +364,10 @@ async function loadDates() {
   if (key === datesKey) return;
   datesKey = key;
   datesLane.cancel();
+  countsLane.cancel();
+  availabilityURL = null;
+  $("load-flight-counts").hidden = true;
+  $("flight-counts-status").textContent = "";
   availability = null;
   availableDates = new Set();
   $("date-recovery").hidden = true;
@@ -358,7 +376,7 @@ async function loadDates() {
   $("coverage-warning").hidden = true;
   $("coverage-scope").hidden = false;
   $("coverage-scope").textContent =
-    "Checking departures on the selected date and destination arrivals within the search horizon…";
+    "Checking departure days and destination arrivals…";
   for (const name of ["origin", "destination"]) {
     $(`${name}-coverage`).hidden = false;
     $(`${name}-coverage`).textContent = "Checking flights…";
@@ -382,13 +400,15 @@ async function loadDates() {
     destination,
     clock,
     time_basis: basis,
+    include_counts: "false",
   });
   if (field("onward-days").value !== "") params.set("onward_days", field("onward-days").value);
   if (requestedDate) params.set("departure_date", requestedDate);
   if (field("last-date").value)
     params.set("departure_last_date", field("last-date").value);
+  availabilityURL = `/v1/search-availability?${params}`;
   await datesLane.run(
-    `/v1/search-availability?${params}`,
+    availabilityURL,
     undefined,
     (result) => {
       availability = result;
@@ -405,24 +425,8 @@ async function loadDates() {
         });
         updateZones();
       }
-      $("origin-coverage").textContent =
-        `Outbound: ${result.outbound.toLocaleString()} on ${result.selected_date || "the departure date"}`;
-      $("destination-coverage").textContent =
-        `Inbound: ${result.inbound.toLocaleString()} within the arrival window`;
-      $("coverage-scope").textContent =
-        `Searchable ${timeBasisLabel(basis).toLowerCase()} · exact airports · ${result.timezone}. Outbound uses the first departure date; inbound uses that date through ${field("onward-days").value === "" ? "the latest available arrival" : field("onward-days").value + " days after the departure window"}. Counts do not guarantee a connecting route.`;
-      const warnings = [];
-      if (!result.outbound)
-        warnings.push(
-          `No searchable departures from ${origin} on ${result.selected_date || "the departure date"}.`,
-        );
-      if (!result.inbound)
-        warnings.push(
-          `No searchable arrivals into ${destination} in this search window.`,
-        );
-      $("coverage-warning").textContent = warnings.join(" ");
-      $("coverage-warning").hidden = !warnings.length;
-      if (!result.outbound || !result.inbound)
+      renderAvailability(result);
+      if (result.outbound === 0 || result.inbound === 0)
         field("date").disabled = field("last-date").disabled = true;
       field("date").placeholder = result.dates.length ? "Choose a date" : "No available dates";
       // Disabling an input during refresh removes focus in Chromium. Restore it
@@ -480,6 +484,45 @@ async function loadDates() {
     },
   );
 }
+function renderAvailability(result) {
+  $("origin-coverage").textContent = result.outbound == null
+    ? `Departure data available on ${result.selected_date}`
+    : `Outbound: ${result.outbound.toLocaleString()} on ${result.selected_date || "the departure date"}`;
+  $("destination-coverage").textContent = result.inbound == null
+    ? "Arrival data available in the search window"
+    : `Inbound: ${result.inbound.toLocaleString()} within the arrival window`;
+  $("coverage-scope").textContent =
+    `Searchable ${timeBasisLabel(result.time_basis).toLowerCase()} · exact airports · ${result.timezone}. Outbound uses the first departure date; inbound uses that date through ${field("onward-days").value === "" ? "the latest available arrival" : field("onward-days").value + " days after the departure window"}. Available data does not guarantee a connecting route.`;
+  const warnings = [];
+  if (result.outbound === 0)
+    warnings.push(`No searchable departures from ${result.origin} on ${result.selected_date || "the departure date"}.`);
+  if (result.inbound === 0)
+    warnings.push(`No searchable arrivals into ${result.destination} in this search window.`);
+  $("coverage-warning").textContent = warnings.join(" ");
+  $("coverage-warning").hidden = !warnings.length;
+  $("load-flight-counts").hidden = result.outbound != null && result.inbound != null;
+  $("load-flight-counts").disabled = false;
+}
+$("load-flight-counts").addEventListener("click", async () => {
+  if (!availabilityURL || countsLane.controller) return;
+  const key = datesKey,
+    url = new URL(availabilityURL, location.href);
+  url.searchParams.set("include_counts", "true");
+  $("load-flight-counts").disabled = true;
+  $("flight-counts-status").textContent = "Counting flights… Date selection and search remain available.";
+  await countsLane.run(`${url.pathname}${url.search}`, undefined, async (result) => {
+    if (key !== datesKey || key !== dateKey()) return;
+    if (result.selected_date !== field("date").value || result.timezone !== availability?.timezone) {
+      datesKey = null;
+      await loadDates();
+      return;
+    }
+    renderAvailability(result);
+    $("flight-counts-status").textContent = "Exact flight counts loaded.";
+  }, (error) => {
+    $("flight-counts-status").textContent = `Flight counts unavailable. ${errorMessage(error)}`;
+  }, () => { $("load-flight-counts").disabled = false; });
+});
 $("retry-dates").addEventListener("click", loadDates);
 $("use-utc-dates").addEventListener("click", async () => {
   userEdited = true;
@@ -847,7 +890,14 @@ function updateCursor() {
 }
 function renderDatasetInfo() {
   const data = state.catalog?.dataset;
-  if (!data) return;
+  if (!data) {
+    $("dataset-content").innerHTML = state.catalogStatus === "loading"
+      ? '<p class="small" role="status">Loading archive statistics… Search remains available.</p>'
+      : state.catalogStatus === "error"
+        ? '<p class="small" role="status">Archive statistics unavailable. Search remains available.</p><button type="button" data-retry-statistics>Retry statistics</button>'
+        : '<p class="small">Open these details to load archive statistics.</p>';
+    return;
+  }
   const entries = [
     ["Loaded flights", String(data.total_record_count ?? data.flight_count)],
     ["Searchable flights", String(data.flight_count)],
@@ -1347,26 +1397,39 @@ $("export").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 async function loadCatalog() {
+  if (state.catalog || catalogLane.controller) return;
+  state.catalogStatus = "loading";
+  updateDatasetTag();
+  renderDatasetInfo();
   await catalogLane.run(
     "/v1/catalog?include_airports=false",
     undefined,
     (catalog) => {
       state.catalog = catalog;
+      state.catalogStatus = "ready";
       updateDatasetTag();
       renderDatasetInfo();
     },
     () => {
-      $("dataset-tag").textContent =
-        "Dataset statistics unavailable; search remains available.";
+      state.catalogStatus = "error";
+      updateDatasetTag();
+      renderDatasetInfo();
     },
   );
 }
+$("dataset-info").addEventListener("toggle", () => {
+  if ($("dataset-info").open) loadCatalog();
+});
+$("dataset-content").addEventListener("click", (event) => {
+  if (event.target.closest("[data-retry-statistics]")) loadCatalog();
+});
 async function loadBootstrap() {
   $("retry-catalog").hidden = true;
   await bootstrapLane.run(
     "/v1/bootstrap",
     undefined,
     async (bootstrap) => {
+      state.bootstrap = bootstrap;
       for (const airport of bootstrap.airports)
         state.airports.set(airport.iata, airport);
       if (!state.selection) map.setAirports([...state.airports.values()]);
@@ -1385,7 +1448,7 @@ async function loadBootstrap() {
         datesKey = null;
         await loadDates();
         if (!userEdited && linkedSearch && availableDates.size &&
-            availability?.outbound && availability?.inbound)
+            availability && availability.outbound !== 0 && availability.inbound !== 0)
           search();
       }
     },
@@ -1432,15 +1495,15 @@ restore(linkedValues);
 try { map.setMode(readMapPreference(localStorage)); } catch { /* Keep the default without storage. */ }
 syncProjection();
 updateZones();
+updateDatasetTag();
+renderDatasetInfo();
 if (linkedUTC) {
   const initialSearch = search({ checkAvailability: false });
   const initialDates = loadDates();
   // Keep bootstrap out of the two interactive slots until both initial reads
-  // finish, and leave archive-wide statistics off the first-result path.
-  initialSearch.then(loadCatalog);
+  // finish. Archive-wide statistics load only when their details are opened.
   Promise.all([initialSearch, initialDates]).then(loadBootstrap);
 } else {
   loadBootstrap();
-  loadCatalog();
   if (!linkedSearch) loadDates();
 }

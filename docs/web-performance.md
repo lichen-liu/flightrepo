@@ -46,6 +46,45 @@ the Journey tab. Invalid custom preferences close the popover so their error is
 visible. On phones, airport suggestions occupy space within their field instead
 of covering the next airport input.
 
+## Calendar loading
+
+The web calendar requests `/v1/search-availability?include_counts=false`. It seeks
+to each occupied departure day through the existing airport/time indexes and
+checks for an admitted flight interval wholly inside that civil day. It checks
+destination arrival existence without materializing its flight history. With an
+unbounded arrival horizon, the latest admitted arrival lower bound is enough to
+prove eligibility; bounded windows check both arrival bounds. No date or flight
+count cap changes eligibility. All work uses one database snapshot and the same
+admission, cancellation and tombstone rules as route search.
+An older installed serving view keeps its admission policy through a compatibility
+fallback; read requests never rewrite the database schema.
+
+Counts are nullable in this mode, and an unbounded arrival end is left null.
+The API's default remains `include_counts=true`, with the existing exact counts
+and arrival horizon. Travelers can request exact counts from Airport availability
+details. This optional request has its own cancellable UI lane; changing the date
+discards old counts, and failures leave search available. Exact counts and global
+statistics share one backend slot outside the interactive read budget.
+Archive-wide statistics load only when Data and search details are opened.
+
+On October 30, 2026, a read-only YYZ → LAX probe against the 39-million-record
+serving archive exceeded a 12-second SQL deadline on the previous counting path.
+The final indexed calendar returned all 899 UTC departure dates in 340 ms from a
+fresh reader and 20 ms on a second request selecting another date; all 900 local
+departure dates loaded in 274 ms. These are local
+backend measurements, not guarantees about network latency or route-search time.
+Regression checks compare eligibility with the full-count implementation across
+all three time bases, UTC/local clocks, DST changes and uncertain intervals. A
+busy-airport regression measures SQLite work as volume grows rather than using
+machine-dependent wall-clock thresholds.
+
+Browser QA runs every case in a fresh context and recycles its browser after 32
+cases, asserting that earlier contexts closed. This bounds accumulated browser
+resources as coverage grows. In a longer WebKit run, navigation stalled on
+`about:blank` before the app loaded; the same cases passed in isolation. All
+checks and readiness timeouts remain in place. Failures save a screenshot and
+an error artifact with page URL, connection state and console errors.
+
 ## Date formatting
 
 Journey comparisons reuse up to 48 Intl.DateTimeFormat instances, keyed by locale
