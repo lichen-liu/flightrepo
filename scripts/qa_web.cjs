@@ -11,12 +11,15 @@ const out = process.env.FLYJI_QA_OUTPUT || path.resolve("var/web-qa");
 const searchPath = /\/v1\/itineraries\/search(?:\/local)?$/;
 const identity = (legs) =>
   legs.map(({ flight_id }) => ({ flight_id }));
-let browser;
-before(async () => {
-  browser = await (process.env.FLYJI_QA_BROWSER === "webkit" ? webkit : chromium).launch({
+let browser, contextsOpened = 0;
+async function launchBrowser() {
+  return (process.env.FLYJI_QA_BROWSER === "webkit" ? webkit : chromium).launch({
     headless: true,
     ...(process.env.FLYJI_QA_BROWSER === "chrome" ? { channel: "chrome" } : {}),
   });
+}
+before(async () => {
+  browser = await launchBrowser();
 });
 after(async () => {
   await browser?.close();
@@ -24,6 +27,15 @@ after(async () => {
 
 function check(name, run, options = {}) {
   test(name, { timeout: 30_000 }, async () => {
+    // Cases share no browser state. Bound native browser resources as the
+    // suite grows; WebKit otherwise stops loading pages late in long runs.
+    if (contextsOpened >= 32) {
+      assert.equal(browser.contexts().length, 0, "earlier cases must close every browser context");
+      await browser.close();
+      browser = await launchBrowser();
+      contextsOpened = 0;
+    }
+    contextsOpened++;
     const context = await browser.newContext({
       viewport: { width: 1180, height: 1000 },
       timezoneId: "Asia/Tokyo",
@@ -54,6 +66,10 @@ function check(name, run, options = {}) {
       );
     } catch (error) {
       await fs.mkdir(out, { recursive: true });
+      await fs.writeFile(
+        path.join(out, name.replace(/[^a-z0-9]+/gi, "-") + ".error.json"),
+        JSON.stringify({ error: error.stack || String(error), url: page.url(), closed: page.isClosed(), browserConnected: browser.isConnected(), consoleErrors: errors }, null, 2),
+      );
       await page
         .screenshot({
           path: path.join(out, name.replace(/[^a-z0-9]+/gi, "-") + ".png"),

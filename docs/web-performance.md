@@ -78,6 +78,13 @@ all three time bases, UTC/local clocks, DST changes and uncertain intervals. A
 busy-airport regression measures SQLite work as volume grows rather than using
 machine-dependent wall-clock thresholds.
 
+Browser QA runs every case in a fresh context and recycles its browser after 32
+cases, asserting that earlier contexts closed. This bounds accumulated browser
+resources as coverage grows. In a longer WebKit run, navigation stalled on
+`about:blank` before the app loaded; the same cases passed in isolation. All
+checks and readiness timeouts remain in place. Failures save a screenshot and
+an error artifact with page URL, connection state and console errors.
+
 ## Date formatting
 
 Journey comparisons reuse up to 48 Intl.DateTimeFormat instances, keyed by locale
