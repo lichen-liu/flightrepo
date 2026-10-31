@@ -2,6 +2,7 @@
 
 import json
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from itertools import islice, product
@@ -517,6 +518,117 @@ def test_search_availability_resolves_dst_and_counts_same_day_arrivals(client, d
     assert datetime.fromisoformat(data["arrival_end"]) - datetime.fromisoformat(
         data["arrival_start"]
     ) == timedelta(days=7, hours=hours)
+
+
+@pytest.mark.parametrize("basis", ["scheduled", "actual", "observed"])
+@pytest.mark.parametrize("clock", ["UTC", "local"])
+@pytest.mark.parametrize("onward_days", [None, 0, 7])
+def test_fast_calendar_matches_full_counts_for_sparse_days_and_uncertainty(
+    client, demo, basis, clock, onward_days
+):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    records = []
+    for index, stamp in enumerate(
+        ["2025-01-01T12:00Z", "2026-03-08T05:00Z", "2026-03-11T03:59Z", "2026-11-01T04:00Z"]
+    ):
+        start = datetime.fromisoformat(stamp)
+        for wide in (False, True):
+            records.append(
+                original.model_copy(
+                    update={
+                        "provider_id": f"calendar-{index}-{wide}",
+                        "destination_iata": "CDG",
+                        "departure_scheduled": start,
+                        "arrival_scheduled": start + timedelta(hours=2),
+                        "departure_actual": start,
+                        "arrival_actual": start + timedelta(hours=2),
+                        "departure_observed_lower": start,
+                        "departure_observed_upper": start + timedelta(minutes=2 if wide else 0.5),
+                        "arrival_observed_lower": start + timedelta(hours=2),
+                        "arrival_observed_upper": start + timedelta(hours=26 if wide else 3),
+                    }
+                )
+            )
+    demo[0].upsert(records)
+    params = {
+        "origin": "YYZ",
+        "destination": "CDG",
+        "clock": clock,
+        "time_basis": basis,
+        "departure_date": "2026-03-08",
+        "departure_last_date": "2026-11-01",
+    }
+    if onward_days is not None:
+        params["onward_days"] = onward_days
+    full = client.get("/v1/search-availability", params=params).json()
+    response = client.get("/v1/search-availability", params={**params, "include_counts": False})
+    assert response.status_code == 200, response.text
+    fast = response.json()
+    for key in ("dates", "selected_date", "timezone", "time_basis", "arrival_start"):
+        assert fast[key] == full[key], key
+    assert (fast["outbound"] != 0) == bool(full["outbound"])
+    assert (fast["inbound"] != 0) == bool(full["inbound"])
+    assert fast["arrival_end"] == (full["arrival_end"] if onward_days is not None else None)
+
+
+def test_fast_calendar_seeks_days_without_counting_each_flight(demo, monkeypatch):
+    original = FlightRecord.model_validate(demo[2]["flights"][0])
+    demo[0].upsert(
+        [original.model_copy(update={"provider_id": f"busy-airport-{i}"}) for i in range(4000)]
+    )
+    reader = demo[1]
+    connect = reader.connect
+    work = [0]
+
+    @contextmanager
+    def measure():
+        with connect() as connection:
+
+            def progressed():
+                work[0] += 100
+                return 0
+
+            connection.set_progress_handler(progressed, 100)
+            yield connection
+
+    monkeypatch.setattr(reader, "connect", measure)
+    fast = reader.search_availability("YYZ", "CDG", "UTC", include_counts=False)
+    fast_work = work[0]
+    work[0] = 0
+    full = reader.search_availability("YYZ", "CDG", "UTC")
+    assert fast.dates == full.dates
+    assert fast_work * 10 < work[0]
+
+
+@pytest.mark.parametrize("exclusion", ["cancelled", "tombstone", "incomplete"])
+def test_fast_calendar_excludes_unsearchable_facts(demo, exclusion):
+    record = FlightRecord.model_validate(demo[2]["flights"][0]).model_copy(
+        update={"provider_id": "calendar-excluded", "origin_iata": "AAA", "destination_iata": "BBB"}
+    )
+    updater, reader, _ = demo
+    updater.upsert([record])
+    assert reader.search_availability("AAA", "BBB", "UTC", "scheduled", include_counts=False).dates
+    with updater.connect() as connection:
+        if exclusion == "cancelled":
+            connection.execute(
+                "UPDATE flight_legs SET status='cancelled' WHERE source_record_key='calendar-excluded'"
+            )
+        elif exclusion == "incomplete":
+            connection.execute(
+                "UPDATE flight_legs SET arrival_scheduled_us=NULL WHERE source_record_key='calendar-excluded'"
+            )
+        else:
+            connection.execute(
+                "INSERT INTO flight_tombstones(source_id,source_record_key,deleted_us) "
+                "SELECT source_id,source_record_key,0 FROM flight_legs WHERE source_record_key='calendar-excluded'"
+            )
+    for include_counts in (False, True):
+        assert (
+            reader.search_availability(
+                "AAA", "BBB", "UTC", "scheduled", include_counts=include_counts
+            ).dates
+            == []
+        )
 
 
 def test_bootstrap_does_not_wait_for_archive_counts(client, demo, monkeypatch):

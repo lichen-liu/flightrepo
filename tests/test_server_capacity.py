@@ -75,12 +75,23 @@ def test_capacity_rejects_excess_work_keeps_health_available_and_releases_slots(
     asyncio.run(run())
 
 
-def test_statistics_have_their_own_capacity():
+@pytest.mark.parametrize(
+    "statistics_url",
+    [
+        "/v1/catalog",
+        "/v1/search-availability",
+        "/v1/search-availability?include_counts=true",
+    ],
+)
+def test_statistics_have_their_own_capacity(statistics_url):
     async def run():
         entered, finish = asyncio.Event(), asyncio.Event()
 
         async def application(scope, receive, send):
-            if scope["path"] == "/v1/catalog":
+            if (
+                scope["path"] in ("/v1/catalog", "/v1/search-availability")
+                and scope.get("query_string") != b"include_counts=false"
+            ):
                 entered.set()
                 await finish.wait()
             await PlainTextResponse("ok")(scope, receive, send)
@@ -89,9 +100,12 @@ def test_statistics_have_their_own_capacity():
             transport=httpx.ASGITransport(app=ReadCapacity(application, limit=1)),
             base_url="http://test",
         ) as client:
-            statistics = asyncio.create_task(client.get("/v1/catalog"))
+            statistics = asyncio.create_task(client.get(statistics_url))
             await entered.wait()
             assert (await client.get("/v1/catalog")).status_code == 503
+            assert (
+                await client.get("/v1/search-availability?include_counts=false")
+            ).status_code == 200
             assert (await client.get("/v1/itineraries/search")).status_code == 200
             finish.set()
             assert (await statistics).status_code == 200

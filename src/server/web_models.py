@@ -224,10 +224,12 @@ class SearchAvailability(BaseModel):
     time_basis: TimeBasis
     dates: list[date]
     selected_date: date | None
-    outbound: int
-    inbound: int
+    outbound: int | None = Field(description="Exact count, or null when counts were not requested.")
+    inbound: int | None = Field(description="Exact count, or null when counts were not requested.")
     arrival_start: datetime | None
-    arrival_end: datetime | None
+    arrival_end: datetime | None = Field(
+        description="Window end; null for an unbounded calendar request without counts."
+    )
 
 
 class TimezoneCoverage(BaseModel):

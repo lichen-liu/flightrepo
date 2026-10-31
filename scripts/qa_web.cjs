@@ -111,6 +111,9 @@ async function openDataSettings(page) {
   await openSearchOptions(page);
   await page.locator("#data-time-settings").evaluate((details) => { details.open = true; });
 }
+async function openDatasetInfo(page) {
+  await page.locator("#dataset-info").evaluate((details) => { details.open = true; });
+}
 async function openMapControls(page) {
   await page.locator(".map-toolbar").evaluate((details) => { details.open = true; });
 }
@@ -411,8 +414,19 @@ check("calendar disables gaps, repairs unavailable links, and handles origins wi
   await expect(page.locator("#search-button")).toBeDisabled();
 });
 
-check("counts follow the departure date and zero inbound disables every calendar", async (page) => {
+check("dates load without totals and exact counts are optional", async (page) => {
+  const requests = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === "/v1/search-availability") requests.push(request.url());
+  });
   await open(page);
+  assert.ok(requests.every(url => new URL(url).searchParams.get("include_counts") === "false"));
+  await expect(page.locator("#origin-coverage")).toContainText("Departure data available");
+  await expect(page.locator("#destination-coverage")).toContainText("Arrival data available");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await openDataSettings(page);
+  await page.locator(".coverage-details").evaluate(details => { details.open = true; });
+  await page.getByRole("button", { name: "Load exact flight counts", exact: true }).click();
   await expect(page.locator("#origin-coverage")).toHaveText("Outbound: 1 on 2026-10-17");
   await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
   await expect(page.locator("#origin-coverage")).not.toContainText("Inbound");
@@ -429,20 +443,124 @@ check("counts follow the departure date and zero inbound disables every calendar
   await expect(page.locator("#search-button")).toBeEnabled();
 });
 
-check("slow dataset statistics do not block initial search", async (page) => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+check("slow optional counts cannot block date changes or overwrite a newer date", async (page) => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; }),
+    started = new Promise(resolve => { entered = resolve; });
+  await page.route("**/v1/search-availability?*", async route => {
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get("include_counts") === "true") {
+      entered();
+      await gate;
+      await fulfillAvailability(route, { timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"], outbound: 1234, inbound: 5678 });
+    } else {
+      await fulfillAvailability(route, { timezone: "America/Toronto", dates: ["2026-10-17", "2026-10-19"], outbound: null, inbound: null });
+    }
+  });
+  try {
+    await open(page);
+    await openDataSettings(page);
+    await page.locator(".coverage-details").evaluate(details => { details.open = true; });
+    await page.getByRole("button", { name: "Load exact flight counts", exact: true }).click();
+    await started;
+    await expect(page.locator("#flight-counts-status")).toContainText("Counting flights");
+    await expect(page.locator("#search-button")).toBeEnabled();
+    await chooseDate(page, "date", "2026-10-19");
+    await expect(page.locator("#origin-coverage")).toContainText("Departure data available on 2026-10-19");
+    release();
+    await search(page);
+    await expect(page.locator("#origin-coverage")).not.toContainText("1,234");
+    await expect(page.locator("#date")).toHaveValue("2026-10-19");
+    await expect(page.locator("#flight-counts-status")).toHaveText("");
+  } finally { release(); }
+});
+
+check("optional count failures can be retried without disabling search", async (page) => {
+  let fail = true;
+  await page.route("**/v1/search-availability?*", async route => {
+    if (new URL(route.request().url()).searchParams.get("include_counts") === "true" && fail)
+      return route.fulfill({ status: 503, json: { detail: "Counts unavailable" } });
+    await route.continue();
+  });
+  await open(page);
+  await openDataSettings(page);
+  await page.locator(".coverage-details").evaluate(details => { details.open = true; });
+  const button = page.getByRole("button", { name: "Load exact flight counts", exact: true });
+  await button.click();
+  await expect(page.locator("#flight-counts-status")).toContainText("Flight counts unavailable");
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await expect(button).toBeEnabled();
+  fail = false;
+  await button.click();
+  await expect(page.locator("#flight-counts-status")).toHaveText("Exact flight counts loaded.");
+  await expect(page.locator("#destination-coverage")).toContainText("Inbound: 5");
+});
+
+check("dataset statistics load on request without blocking searches or refetching on reopen", async (page) => {
+  let release, intercepted, catalogRequests = 0;
+  const gate = new Promise((resolve) => { release = resolve; }),
+    started = new Promise((resolve) => { intercepted = resolve; });
   await page.route("**/v1/catalog*", async (route) => {
+    catalogRequests++;
     assert.equal(new URL(route.request().url()).searchParams.get("include_airports"), "false");
+    intercepted();
     await gate;
     await route.continue();
   });
   try {
     await open(page);
-    await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
+    assert.equal(catalogRequests, 0, "initial search must not scan archive-wide statistics");
+    await expect(page.locator("#dataset-tag")).toContainText("Open Data and search details");
+    await expect(page.locator("#origin-coverage")).toContainText("Departure data available");
     await expect(page.locator("#search-button")).toBeEnabled();
+    await openDatasetInfo(page);
+    await started;
+    await expect(page.locator("#dataset-content")).toContainText("Loading archive statistics");
+    await search(page);
+    await page.locator("#dataset-info").evaluate((details) => { details.open = false; });
+    await openDatasetInfo(page);
+    assert.equal(catalogRequests, 1, "opening pending statistics must not start another read");
   } finally { release(); }
   await expect(page.locator("#dataset-tag")).toContainText("Published schedules");
+  await expect(page.locator("#dataset-content")).toContainText("Loaded flights");
+  await page.locator("#dataset-info").evaluate((details) => { details.open = false; });
+  await openDatasetInfo(page);
+  assert.equal(catalogRequests, 1, "loaded statistics are reused");
+});
+
+check("fresh workspace leaves archive statistics idle until its details are opened", async (page) => {
+  let catalogRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/v1/catalog") catalogRequests++;
+  });
+  await page.goto(base);
+  await expect(page.locator("#dataset-tag")).toContainText("Demo · Published schedules");
+  await expect(page.locator("#dataset-tag")).toContainText("Open Data and search details");
+  assert.equal(catalogRequests, 0);
+  await openDatasetInfo(page);
+  await expect(page.locator("#dataset-content")).toContainText("Loaded flights");
+  assert.equal(catalogRequests, 1);
+});
+
+check("failed archive statistics can be retried while search remains available", async (page) => {
+  let catalogRequests = 0;
+  await page.route("**/v1/catalog*", async (route) => {
+    if (++catalogRequests === 1)
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({
+        detail: { code: "server_busy", message: "Try again shortly." },
+      }) });
+    await route.continue();
+  });
+  await open(page);
+  assert.equal(catalogRequests, 0);
+  await openDatasetInfo(page);
+  await expect(page.locator("#dataset-content")).toContainText("Archive statistics unavailable");
+  await expect(page.getByRole("button", { name: "Retry statistics", exact: true })).toBeEnabled();
+  await expect(page.locator("#search-button")).toBeEnabled();
+  await search(page);
+  await page.getByRole("button", { name: "Retry statistics", exact: true }).click();
+  await expect(page.locator("#dataset-content")).toContainText("Loaded flights");
+  assert.equal(catalogRequests, 2);
 });
 
 check("statistics loaded before defaults follow the final flight-time selection", async (page) => {
@@ -465,6 +583,7 @@ check("statistics loaded before defaults follow the final flight-time selection"
   }));
   try {
     await page.goto(base);
+    await openDatasetInfo(page);
     await expect(page.locator("#dataset-tag")).toContainText("Published schedules · 0");
   } finally { release(); }
   await expect(page.getByLabel("Flight times")).toHaveValue("observed");
@@ -498,7 +617,7 @@ check("delayed bootstrap preserves user input", async (page) => {
   await openDataSettings(page);
   await page.getByLabel("Input clock").selectOption("UTC");
   release();
-  await expect(page.locator("#origin-coverage")).toContainText("Outbound:");
+  await expect(page.locator("#origin-coverage")).toContainText("Departure data available");
   await expect(page.getByLabel("From", { exact: true })).toHaveValue("LHR");
   await expect(page.getByLabel("To", { exact: true })).toHaveValue("NRT");
 });
@@ -732,6 +851,7 @@ check("availability and counts follow the selected flight times without duplicat
     });
   });
   await open(page);
+  await openDatasetInfo(page);
   await openDataSettings(page);
   const times = page.getByLabel("Flight times"),
     availability = page.locator("#date-availability");
@@ -827,22 +947,18 @@ check("phone calendar can switch months by touch without overflowing", async (pa
   await expect(calendar).toBeHidden();
 }, { viewport: { width: 320, height: 800 }, isMobile: true, hasTouch: true });
 
-check("shared UTC search renders before calendar availability and background statistics", async (page) => {
-  let releaseDates, releaseStatistics;
-  const datesGate = new Promise(resolve => { releaseDates = resolve; }),
-    statisticsGate = new Promise(resolve => { releaseStatistics = resolve; });
-  let bootstrapRequests = 0, searches = 0;
+check("shared UTC search renders before calendar availability without loading archive statistics", async (page) => {
+  let releaseDates;
+  const datesGate = new Promise(resolve => { releaseDates = resolve; });
+  let bootstrapRequests = 0, searches = 0, catalogRequests = 0;
   page.on("request", request => {
     const pathname = new URL(request.url()).pathname;
     if (pathname === "/v1/bootstrap") bootstrapRequests++;
+    if (pathname === "/v1/catalog") catalogRequests++;
     if (searchPath.test(pathname)) searches++;
   });
   await page.route("**/v1/search-availability?*", async route => {
     await datesGate;
-    await route.continue();
-  });
-  await page.route("**/v1/catalog*", async route => {
-    await statisticsGate;
     await route.continue();
   });
   try {
@@ -855,6 +971,7 @@ check("shared UTC search renders before calendar availability and background sta
     await expect(page.locator("#date")).toHaveValue("2026-10-17");
     await expect(page.locator("#date")).toBeDisabled();
     assert.equal(bootstrapRequests, 0, "bootstrap cannot crowd out the initial interactive reads");
+    assert.equal(catalogRequests, 0, "shared searches must not start archive-wide statistics");
     const bootstrap = page.waitForResponse("**/v1/bootstrap");
     releaseDates();
     await bootstrap;
@@ -862,26 +979,28 @@ check("shared UTC search renders before calendar availability and background sta
     await expect(page.locator("#request-progress")).toBeHidden();
     await expect(page.locator("#date")).toHaveValue("2026-10-17");
     assert.equal(searches, 1, "availability and bootstrap must not rerun the shared search");
+    assert.equal(catalogRequests, 0, "statistics remain idle after bootstrap finishes");
   } finally {
     releaseDates();
-    releaseStatistics();
   }
 });
 
-check("linked search disables calendar before statistics load when destination has no arrivals", async (page) => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; }), searches = [];
-  await page.route("**/v1/catalog*", async (route) => { await gate; await route.continue(); });
-  page.on("request", (r) => { if (searchPath.test(new URL(r.url()).pathname)) searches.push(r.url()); });
-  try {
-    await page.goto(`${base}?origin=YYZ&destination=XYZ&date=2026-10-17&stops=any&input-clock=UTC&time-basis=scheduled`);
-    await expect(page.locator("#coverage-warning")).toContainText("No searchable arrivals into XYZ");
-    await expect(page.locator("#date")).toBeDisabled();
-    await expect(page.locator('[name="last-date"]')).toBeDisabled();
-    await expect(page.locator("#origin-coverage")).toContainText("Outbound: 1");
-    await expect(page.locator("#search-button")).toBeDisabled();
-    assert.equal(searches.length, 1, "the server evaluates the shared query independently of calendar counts");
-  } finally { release(); }
+check("linked search disables calendars without loading statistics when destination has no arrivals", async (page) => {
+  const searches = [];
+  let catalogRequests = 0;
+  page.on("request", (r) => {
+    const pathname = new URL(r.url()).pathname;
+    if (searchPath.test(pathname)) searches.push(r.url());
+    if (pathname === "/v1/catalog") catalogRequests++;
+  });
+  await page.goto(`${base}?origin=YYZ&destination=XYZ&date=2026-10-17&stops=any&input-clock=UTC&time-basis=scheduled`);
+  await expect(page.locator("#coverage-warning")).toContainText("No searchable arrivals into XYZ");
+  await expect(page.locator("#date")).toBeDisabled();
+  await expect(page.locator('[name="last-date"]')).toBeDisabled();
+  await expect(page.locator("#origin-coverage")).toContainText("Departure data available");
+  await expect(page.locator("#search-button")).toBeDisabled();
+  assert.equal(searches.length, 1, "the server evaluates the shared query independently of calendar counts");
+  assert.equal(catalogRequests, 0);
 });
 
 check("endpoint airports are excluded from via suggestions and rejected when typed", async (page) => {
